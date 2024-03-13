@@ -1,0 +1,4 @@
+#!/bin/sh -
+
+sh s_perm
+sh s_config

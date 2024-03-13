@@ -1,0 +1,27 @@
+#!/bin/sh -
+#
+
+[ -d build_unix ] && {
+	echo 'You cannot build in the top-level directory.'
+	exit 1
+}
+[ -d aclocal ] && {
+	echo 'You cannot build in the dist directory.'
+	exit 1
+}
+args=""
+#args="--disable-shared $args"
+#args="--disable-static $args"
+args="--enable-debug $args"
+args="--enable-diagnostic $args"
+args="--enable-test $args"
+
+# On NixOS enable:
+CFLAGS="${NIX_CFLAGS_COMPILE} -O0 -g -DDEBUG"
+LDLAGS="${NIX_LDFLAGS}"
+echo "env $cppflags $ldflags $libs ../dist/configure -C $args"
+env $cppflags $ldflags $libs sh ../dist/configure -C $args
+
+rm -f tags
+ln -s ../dist/tags tags
+mkdir -p .libs && true

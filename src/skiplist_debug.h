@@ -37,8 +37,8 @@
 #include "skiplist.h"
 
 struct dbg_node {
-  skiplist_node snode;
-  int value;
+    skiplist_node snode;
+    int value;
 };
 
 #if __SL_DEBUG >= 1
@@ -67,43 +67,51 @@ struct dbg_node {
 #error "unknown debugging level"
 #endif
 
-inline void __sld_rt_ins(int error_code, skiplist_node *node, int top_layer,
-                         int cur_layer) {
-  dbg_node *ddd = _get_entry(node, dbg_node, snode);
-  printf("[INS] retry (code %d) "
-         "%p (top %d, cur %d) %d\n",
-         error_code, node, top_layer, cur_layer, ddd->value);
+inline void
+__sld_rt_ins(int error_code, skiplist_node *node, int top_layer, int cur_layer)
+{
+    dbg_node *ddd = sl_get_entry(node, dbg_node, snode);
+    printf("[INS] retry (code %d) "
+           "%p (top %d, cur %d) %d\n",
+        error_code, node, top_layer, cur_layer, ddd->value);
 }
 
-inline void __sld_nc_ins(skiplist_node *node, skiplist_node *next_node,
-                         int top_layer, int cur_layer) {
-  dbg_node *ddd = _get_entry(node, dbg_node, snode);
-  dbg_node *ddd_next = _get_entry(next_node, dbg_node, snode);
+inline void
+__sld_nc_ins(skiplist_node *node, skiplist_node *next_node, int top_layer,
+    int cur_layer)
+{
+    dbg_node *ddd = sl_get_entry(node, dbg_node, snode);
+    dbg_node *ddd_next = sl_get_entry(next_node, dbg_node, snode);
 
-  printf("[INS] next node changed, "
-         "%p %p (top %d, cur %d) %d %d\n",
-         node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
+    printf("[INS] next node changed, "
+           "%p %p (top %d, cur %d) %d %d\n",
+        node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
 }
 
-inline void __sld_rt_rmv(int error_code, skiplist_node *node, int top_layer,
-                         int cur_layer) {
-  dbg_node *ddd = _get_entry(node, dbg_node, snode);
-  printf("[RMV] retry (code %d) "
-         "%p (top %d, cur %d) %d\n",
-         error_code, node, top_layer, cur_layer, ddd->value);
+inline void
+__sld_rt_rmv(int error_code, skiplist_node *node, int top_layer, int cur_layer)
+{
+    dbg_node *ddd = sl_get_entry(node, dbg_node, snode);
+    printf("[RMV] retry (code %d) "
+           "%p (top %d, cur %d) %d\n",
+        error_code, node, top_layer, cur_layer, ddd->value);
 }
 
-inline void __sld_nc_rmv(skiplist_node *node, skiplist_node *next_node,
-                         int top_layer, int cur_layer) {
-  dbg_node *ddd = _get_entry(node, dbg_node, snode);
-  dbg_node *ddd_next = _get_entry(next_node, dbg_node, snode);
+inline void
+__sld_nc_rmv(skiplist_node *node, skiplist_node *next_node, int top_layer,
+    int cur_layer)
+{
+    dbg_node *ddd = sl_get_entry(node, dbg_node, snode);
+    dbg_node *ddd_next = sl_get_entry(next_node, dbg_node, snode);
 
-  printf("[RMV] next node changed, "
-         "%p %p (top %d, cur %d) %d %d\n",
-         node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
+    printf("[RMV] next node changed, "
+           "%p %p (top %d, cur %d) %d %d\n",
+        node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
 }
 
-inline void __sld_bm(skiplist_node *node) {
-  dbg_node *ddd = _get_entry(node, dbg_node, snode);
-  printf("[RMV] node is being modified %d\n", ddd->value);
+inline void
+__sld_bm(skiplist_node *node)
+{
+    dbg_node *ddd = sl_get_entry(node, dbg_node, snode);
+    printf("[RMV] node is being modified %d\n", ddd->value);
 }
