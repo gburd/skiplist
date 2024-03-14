@@ -1,0 +1,48 @@
+CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
+TEST_FLAGS = -fsanitize=address,undefined
+
+OBJS = skiplist.o
+STATIC_LIB = libskiplist.a
+SHARED_LIB = libskiplist.so
+
+TESTS = tests/test
+EXAMPLES = examples/example
+
+.PHONY: all shared static clean tests examples
+
+%.o: src/%.c
+	$(CC) $(CFLAGS) -c -o $@ $^
+
+all: static shared
+
+static: $(STATIC_LIB)
+
+shared: $(SHARED_LIB)
+
+$(STATIC_LIB): $(OBJS)
+	ar rcs $(STATIC_LIB) $?
+
+$(SHARED_LIB): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $? -shared
+
+tests: $(TESTS)
+	./tests/test
+
+tests/test.c: tests/test.c tests/munit.c $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS)
+
+tests/munit.c: tests/munit.c
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS)
+
+examples: $(EXAMPLES)
+
+examples/example: examples/example.c $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
+
+clean:
+	rm -f $(OBJS)
+	rm -f $(STATIC_LIB)
+	rm -f $(TESTS)
+	rm -f $(EXAMPLES)
+format:
+	clang-format -i include/*.h src/*.c tests/*.c

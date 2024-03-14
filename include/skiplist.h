@@ -35,7 +35,7 @@
 
 #define SKIPLIST_MAX_LAYER (64)
 
-// #define _STL_ATOMIC (1)
+#define _STL_ATOMIC (1)
 #ifdef __APPLE__
 #define _STL_ATOMIC (1)
 #endif
@@ -54,14 +54,16 @@ typedef struct _sl_node {
     atm_bool is_fully_linked;
     atm_bool being_modified;
     atm_bool removed;
-    uint8_t top_layer; // 0: bottom
+    uint8_t top_layer; /* 0: bottom */
     atm_uint16_t ref_count;
     atm_uint32_t accessing_next;
 } sl_node;
 
-// *a  < *b : return neg
-// *a == *b : return 0
-// *a  > *b : return pos
+/*
+ * *a  < *b : return neg
+ * *a == *b : return 0
+ * *a  > *b : return pos
+ */
 typedef int sl_cmp_t(sl_node *a, sl_node *b, void *aux);
 
 typedef struct {
@@ -127,4 +129,4 @@ sl_node *sl_end(sl_raw *slist);
 }
 #endif
 
-#endif // SKIPLIST_H__
+#endif /* SKIPLIST_H__ */
