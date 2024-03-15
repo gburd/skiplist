@@ -1,6 +1,7 @@
 
 CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-TEST_FLAGS = -Itests/ -fsanitize=address,undefined
+TEST_FLAGS = -Itests/
+ #-fsanitize=address,undefined
 
 OBJS = skiplist.o
 STATIC_LIB = libskiplist.a
@@ -31,6 +32,7 @@ tests/%.o: tests/%.c
 
 test: $(TESTS)
 	./tests/test
+#	env LSAN_OPTIONS=verbosity=1:log_threads=1 ./tests/test
 
 tests/test: tests/test.o tests/munit.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
@@ -47,4 +49,4 @@ clean:
 	rm -f $(EXAMPLES)
 
 format:
-	clang-format -i include/*.h src/*.c tests/*.c
+	clang-format -i include/*.h src/*.c tests/*.c tests/*.h

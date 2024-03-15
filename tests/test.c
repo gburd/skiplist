@@ -7,8 +7,10 @@
  * details.
  */
 
+#define MUNIT_NO_FORK (1)
 #define MUNIT_ENABLE_ASSERT_ALIASES (1)
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #define __SL_DEBUG 0
@@ -119,7 +121,265 @@ uint32_key_cmp(sl_node *a, sl_node *b, void *aux)
     return 0;
 }
 
-#include "api.c"
+static void *
+test_api_setup(const MunitParameter params[], void *user_data)
+{
+    struct test_info *info = (struct test_info *)user_data;
+    (void)info;
+    (void)params;
+
+    ex_sl_t *slist = calloc(sizeof(ex_sl_t), 1);
+    if (slist == NULL)
+        return NULL;
+    sl_init(slist, uint32_key_cmp);
+    return (void *)(uintptr_t)slist;
+}
+
+static void
+test_api_tear_down(void *fixture)
+{
+    ex_sl_t *slist = (ex_sl_t *)fixture;
+    assert_ptr_not_null(slist);
+    sl_node *cursor = sl_begin(slist);
+    while (cursor) {
+        assert_ptr_not_null(cursor);
+        ex_node_t *entry = sl_get_entry(cursor, ex_node_t, snode);
+        assert_ptr_not_null(entry);
+        assert_uint32(entry->key, ==, entry->value);
+        cursor = sl_next(slist, cursor);
+        sl_erase_node(slist, &entry->snode);
+        sl_release_node(&entry->snode);
+        sl_wait_for_free(&entry->snode);
+        sl_free_node(&entry->snode);
+        free(entry);
+    }
+    sl_free(slist);
+    free(fixture);
+}
+
+static size_t
+__populate_slist(ex_sl_t *slist){
+    size_t inserted = 0;
+    uint32_t n, key;
+    ex_node_t *node;
+
+    n = munit_rand_int_range(1024, 4196);
+    while (n--) {
+        key = munit_rand_int_range(0, (((uint32_t)0) - 1) / 10);
+        node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
+        if (node == NULL)
+            return MUNIT_ERROR;
+        sl_init_node(&node->snode);
+        node->key = key;
+        node->value = key;
+        if (sl_insert_nodup(slist, &node->snode) == -1)
+            continue; /* a random duplicate appeared */
+        else
+            inserted++;
+    }
+    return inserted;
+}
+
+static void *
+test_api_insert_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_insert_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_insert(const MunitParameter params[], void *data)
+{
+    int ret;
+    size_t inserted = 0;
+    uint32_t n, key;
+    sl_raw *slist = (sl_raw *)data;
+    ex_node_t *node;
+    (void)params;
+
+    assert_ptr_not_null(slist);
+    n = munit_rand_int_range(4096, 8192);
+    while (n--) {
+        key = munit_rand_int_range(0, ((uint32_t)0-1) / 10);
+        node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
+        if (node == NULL)
+            return MUNIT_ERROR;
+        sl_init_node(&node->snode);
+        node->key = key;
+        node->value = key;
+        if ((ret = sl_insert_nodup(slist, &node->snode)) == -1)
+            continue; /* a random duplicate appeared */
+        else {
+            assert_int(ret, ==, 0);
+            inserted++;
+        }
+    }
+    assert_size(inserted, ==, sl_get_size(slist));
+    return MUNIT_OK;
+}
+
+static void *
+test_api_remove_setup(const MunitParameter params[], void *user_data)
+{
+    sl_raw *slist = (sl_raw *)test_api_setup(params, user_data);
+    __populate_slist(slist);
+    return (void *)slist;
+}
+static void
+test_api_remove_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_remove(const MunitParameter params[], void *data)
+{
+    uint32_t key;
+    sl_raw *slist = (sl_raw *)data;
+    ex_node_t *node;
+    (void)params;
+
+    assert_ptr_not_null(slist);
+    key = munit_rand_int_range((((uint32_t)0-1) / 10) + 1, ((uint32_t)0-1));
+    node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
+    if (node == NULL)
+        return MUNIT_ERROR;
+    sl_init_node(&node->snode);
+    node->key = key;
+    node->value = key;
+    if (sl_insert_nodup(slist, &node->snode) == -1)
+        return MUNIT_ERROR;
+    else {
+        ex_node_t query;
+        query.key = key;
+        sl_node *cursor = sl_find(slist, &query.snode);
+        assert_ptr_not_null(cursor);
+        ex_node_t *entry = sl_get_entry(cursor, ex_node_t, snode);
+        sl_erase_node(slist, &entry->snode);
+        sl_release_node(&entry->snode);
+        sl_wait_for_free(&entry->snode);
+        sl_free_node(&entry->snode);
+        free(entry);
+    }
+    return MUNIT_OK;
+}
+
+static void *
+test_api_find_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_find_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_find(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
+static void *
+test_api_update_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_update_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_update(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
+static void *
+test_api_delete_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_delete_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_delete(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
+static void *
+test_api_duplicates_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_duplicates_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_duplicates(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
+static void *
+test_api_size_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_size_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_size(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
+static void *
+test_api_iterators_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
+}
+static void
+test_api_iterators_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
+}
+static MunitResult
+test_api_iterators(const MunitParameter params[], void *data)
+{
+    sl_raw *slist = (sl_raw *)data;
+    (void)params;
+    (void)slist;
+    return MUNIT_OK;
+}
+
 static MunitTest api_test_suite[] = {
     { (char *)"/api/insert", test_api_insert, test_api_insert_setup,
         test_api_insert_tear_down, MUNIT_TEST_OPTION_NONE, NULL },
@@ -140,17 +400,19 @@ static MunitTest api_test_suite[] = {
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }
 };
 
-#include "mt.c"
-#include "scale.c"
-static MunitSuite other_test_suite[] = {
-    { "/mt", mt_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE },
-    { "/scale", scale_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE },
-    { NULL, NULL, NULL, 0, MUNIT_SUITE_OPTION_NONE}
-};
+static MunitTest mt_tests[] = { { NULL, NULL, NULL, NULL,
+    MUNIT_TEST_OPTION_NONE, NULL } };
 
-static const MunitSuite main_test_suite = {
-    (char *)"/api", api_test_suite,other_test_suite, 1, MUNIT_SUITE_OPTION_NONE
-};
+static MunitTest scale_tests[] = { { NULL, NULL, NULL, NULL,
+    MUNIT_TEST_OPTION_NONE, NULL } };
+
+static MunitSuite other_test_suite[] = { { "/mt", mt_tests, NULL, 1,
+                                             MUNIT_SUITE_OPTION_NONE },
+    { "/scale", scale_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE },
+    { NULL, NULL, NULL, 0, MUNIT_SUITE_OPTION_NONE } };
+
+static const MunitSuite main_test_suite = { (char *)"/api", api_test_suite,
+    other_test_suite, 1, MUNIT_SUITE_OPTION_NONE };
 
 int
 main(int argc, char *argv[MUNIT_ARRAY_PARAM(argc + 1)])

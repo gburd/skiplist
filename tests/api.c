@@ -35,12 +35,14 @@ test_api_tear_down(void *fixture)
 }
 
 static void *
-test_api_insert_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_insert_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_insert_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_insert_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_insert(const MunitParameter params[], void *data)
@@ -61,12 +63,14 @@ test_api_insert(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_remove_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_remove_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_remove_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_remove_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_remove(const MunitParameter params[], void *data)
@@ -78,12 +82,14 @@ test_api_remove(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_find_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_find_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_find_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_find_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_find(const MunitParameter params[], void *data)
@@ -95,12 +101,14 @@ test_api_find(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_update_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_update_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_update_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_update_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_update(const MunitParameter params[], void *data)
@@ -112,12 +120,14 @@ test_api_update(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_delete_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_delete_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_delete_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_delete_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_delete(const MunitParameter params[], void *data)
@@ -129,12 +139,14 @@ test_api_delete(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_duplicates_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_duplicates_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_duplicates_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_duplicates_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_duplicates(const MunitParameter params[], void *data)
@@ -146,12 +158,14 @@ test_api_duplicates(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_size_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_size_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_size_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_size_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_size(const MunitParameter params[], void *data)
@@ -163,12 +177,14 @@ test_api_size(const MunitParameter params[], void *data)
 }
 
 static void *
-test_api_iterators_setup(const MunitParameter params[], void *user_data) {
-  return test_api_setup(params, user_data);
+test_api_iterators_setup(const MunitParameter params[], void *user_data)
+{
+    return test_api_setup(params, user_data);
 }
 static void
-test_api_iterators_tear_down(void *fixture) {
-  test_api_tear_down(fixture);
+test_api_iterators_tear_down(void *fixture)
+{
+    test_api_tear_down(fixture);
 }
 static MunitResult
 test_api_iterators(const MunitParameter params[], void *data)
