@@ -1,6 +1,6 @@
 
 CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-TEST_FLAGS = -std=c99 -Itests/ -fsanitize=address,undefined
+TEST_FLAGS = -Itests/ -fsanitize=address,undefined
 
 OBJS = skiplist.o
 STATIC_LIB = libskiplist.a
@@ -29,7 +29,7 @@ $(SHARED_LIB): $(OBJS)
 tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
 
-tests: $(TESTS)
+test: $(TESTS)
 	./tests/test
 
 tests/test: tests/test.o tests/munit.o $(STATIC_LIB)
@@ -41,7 +41,7 @@ examples/example: examples/example.c $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
 
 clean:
-	rm -f $(OBJS)
+	rm -f $(OBJS) munit.o test.o
 	rm -f $(STATIC_LIB)
 	rm -f $(TESTS)
 	rm -f $(EXAMPLES)
