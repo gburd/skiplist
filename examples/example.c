@@ -4,7 +4,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "skiplist.h"
+#include "../include/skiplist.h"
 
 // Define a node that contains key and value pair.
 struct my_node {
@@ -67,7 +67,7 @@ main()
         // Define a query.
         struct my_node query;
         int min = 1, max = NUM_NODES - 1;
-        int k = min + random() / (RAND_MAX / (max - min + 1) + 1);
+        int k = min + (int)random() / (RAND_MAX / (max - min + 1) + 1);
         query.key = k;
         // Find a skiplist node `cursor`.
         sl_node *cursor = sl_find(&slist, &query.snode);

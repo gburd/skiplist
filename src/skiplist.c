@@ -24,84 +24,14 @@
  * IN THE SOFTWARE.
  */
 
+#include <assert.h>
 #include <sched.h>
 #include <stdlib.h>
 
 #include "skiplist.h"
 
 #define __SL_DEBUG 0
-#if __SL_DEBUG > 0
-#include <sys/types.h>
 
-#include <assert.h>
-#include <pthread.h>
-#include <stdio.h>
-#include <unistd.h>
-#endif
-#if __SL_DEBUG >= 1
-#define __SLD_ASSERT(cond) assert(cond)
-#define __SLD_(b) b
-#elif __SL_DEBUG >= 2
-#define __SLD_P(...) printf(__VA_ARGS__)
-#elif __SL_DEBUG >= 3
-typedef struct dbg_node {
-    sl_node snode;
-    int value;
-} dbg_node_t;
-
-inline void
-__sld_rt_ins(int error_code, sl_node *node, int top_layer, int cur_layer)
-{
-    dbg_node_t *ddd = sl_get_entry(node, dbg_node_t, snode);
-    printf("[INS] retry (code %d) "
-           "%p (top %d, cur %d) %d\n",
-        error_code, node, top_layer, cur_layer, ddd->value);
-}
-
-inline void
-__sld_nc_ins(sl_node *node, sl_node *next_node, int top_layer, int cur_layer)
-{
-    dbg_node_t *ddd = sl_get_entry(node, dbg_node_t, snode);
-    dbg_node_t *ddd_next = sl_get_entry(next_node, dbg_node_t, snode);
-
-    printf("[INS] next node changed, "
-           "%p %p (top %d, cur %d) %d %d\n",
-        node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
-}
-
-inline void
-__sld_rt_rmv(int error_code, sl_node *node, int top_layer, int cur_layer)
-{
-    dbg_node_t *ddd = sl_get_entry(node, dbg_node_t, snode);
-    printf("[RMV] retry (code %d) "
-           "%p (top %d, cur %d) %d\n",
-        error_code, node, top_layer, cur_layer, ddd->value);
-}
-
-inline void
-__sld_nc_rmv(sl_node *node, sl_node *next_node, int top_layer, int cur_layer)
-{
-    dbg_node_t *ddd = sl_get_entry(node, dbg_node_t, snode);
-    dbg_node_t *ddd_next = sl_get_entry(next_node, dbg_node_t, snode);
-
-    printf("[RMV] next node changed, "
-           "%p %p (top %d, cur %d) %d %d\n",
-        node, next_node, top_layer, cur_layer, ddd->value, ddd_next->value);
-}
-
-inline void
-__sld_bm(sl_node *node)
-{
-    dbg_node_t *ddd = sl_get_entry(node, dbg_node_t, snode);
-    printf("[RMV] node is being modified %d\n", ddd->value);
-}
-
-#define __SLD_RT_INS(e, n, t, c) __sld_rt_ins(e, n, t, c)
-#define __SLD_NC_INS(n, nn, t, c) __sld_nc_ins(n, nn, t, c)
-#define __SLD_RT_RMV(e, n, t, c) __sld_rt_rmv(e, n, t, c)
-#define __SLD_NC_RMV(n, nn, t, c) __sld_nc_rmv(n, nn, t, c)
-#define __SLD_BM(n) __sld_bm(n)
-#else
 #define __SLD_RT_INS(e, n, t, c) ((void)0)
 #define __SLD_NC_INS(n, nn, t, c) ((void)0)
 #define __SLD_RT_RMV(e, n, t, c) ((void)0)
@@ -110,7 +40,6 @@ __sld_bm(sl_node *node)
 #define __SLD_ASSERT(cond) ((void)0)
 #define __SLD_P(...) ((void)0)
 #define __SLD_(b) ((void)0)
-#endif
 
 #define YIELD() sched_yield()
 
@@ -152,8 +81,8 @@ __sl_node_init(sl_node *node, size_t top_layer)
     if (top_layer > UINT8_MAX)
         top_layer = UINT8_MAX;
 
-    __SLD_ASSERT(node->is_fully_linked == false);
-    __SLD_ASSERT(node->being_modified == false);
+    assert(node->is_fully_linked == false);
+    assert(node->being_modified == false);
 
     ATM_STORE(node->is_fully_linked, bool_val);
     ATM_STORE(node->being_modified, bool_val);
@@ -482,9 +411,9 @@ __sl_fnd_next(sl_node *cur_node, size_t layer, sl_node *to_find, bool *found)
          *
          * ... maybe resolved using RW spinlock (Aug 21, 2017).
          */
-        __SLD_ASSERT(next_node);
+        assert(next_node);
         ATM_FETCH_ADD(next_node->ref_count, 1);
-        __SLD_ASSERT(next_node->top_layer >= layer);
+        assert(next_node->top_layer >= layer);
     }
     __sl_read_unlock_an(cur_node);
 
@@ -495,7 +424,7 @@ __sl_fnd_next(sl_node *cur_node, size_t layer, sl_node *to_find, bool *found)
         temp = next_node;
         __sl_read_lock_an(temp);
         {
-            __SLD_ASSERT(next_node);
+            assert(next_node);
             if (!__sl_valid_node(temp)) {
                 __sl_read_unlock_an(temp);
                 ATM_FETCH_SUB(temp->ref_count, 1);
@@ -505,7 +434,7 @@ __sl_fnd_next(sl_node *cur_node, size_t layer, sl_node *to_find, bool *found)
             ATM_LOAD(temp->next[layer], next_node);
             ATM_FETCH_ADD(next_node->ref_count, 1);
             nodes[num_nodes++] = temp;
-            __SLD_ASSERT(next_node->top_layer >= layer);
+            assert(next_node->top_layer >= layer);
         }
         __sl_read_unlock_an(temp);
     }
@@ -565,7 +494,7 @@ __sl_clr_flags(sl_node **node_arr, unsigned long start_layer,
             bool exp = true;
             bool bool_false = false;
             if (!ATM_CAS(node_arr[layer]->being_modified, exp, bool_false)) {
-                __SLD_ASSERT(0);
+                assert(0);
             }
         }
     }
@@ -586,8 +515,8 @@ __sl_valid_prev_next(sl_node *prev, sl_node *next)
 static int
 __sl_insert(sl_raw *slist, sl_node *node, bool no_dup)
 {
-    int i, cmp, error_code;
-    size_t layer, cur_layer, top_layer, locked_layer, sl_top_layer;
+    int i, cmp, error_code, cur_layer;
+    size_t layer, top_layer, locked_layer, sl_top_layer;
     bool bool_true = true;
     sl_node *exp, *cur_node, *next_node, *next_node_again,
         *prev[SKIPLIST_MAX_LAYER], *next[SKIPLIST_MAX_LAYER];
@@ -719,7 +648,7 @@ insert_retry:;
                     __SLD_P("%02x ASSERT ins %p[%d] -> %p (expected %p)\n",
                         (int)tid_hash, prev[layer], cur_layer,
                         ATM_GET(prev[layer]->next[layer]), next[layer]);
-                    __SLD_ASSERT(0);
+                    assert(0);
                 }
                 __SLD_P("%02x ins %p[%d] -> %p -> %p\n", (int)tid_hash,
                     prev[layer], layer, node, ATM_GET(node->next[layer]));
@@ -980,7 +909,7 @@ erase_node_retry:
                         __sl_clr_flags(prev, cur_layer + 1, top_layer);
                         ATM_FETCH_SUB(temp->ref_count, 1);
                         ATM_FETCH_SUB(next_node->ref_count, 1);
-                        __SLD_ASSERT(0);
+                        assert(0);
                     }
                 });
                 ATM_FETCH_SUB(temp->ref_count, 1);
@@ -994,7 +923,7 @@ erase_node_retry:
                 prev[cur_layer] = cur_node;
                 /* 'next_node' and 'node' should not be
                    the same, as 'removed' flag is already set. */
-                __SLD_ASSERT(next_node != node);
+                assert(next_node != node);
                 next[cur_layer] = next_node;
 
                 /* check if prev node duplicates with upper layer */
@@ -1049,7 +978,7 @@ erase_node_retry:
         } while (cur_node != &slist->tail);
     }
     /* not exist in the skiplist, should not happen */
-    __SLD_ASSERT(found_node_to_erase);
+    assert(found_node_to_erase);
     /* bottom layer => removal succeeded, mark this node unlinked */
     __sl_write_lock_an(node);
     {
@@ -1061,15 +990,15 @@ erase_node_retry:
     for (cur_layer = 0; cur_layer <= top_layer; ++cur_layer) {
         __sl_write_lock_an(prev[cur_layer]);
         exp = node;
-        __SLD_ASSERT(exp != next[cur_layer]);
-        __SLD_ASSERT(next[cur_layer]->is_fully_linked);
+        assert(exp != next[cur_layer]);
+        assert(next[cur_layer]->is_fully_linked);
         if (!ATM_CAS(prev[cur_layer]->next[cur_layer], exp, next[cur_layer])) {
             __SLD_P("%02x ASSERT rmv %p[%d] -> %p (node %p)\n", (int)tid_hash,
                 prev[cur_layer], cur_layer,
                 ATM_GET(prev[cur_layer]->next[cur_layer]), node);
-            __SLD_ASSERT(0);
+            assert(0);
         }
-        __SLD_ASSERT(next[cur_layer]->top_layer >= cur_layer);
+        assert(next[cur_layer]->top_layer >= cur_layer);
         __SLD_P("%02x rmv %p[%d] -> %p (node %p)\n", (int)tid_hash,
             prev[cur_layer], cur_layer, next[cur_layer], node);
         __sl_write_unlock_an(prev[cur_layer]);
@@ -1135,7 +1064,7 @@ sl_is_valid_node(sl_node *node)
 int
 sl_is_safe_to_free(sl_node *node)
 {
-    uint16_t  ref_count;
+    uint16_t ref_count;
 
     if (node->accessing_next)
         return 0;
@@ -1168,7 +1097,7 @@ sl_grab_node(sl_node *node)
 void
 sl_release_node(sl_node *node)
 {
-    __SLD_ASSERT(node->ref_count);
+    assert(node->ref_count);
     ATM_FETCH_SUB(node->ref_count, 1);
 }
 
