@@ -4,6 +4,8 @@ build_unix/**
 libskiplist.so
 libskiplist.a
 tests/test
-examples/example
+examples/skip
+examples/mls
+examples/slm
 .direnv/
 .idea/

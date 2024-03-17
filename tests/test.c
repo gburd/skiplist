@@ -121,6 +121,29 @@ uint32_key_cmp(sl_node *a, sl_node *b, void *aux)
     return 0;
 }
 
+static size_t
+__populate_slist(ex_sl_t *slist){
+    size_t inserted = 0;
+    uint32_t n, key;
+    ex_node_t *node;
+
+    n = munit_rand_int_range(1024, 4196);
+    while (n--) {
+        key = munit_rand_int_range(0, (((uint32_t)0) - 1) / 10);
+        node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
+        if (node == NULL)
+            return MUNIT_ERROR;
+        sl_init_node(&node->snode);
+        node->key = key;
+        node->value = key;
+        if (sl_insert_nodup(slist, &node->snode) == -1)
+            continue; /* a random duplicate appeared */
+        else
+            inserted++;
+    }
+    return inserted;
+}
+
 static void *
 test_api_setup(const MunitParameter params[], void *user_data)
 {
@@ -155,29 +178,6 @@ test_api_tear_down(void *fixture)
     }
     sl_free(slist);
     free(fixture);
-}
-
-static size_t
-__populate_slist(ex_sl_t *slist){
-    size_t inserted = 0;
-    uint32_t n, key;
-    ex_node_t *node;
-
-    n = munit_rand_int_range(1024, 4196);
-    while (n--) {
-        key = munit_rand_int_range(0, (((uint32_t)0) - 1) / 10);
-        node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
-        if (node == NULL)
-            return MUNIT_ERROR;
-        sl_init_node(&node->snode);
-        node->key = key;
-        node->value = key;
-        if (sl_insert_nodup(slist, &node->snode) == -1)
-            continue; /* a random duplicate appeared */
-        else
-            inserted++;
-    }
-    return inserted;
 }
 
 static void *
@@ -269,7 +269,19 @@ test_api_remove(const MunitParameter params[], void *data)
 static void *
 test_api_find_setup(const MunitParameter params[], void *user_data)
 {
-    return test_api_setup(params, user_data);
+    sl_raw *slist = (sl_raw *)test_api_setup(params, user_data);
+    ex_node_t *node;
+    for (int i = 1; i <= 100; ++i) {
+        node = calloc(sizeof(ex_node_t), 1);
+        if (node == NULL)
+            return NULL;
+        node = (ex_node_t *)calloc(sizeof(ex_node_t), 1);
+        sl_init_node(&node->snode);
+        node->key = i;
+        node->value = i;
+        sl_insert(slist, &node->snode);
+    }
+    return (void *)slist;
 }
 static void
 test_api_find_tear_down(void *fixture)
@@ -281,7 +293,19 @@ test_api_find(const MunitParameter params[], void *data)
 {
     sl_raw *slist = (sl_raw *)data;
     (void)params;
-    (void)slist;
+
+    /* find equal every value */
+    assert_ptr_not_null(data);
+    for (int i = 1; i <= 100; i++) {
+        ex_node_t query;
+        query.key = i;
+        sl_node *cursor = sl_find(slist, &query.snode);
+        assert_ptr_not_null(cursor);
+        ex_node_t *entry = sl_get_entry(cursor, ex_node_t, snode);
+        assert_uint32(entry->key, ==, i);
+    }
+
+    /*  */
     return MUNIT_OK;
 }
 
@@ -420,3 +444,5 @@ main(int argc, char *argv[MUNIT_ARRAY_PARAM(argc + 1)])
     struct user_data info;
     return munit_suite_main(&main_test_suite, (void *)&info, argc, argv);
 }
+
+/* ARGS: --no-fork --seed 8675309 */

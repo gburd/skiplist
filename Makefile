@@ -1,19 +1,17 @@
 
-CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-TEST_FLAGS = -Itests/
- #-fsanitize=address,undefined
-
 OBJS = skiplist.o
 STATIC_LIB = libskiplist.a
 SHARED_LIB = libskiplist.so
 
+CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
+TEST_FLAGS = -Itests/
+ #-fsanitize=address,undefined
+
 TESTS = tests/test
-EXAMPLES = examples/example
+TEST_OBJS = tests/test.o tests/munit.o
+EXAMPLES = examples/skip examples/slm
 
-.PHONY: all shared static clean tests examples
-
-%.o: src/%.c
-	$(CC) $(CFLAGS) -c -o $@ $^
+.PHONY: all shared static clean test examples mls
 
 all: static shared
 
@@ -27,26 +25,38 @@ $(STATIC_LIB): $(OBJS)
 $(SHARED_LIB): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $? -shared
 
-tests/%.o: tests/%.c
-	$(CC) $(CFLAGS) -c -o $@ $^
+examples: $(EXAMPLES)
+
+mls: examples/mls
 
 test: $(TESTS)
 	./tests/test
 #	env LSAN_OPTIONS=verbosity=1:log_threads=1 ./tests/test
 
-tests/test: tests/test.o tests/munit.o $(STATIC_LIB)
-	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
-
-examples: $(EXAMPLES)
-
-examples/example: examples/example.c $(STATIC_LIB)
+tests/test: $(TEST_OBJS) $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
 
 clean:
 	rm -f $(OBJS) munit.o test.o
+	rm -f examples/mls.c
 	rm -f $(STATIC_LIB)
 	rm -f $(TESTS)
 	rm -f $(EXAMPLES)
 
 format:
 	clang-format -i include/*.h src/*.c tests/*.c tests/*.h
+
+%.o: src/%.c
+	$(CC) $(CFLAGS) -c -o $@ $^
+
+tests/%.o: tests/%.c
+	$(CC) $(CFLAGS) -c -o $@ $^
+
+examples/%.o: examples/%.c
+	$(CC) $(CFLAGS) -c -o $@ $^
+
+examples/mls.c: examples/slm.c
+	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
+
+examples/mls: examples/mls.o $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
