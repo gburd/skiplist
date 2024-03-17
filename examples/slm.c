@@ -48,7 +48,7 @@ int main() {
 #define STATIC_INIT
 #ifdef STATIC_INIT
   skip_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_cmp_entry);
-  _list.slh_tail = (struct entry *)_list.slh_head; // TODO...
+  _list.slh_tail = (struct entry *)&_list.slh_head; // TODO...
   skip_t *list = &_list;
 #else /* Dynamic allocation, init. */
   skip_t *list = (skip_t *)malloc(sizeof(skip_t));
@@ -56,13 +56,17 @@ int main() {
 #endif
 
   /* Insert 10 key/value pairs into the list. */
+  struct entry *n;
   for (int i = 0; i < 10; i++) {
-    struct entry *n;
-    SKIP_ALLOC_NODE(list, n, entry, entries);
-    n->key = i;
-    n->value = i;
-    SKIP_INSERT(list, entry, n, entries);
+      SKIP_ALLOC_NODE(list, n, entry, entries);
+      n->key = i;
+      n->value = i;
+      SKIP_INSERT(list, entry, n, entries);
   }
+  SKIP_ALLOC_NODE(list, n, entry, entries);
+  n->key = -1;
+  n->value = -1;
+  SKIP_INSERT(list, entry, n, entries);
 
 #if 0
   /* Delete a specific element in the list. */

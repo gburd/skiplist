@@ -217,7 +217,7 @@ struct sl_trace {
     (var) = (struct type *)calloc(1, sizeof(struct type) + amt + 3);	\
     if ((var) != NULL) {						\
       (var)->field.sle_prev = (struct type *)(var) + sizeof(struct type); \
-      (var)->field.sle_next = (struct type **)(var) + sizeof(struct type) + (sizeof(struct type *) * 3); \
+      (var)->field.sle_next = (struct type **)((var)->field.sle_prev + (sizeof(void *) * 3)); \
       ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);		\
       ARRAY_SET_LENGTH((var)->field.sle_next, 0);			\
     }									\
@@ -235,13 +235,14 @@ struct sl_trace {
 
 #define SKIP_INSERT(head, type, listelm, field) do {			\
     struct type *__elm = SKIP_FIRST(head);				\
-    unsigned int __i = (head)->level;					\
+    unsigned int __i;							\
     struct type **__path;						\
-    if (__elm == NULL) {						\
+    if ((listelm) == NULL) break;					\
+    if (__elm == NULL) { \
       /* Empty list, setup header and add first element. */		\
-      ARRAY_ALLOC((head)->slh_head, type, (head)->max);	\
-      ARRAY_FORALL(__j, (head)->slh_head) {				\
-	(head)->slh_head[__j] = (head)->slh_tail;			\
+      ARRAY_ALLOC((head)->slh_head, type, (head)->max);			\
+      ARRAY_FORALL(__i, (head)->slh_head) {				\
+	(head)->slh_head[__i] = (head)->slh_tail;			\
       }									\
       (head)->slh_head[0] = (listelm);					\
       (head)->slh_tail = (listelm);					\
@@ -250,11 +251,12 @@ struct sl_trace {
       (head)->length = 1;						\
       break;								\
     }									\
+    __i = (head)->level;						\
     ARRAY_ALLOC(__path, type, (head)->max);				\
     if (__path == NULL) break; /* ENOMEM */				\
     /* Find the position in the list where this element belongs. */	\
     do {								\
-      while(__elm && (head)->cmp((head), __elm->field.sle_next[__i], __elm, (head)->aux) < 0) \
+      while(__elm && (head)->cmp((head), __elm->field.sle_next[__i], (listelm), (head)->aux) < 0) \
 	__elm = __elm->field.sle_next[__i];				\
       __path[__i] = __elm;						\
     } while(__i--);							\
