@@ -280,7 +280,12 @@ struct sl_trace {
       __path[__i]->field.sle_next[__i] = (listelm);			\
     }									\
     (listelm)->field.sle_prev = __elm;					\
-    __elm->field.sle_next[0]->field.sle_prev = (listelm);		\
+    if ((listelm)->field.sle_prev == (struct type *)(head)->slh_head) {	\
+      (head)->slh_head[0] = (listelm);					\
+    }									\
+    if ((listelm)->field.sle_next[0] == (head)->slh_tail) {		\
+      (head)->slh_tail = (listelm);					\
+    }									\
     (head)->length++;							\
     ARRAY_FREE(__path);							\
   } while (0)
