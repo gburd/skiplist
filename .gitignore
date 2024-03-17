@@ -6,6 +6,7 @@ libskiplist.a
 tests/test
 examples/skip
 examples/mls
+examples/mls.c
 examples/slm
 .direnv/
 .idea/

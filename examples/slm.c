@@ -45,8 +45,10 @@ SKIP_HEAD(skip, entry);
 typedef struct skip skip_t;
 int main() {
 /* Allocate and initialize a Skiplist. */
+#define STATIC_INIT
 #ifdef STATIC_INIT
   skip_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_cmp_entry);
+  _list.slh_tail = (struct entry *)_list.slh_head; // TODO...
   skip_t *list = &_list;
 #else /* Dynamic allocation, init. */
   skip_t *list = (skip_t *)malloc(sizeof(skip_t));
