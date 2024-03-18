@@ -283,7 +283,7 @@ struct sl_trace {
     ARRAY_SET_LENGTH((listelm)->field.sle_next, __level);		\
     if (__level > (head)->level) {					\
       for (__i = (head)->level + 1; __i <= __level; __i++) {		\
-	__path[__i] = (list)->slh_tail;					\
+	__path[__i] = (head)->slh_tail;					\
       }									\
       (head)->level = __level;						\
     }									\
