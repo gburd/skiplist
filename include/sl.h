@@ -13,6 +13,21 @@
  * LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
+ *
+ * I'd like to thank others for thoughtfully licensing their work, the
+ * community of software engineers succeeds when we work together.
+ *
+ * Portions of this code are derived from copyrighted work:
+ *
+ *  - MIT LICENSE
+ *    - https://github.com/greensky00/skiplist
+ *      2017-2024 Jung-Sang Ahn <jungsang.ahn@gmail.com>
+ *    - https://github.com/paulross/skiplist
+ *      Copyright (c) 2017-2023 Paul Ross
+ *  - gist skiplist.c
+ *  - queue.h
+ *  - khash.h
+ *  - async_nif.h
  */
 
 #ifndef	_SYS_SKIPLIST_H_
@@ -98,13 +113,13 @@ struct sl_trace {
  * can grow to (`array[-2]`) and the length, or number of elements used in the
  * array so far (`array[-1]`).
  */
-#define ARRAY_ALLOC(var, type, size) do {				\
-    (size) = (size == 0 ? 254 : size);					\
-    (var) = (struct type**)calloc(sizeof(struct type*), size + 2);	\
-    if ((var) != NULL) {						\
-      *(var)++ = (struct type *)size;					\
-      *(var)++ = 0;							\
-    }									\
+#define ARRAY_ALLOC(var, type, size) do {		\
+    (size) = (size == 0 ? 254 : size);			\
+    (var) = (type**)calloc(sizeof(type*), size + 2);	\
+    if ((var) != NULL) {				\
+      *(var)++ = (type *)size;				\
+      *(var)++ = 0;					\
+    }							\
   } while(0)
 #define ARRAY_FREE(var) free((var)-2)
 #define ARRAY_SIZE(list) (list)[-2]
@@ -232,13 +247,13 @@ struct sl_trace {
   } while (0)
 
 
-#define SKIP_ALLOC_NODE(head, var, type, field) do {		\
-    (var) = (struct type *)calloc(1, sizeof(struct type));	\
-    ARRAY_ALLOC((var)->field.sle_next, type, (head)->max);	\
-    if ((var) && (var)->field.sle_next) {			\
-      ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);	\
-      ARRAY_SET_LENGTH((var)->field.sle_next, 0);		\
-    }								\
+#define SKIP_ALLOC_NODE(head, var, type, field) do {			\
+    (var) = (struct type *)calloc(1, sizeof(struct type));		\
+    ARRAY_ALLOC((var)->field.sle_next, struct type, (head)->max);	\
+    if ((var) && (var)->field.sle_next) {				\
+      ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);		\
+      ARRAY_SET_LENGTH((var)->field.sle_next, 0);			\
+    }									\
   } while (0)
 
 #define SKIP_FREE_NODE(node, field) do {			\
@@ -246,58 +261,93 @@ struct sl_trace {
     free((node));						\
   } while (0)
 
-#define __SKIP_TOSS(var, max, fanout) do {			\
-    (var) = 0;							\
-    while ((var) + 1 < (max)) {					\
-      if (rand() % (fanout) == 0) /* NOLINT(*-msc50-cpp) */	\
-	(var)++;						\
-      else							\
-	break;							\
-    }								\
-  } while(0)
-
-#define SKIP_INSERT(head, type, listelm, field) do {			\
-    if ((listelm) == NULL) break;					\
-    struct type *__prev, *__elm = (head)->slh_head;			\
-    unsigned int __i;							\
-    struct type **__path;						\
-    __i = (head)->level;						\
-    ARRAY_ALLOC(__path, type, (head)->max);				\
-    if (__path == NULL) break; /* ENOMEM */				\
+#define SKIP_DECL(decl, prefix, field, key_cmp_logic)			\
+  /* Skiplist type */							\
+  typedef struct decl decl##_t;						\
+									\
+  /* Skiplist node type */						\
+  typedef struct decl##_node decl##_node_t;				\
+									\
+  /* -- __skip_key_compare_decl						\
+   *									\
+   * This function takes four arguments:				\
+   *   - a reference to the Skiplist					\
+   *   - the two nodes to compare, `a` and `b`				\
+   *   - `aux` an additional auxiliary argument				\
+   * and returns:							\
+   *   a  < b : return -1						\
+   *   a == b : return 0						\
+   *   a  > b : return 1						\
+   */									\
+  static int __skip_key_compare_##decl(decl##_t *slist, decl##_node_t *a, decl##_node_t *b, void *aux) { \
+    if (a == b)								\
+      return 0;								\
+    if (a == slist->slh_head || b == slist->slh_tail)			\
+      return -1;							\
+    if (a == slist->slh_tail || b == slist->slh_head)			\
+      return 1;								\
+    do { key_cmp_logic } while(0);					\
+  }									\
+									\
+  /* -- __skip_toss_decl */						\
+  static int __skip_toss_##decl(size_t max, size_t fanout) {		\
+    size_t level = 0;							\
+    while (level + 1 < max) {						\
+      if (rand() % fanout == 0) /* NOLINT(*-msc50-cpp) */		\
+	level++;							\
+      else								\
+	break;								\
+    }									\
+    return level;							\
+  }									\
+									\
+  /* -- prefixskip_insert_decl */					\
+  int prefix##skip_insert_##decl(decl##_t *slist, decl##_node_t *n) {	\
+    if (n == NULL)							\
+      return ENOMEM;							\
+    decl##_node_t *prev, *elm = slist->slh_head;			\
+    unsigned int i;							\
+    decl##_node_t **path;						\
+    i = slist->level;							\
+    ARRAY_ALLOC(path, decl##_node_t, slist->max);			\
+    if (path == NULL)							\
+      return ENOMEM;							\
     /* Find the position in the list where this element belongs. */	\
     do {								\
-      while(__elm && (head)->cmp((head), __elm->field.sle_next[__i], (listelm), (head)->aux) < 0) \
-	__elm = __elm->field.sle_next[__i];				\
-      __path[__i] = __elm;						\
-      ARRAY_SET_LENGTH(__path, ARRAY_LENGTH(__path)+1);			\
-    } while(__i--);							\
-    __i = 0;								\
-    __prev = __elm;							\
-    __elm = __elm->field.sle_next[0];					\
-    if ((head)->cmp((head), __elm, listelm, (head)->aux) == 0) {	\
-      ARRAY_FREE(__path);						\
-      break; /* Don't overwrite, to do that use _REPLACE not _INSERT */	\
+      while(elm && slist->cmp(slist, elm->field.sle_next[i], n, slist->aux) < 0) \
+	elm = elm->field.sle_next[i];					\
+      path[i] = elm;							\
+      ARRAY_SET_LENGTH(path, ARRAY_LENGTH(path)+1);			\
+    } while(i--);							\
+    i = 0;								\
+    prev = elm;								\
+    elm = elm->field.sle_next[0];					\
+    if (slist->cmp(slist, elm, n, slist->aux) == 0) {			\
+      ARRAY_FREE(path);							\
+      /* Don't overwrite, to do that use _REPLACE not _INSERT */	\
+      return -1;							\
     }									\
-    unsigned int __level;						\
-    __SKIP_TOSS(__level, (head)->max, (head)->fanout);			\
-    ARRAY_SET_LENGTH((listelm)->field.sle_next, __level);		\
-    if (__level > (head)->level) {					\
-      for (__i = (head)->level + 1; __i <= __level; __i++) {		\
-	__path[__i] = (head)->slh_tail;					\
+    size_t level = __skip_toss_##decl(slist->max, slist->fanout); \
+    ARRAY_SET_LENGTH(n->field.sle_next, level);				\
+    if (level > slist->level) {						\
+      for (i = slist->level + 1; i <= level; i++) {			\
+	path[i] = slist->slh_tail;					\
       }									\
-      (head)->level = __level;						\
+      slist->level = level;						\
     }									\
-    for (__i = 0; __i <= __level; __i++) {				\
-      (listelm)->field.sle_next[__i] = __path[__i]->field.sle_next[__i];\
-      __path[__i]->field.sle_next[__i] = (listelm);			\
+    for (i = 0; i <= level; i++) {					\
+      n->field.sle_next[i] = path[i]->field.sle_next[i];		\
+      path[i]->field.sle_next[i] = n;					\
     }									\
-    (listelm)->field.sle_prev = __prev;					\
-    if ((listelm)->field.sle_next[0] == (head)->slh_tail) {		\
-      (head)->slh_tail->field.sle_prev = (listelm);					\
+    n->field.sle_prev = prev;						\
+    if (n->field.sle_next[0] == slist->slh_tail) {			\
+      slist->slh_tail->field.sle_prev = n;				\
     }									\
-    (head)->length++;							\
-    ARRAY_FREE(__path);							\
-  } while (0)
+    slist->length++;							\
+    ARRAY_FREE(path);							\
+    return 0;								\
+  }									\
+  /* END */
 
 #if 0
 #define SKIP_REMOVE(head, elm, field) do {				\

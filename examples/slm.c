@@ -1,77 +1,66 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <errno.h>
 #include "../include/sl.h"
 
 /*
  * SKIPLIST EXAMPLE:
  *
  * This example creates a Skiplist keys and values are integers.
+ * 'slex' - meaning: SkipList EXample
  */
 
 /* Create a type of Skiplist that maps int -> int. */
-struct entry {
+struct slex_node {
   int key;
   int value;
-  SKIP_ENTRY(entry) entries;
+  SKIP_ENTRY(slex_node) entries;
 };
-SKIP_HEAD(skip, entry);
+SKIP_HEAD(slex, slex_node);
 
-/* Generate a function to compare keys to order our list.
- *
- * The function takes three arguments:
- *   - `a` and `b` of the provided type (`entry` in this case)
- *   - `aux` an additional auxiliary argument
- * and returns:
- *   a  < b : return -1
- *   a == b : return 0
- *   a  > b : return 1
- *
- * This function is only called when a and b are not NULL and valid
- * pointers to the entry type.
- *
- * The function will be named: __skip_cmp_<entry> which should be
- * passed as the 2nd argument in the SKIP_HEAD_INITIALIZER.
- */
-  SKIP_COMPARATOR(skip, entry, {
+/* Generate all the access functions for our type of Skiplist. */
+SKIP_DECL(slex, api_, entries, {
     (void)aux;
     if (a->key < b->key)
-      return -1;
+        return -1;
     if (a->key > b->key)
-      return 1;
+        return 1;
     return 0;
-  })
+})
 
-typedef struct skip skip_t;
 int main() {
 /* Allocate and initialize a Skiplist. */
+    slex_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_key_compare_slex);
+  _list.slh_tail = (struct slex_node *)&_list.slh_head; // TODO...
+    /* Dynamic allocation, init. */
+  slex_t *list = (slex_t *)malloc(sizeof(slex_t));
+  SKIP_DEFAULT_INIT(list, __skip_key_compare_slex, slex_node, entries);
 #ifdef STATIC_INIT
-  skip_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_cmp_entry);
-  _list.slh_tail = (struct entry *)&_list.slh_head; // TODO...
-  skip_t *list = &_list;
-#else /* Dynamic allocation, init. */
-  skip_t *list = (skip_t *)malloc(sizeof(skip_t));
-  SKIP_DEFAULT_INIT(list, __skip_cmp_entry, entry, entries);
+  free(list);
+  slex_t *list = &_list;
+#else
 #endif
 
-  /* Insert 10 key/value pairs into the list. */
-  struct entry *n;
-  for (int i = 0; i < 10; i++) {
-      SKIP_ALLOC_NODE(list, n, entry, entries);
-      n->key = i;
-      n->value = i;
-      SKIP_INSERT(list, entry, n, entries);
-  }
-  SKIP_ALLOC_NODE(list, n, entry, entries);
+  struct slex_node *n;
+  SKIP_ALLOC_NODE(list, n, slex_node, entries);
   n->key = -1;
   n->value = -1;
-  SKIP_INSERT(list, entry, n, entries);
+  api_skip_insert_slex(list, n);
+
+  /* Insert 10 key/value pairs into the list. */
+  for (int i = 0; i < 10; i++) {
+      SKIP_ALLOC_NODE(list, n, slex_node, entries);
+      n->key = i;
+      n->value = i;
+      api_skip_insert_slex(list, n);
+  }
 
 #if 0
   /* Delete a specific element in the list. */
-  struct entry query;
+  struct slex_node query;
   query.key = 4;
-  struct entry *removed = SKIP_REMOVE(list, q, entries);
+  struct slex_node *removed = SKIP_REMOVE(list, q, entries);
   free(removed);
   /* Forward traversal. */
   SKIP_FOREACH(np, &head, entries)
