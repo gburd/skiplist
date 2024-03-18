@@ -122,15 +122,10 @@ struct sl_trace {
     }							\
   } while(0)
 #define ARRAY_FREE(var) free((var)-2)
-#define ARRAY_SIZE(list) (list)[-2]
+#define ARRAY_SIZE(list) (unsigned int)(uintptr_t)((list)-2)
 #define ARRAY_SET_SIZE(list, size) (list)[-2] = (void *)(uintptr_t)(size)
-#define ARRAY_LENGTH(list) (list)[-1]
+#define ARRAY_LENGTH(list) (unsigned int)(uintptr_t)((list)-1)
 #define ARRAY_SET_LENGTH(list, len) (list)[-1] = (void *)(uintptr_t)(len)
-#define ARRAY_FOREACH(var, list)					\
-  for(unsigned int (var) = 0; (var) < (unsigned int)(uintptr_t)ARRAY_LENGTH(list); (var)++)
-#define ARRAY_FORALL(var, list)					\
-  for(unsigned int (var) = 0; (var) < (unsigned int)(uintptr_t)ARRAY_SIZE(list); (var)++)
-
 
 /*
  * Skiplist declarations.
@@ -213,12 +208,12 @@ struct sl_trace {
   SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);			\
   SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);			\
   ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, max);		\
-  ARRAY_FORALL(__i, (head)->slh_head->field.sle_next) {			\
+  for(size_t __i = 0; __i < ARRAY_SIZE((head)->slh_head->field.sle_next); __i++) { \
     (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;		\
   }									\
   (head)->slh_head->field.sle_prev = NULL;				\
   ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next, max);		\
-  ARRAY_FORALL(__i, (head)->slh_tail->field.sle_next) {			\
+  for(size_t __i = 0; __i < ARRAY_SIZE((head)->slh_tail->field.sle_next); __i++) { \
     (head)->slh_tail->field.sle_next[__i] = NULL;			\
   }									\
   (head)->slh_head->field.sle_prev = (head)->slh_tail;			\
@@ -234,12 +229,12 @@ struct sl_trace {
     SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);		\
     SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);		\
     ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, (head)->max);	\
-    ARRAY_FORALL(__i, (head)->slh_head->field.sle_next) {		\
+    for(size_t __i = 0; __i < ARRAY_SIZE((head)->slh_head->field.sle_next); __i++) { \
       (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;		\
     }									\
     (head)->slh_head->field.sle_prev = NULL;				\
-    ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next,  (head)->max);	\
-    ARRAY_FORALL(__i, (head)->slh_tail->field.sle_next) {		\
+    ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next, (head)->max);	\
+    for(size_t __i = 0; __i < ARRAY_SIZE((head)->slh_tail->field.sle_next); __i++) { \
       (head)->slh_tail->field.sle_next[__i] = NULL;			\
     }									\
     (head)->slh_head->field.sle_prev = (head)->slh_tail;		\
@@ -261,14 +256,22 @@ struct sl_trace {
     free((node));						\
   } while (0)
 
-#define SKIP_DECL(decl, prefix, field, key_cmp_logic)			\
-  /* Skiplist type */							\
-  typedef struct decl decl##_t;						\
+#define SKIPLIST_DECL(decl, prefix, field, key_cmp_logic)		\
 									\
   /* Skiplist node type */						\
   typedef struct decl##_node decl##_node_t;				\
 									\
-  /* -- __skip_key_compare_decl						\
+  /* Skiplist type */							\
+  typedef struct decl {							\
+    size_t level, length, max, fanout;					\
+    int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *); \
+    void *aux;								\
+    decl##_node_t *slh_head;						\
+    decl##_node_t *slh_tail;						\
+    TRACEBUF								\
+  }decl##_t;								\
+									\
+  /* -- __skip_key_compare_						\
    *									\
    * This function takes four arguments:				\
    *   - a reference to the Skiplist					\
@@ -289,7 +292,7 @@ struct sl_trace {
     do { key_cmp_logic } while(0);					\
   }									\
 									\
-  /* -- __skip_toss_decl */						\
+  /* -- __skip_toss_ */							\
   static int __skip_toss_##decl(size_t max, size_t fanout) {		\
     size_t level = 0;							\
     while (level + 1 < max) {						\
@@ -301,7 +304,7 @@ struct sl_trace {
     return level;							\
   }									\
 									\
-  /* -- prefixskip_insert_decl */					\
+  /* -- skip_insert_ */							\
   int prefix##skip_insert_##decl(decl##_t *slist, decl##_node_t *n) {	\
     if (n == NULL)							\
       return ENOMEM;							\
@@ -345,6 +348,162 @@ struct sl_trace {
     }									\
     slist->length++;							\
     ARRAY_FREE(path);							\
+    return 0;								\
+  }									\
+									\
+  /* -- __skip_integrity_check_ */					\
+  static int __skip_integrity_check_##decl() {				\
+    return 0;								\
+  }									\
+									\
+  /* A type for a function that writes into a char[2048] buffer		\
+   * a description of the value within the node. */			\
+  typedef void (*skip_sprintf_node_##decl##_t)(decl##_node_t *, char *); \
+									\
+  /* -- __skip_dot_node_						\
+   * Writes out a fragment of a DOT file representing a node.		\
+   */									\
+  static void __skip_dot_node_##decl(FILE *os, decl##_t *slist, decl##_node_t *node, size_t suffix, skip_sprintf_node_##decl##_t fn) { \
+    fprintf(os, "\"node%zu%p\"", suffix, (void*)node);			\
+    fprintf(os, " [label = \"");					\
+    size_t level = ARRAY_LENGTH(node->field.sle_next);			\
+    do {								\
+      fprintf(os, " { <w%zu> | <f%zu> %p }", level, level, (void*)node->field.sle_next[level]); \
+      if (level != 0) fprintf(os, " | ");				\
+    } while (level--);							\
+    if (fn) {								\
+      char buf[2048];							\
+      fn(node, buf);							\
+      fprintf(os, " <f0> %s\"\n", buf);					\
+    } else {								\
+      fprintf(os, " <f0> ?\"\n");					\
+    }									\
+    fprintf(os, "shape = \"record\"\n");				\
+    fprintf(os, "];\n");						\
+									\
+    /* Now edges */							\
+    level = 0;								\
+    size_t size = ARRAY_LENGTH(node->field.sle_next);			\
+    for (size_t level = 0; level <= size; level++) {			\
+      fprintf(os, "\"node%zu%p\"", suffix, (void*)node);		\
+      fprintf(os, ":f%zu -> SomeNode [style=solid];\n", level);		\
+    }									\
+									\
+    if (node->field.sle_next[0])					\
+      __skip_dot_node_##decl(os, slist, node->field.sle_next[0], suffix, fn); \
+  }									\
+									\
+  /* -- __skip_dot_finish_						\
+   * Finalise the DOT file of the internal representation.		\
+   */									\
+  static void __skip_dot_finish_##decl(FILE *os, size_t nsg) {		\
+    if (nsg > 0) {							\
+      /* Link the nodes together with an invisible node. */		\
+      fprintf(os, "node0 [shape=record, label = \"");			\
+      for (size_t i = 0; i < nsg; ++i) {				\
+	fprintf(os, "<f%zu> | ", i);					\
+      }									\
+      fprintf(os, "\", style=invis, width=0.01];\n");			\
+									\
+      /* Now connect nodes with invisible edges */			\
+      for (size_t i = 0; i < nsg; ++i) {				\
+	fprintf(os, "node0:f%zu -> HeadNode%zu [style=invis];\n", i, i);\
+      }									\
+      nsg = 0;								\
+    }									\
+    fprintf(os, "}\n");							\
+  }									\
+									\
+  /* -- skip_dot_start_ */						\
+  static int __skip_dot_start_##decl(FILE *os, decl##_t *slist, size_t nsg) { \
+    if (nsg == 0) {							\
+      fprintf(os, "digraph Skiplist {\n");				\
+      fprintf(os, "label = \"Skiplist.\"\n");				\
+      fprintf(os, "graph [rankdir = \"LR\"];\n");			\
+      fprintf(os, "node [fontsize = \"12\" shape = \"ellipse\"];\n");	\
+      fprintf(os, "edge [];\n\n");					\
+    }									\
+    fprintf(os, "subgraph cluster%zu {\n", nsg);			\
+    fprintf(os, "style=dashed\n");					\
+    fprintf(os, "label=\"Skip list iteration %zu\"\n\n", nsg);		\
+    fprintf(os, "\"HeadNode%zu\" [\n", nsg);				\
+    fprintf(os, "label = \"");						\
+									\
+    /* Write out the head node fields */				\
+    decl##_node_t *head = slist->slh_head;				\
+    size_t level;							\
+    if (SKIP_EMPTY(slist)) fprintf(os, "Empty HeadNode"); else {	\
+      level = ARRAY_LENGTH(head->field.sle_next);			\
+      do {								\
+	decl##_node_t *node = head->field.sle_next[level];		\
+	fprintf(os, "{ <f%zu> %p }", level + 1, (void *)node);		\
+	if (level != 0) fprintf(os, " | ");				\
+      } while(level--);							\
+    }									\
+    fprintf(os, "\"\n");						\
+    fprintf(os, "shape = \"record\"\n");				\
+    fprintf(os, "];\n");						\
+									\
+    /* Edges for head node */						\
+    level = 0;								\
+    do {								\
+      fprintf(os, "\"HeadNode%zu\":f%zu -> ", nsg, level);		\
+      /* Write logic to handle edge connections */			\
+      fprintf(os, "SomeNode [style=solid];\n");				\
+    } while(level++ < ARRAY_LENGTH(slist));				\
+    fprintf(os, "}\n\n");						\
+									\
+    /* Now all nodes via level 0, if non-empty */			\
+    decl##_node_t *node = slist->slh_head;				\
+    if (ARRAY_LENGTH(node->field.sle_next))				\
+      __skip_dot_node_##decl(os, slist, node, nsg, NULL);		\
+    fprintf(os, "\n");							\
+    									\
+    /* The tail, sentinal node */					\
+    if (!SKIP_EMPTY(slist)) {						\
+      fprintf(os,"\"node%zu0x0\" [label = \"", nsg);			\
+      size_t level = slist->level;					\
+      do {								\
+	fprintf(os, "<w%zu> NULL", level);				\
+	if (level != 0)							\
+	  fprintf(os, " | ");						\
+      } while(level-- > 0);						\
+      fprintf(os, "\" shape = \"record\"];\n");				\
+    }									\
+									\
+    /* End: "subgraph cluster1 {" */					\
+    fprintf(os, "}\n\n");						\
+    nsg += 1;								\
+    									\
+    return 0;								\
+  }									\
+									\
+  /* -- skip_dot_							\
+   * Create a DOT file of the internal representation of the		\
+   * Skiplist on the provided file descriptor (default: STDOUT).	\
+   *									\
+   * To view the output:						\
+   * $ dot -Tps filename.dot -o outfile.ps				\
+   * You can change the output format by varying the value after -T and \
+   * choosing an appropriate filename extension after -o.		\
+   * See: https://graphviz.org/docs/outputs/ for the format options.	\
+   *									\
+   * https://en.wikipedia.org/wiki/DOT_(graph_description_language)	\
+   */									\
+  int prefix##skip_dot_##decl(FILE *os, decl##_t *slist) {		\
+    size_t nsg = 0;							\
+    if (__skip_integrity_check_##decl(slist) != 0) {			\
+        perror("Skiplist failed integrity checks, impossible to diagram.");\
+	return -1;							\
+    }									\
+    if (os == NULL)							\
+      os = stdout;							\
+    if (!os) {								\
+        perror("Failed to open output file, unable to write DOT file.");\
+        return -1;							\
+    }									\
+    __skip_dot_start_##decl(os, slist, nsg);				\
+    __skip_dot_finish_##decl(os, nsg);					\
     return 0;								\
   }									\
   /* END */

@@ -1,7 +1,9 @@
-#include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <errno.h>
+#include <string.h>
 #include "../include/sl.h"
 
 /*
@@ -11,16 +13,43 @@
  * 'slex' - meaning: SkipList EXample
  */
 
-/* Create a type of Skiplist that maps int -> int. */
+/*
+ * To start, you must create a type node that will contain the
+ * fields you'd like to maintain in your Skiplist.  In this case
+ * we map int -> int, but what you put here is up to you.  You
+ * don't even need a "key", just a way to compare one node against
+ * another, logic you'll provide in SKIP_DECL as a block below.
+ */
 struct slex_node {
   int key;
   int value;
   SKIP_ENTRY(slex_node) entries;
 };
-SKIP_HEAD(slex, slex_node);
 
-/* Generate all the access functions for our type of Skiplist. */
-SKIP_DECL(slex, api_, entries, {
+/*
+ * Generate all the access functions for our type of Skiplist.
+ * The last argument to this macro is a block of code used to
+ * compare the nodes you defined above.
+ * This block can expect four arguments:
+ *   - a reference to the Skiplist, `slist`
+ *   - the two nodes to compare, `a` and `b`
+ *   - and `aux`, which you can use to pass into this function
+ *     any additional information required to compare objects.
+ *     `aux` is passed from the value in the Skiplist, you can
+ *     modify that value at any time to suit your needs.
+ *
+ * Your block should result in a return statement:
+ *   a  < b : return -1
+ *   a == b : return 0
+ *   a  > b : return 1
+ *
+ * This result provides the ordering within the Skiplist.  Sometimes
+ * your block of code will not be used when comparing nodes.  This
+ * happens when `a` or `b` are references to the head or tail of the
+ * list or when `a == b`.  In those cases the comparison function
+ * returns before using the code in your block, don't panic. :)
+ */
+SKIPLIST_DECL(slex, api_, entries, {
     (void)aux;
     if (a->key < b->key)
         return -1;
