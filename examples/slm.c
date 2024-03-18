@@ -58,6 +58,10 @@ SKIPLIST_DECL(slex, api_, entries, {
     return 0;
 })
 
+void sprintf_slex_node(slex_node_t *node, char *buf) {
+  sprintf(buf, "%d", node->key);
+}
+
 int main() {
 /* Allocate and initialize a Skiplist. */
     slex_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_key_compare_slex);
@@ -77,7 +81,13 @@ int main() {
   n->value = -1;
   api_skip_insert_slex(list, n);
 
-  api_skip_dot_slex(NULL, list);
+  FILE* of = fopen("/tmp/slm.dot", "w");
+  if (!of) {
+      perror("Failed to open file /tmp/slm.dot");
+      return EXIT_FAILURE;
+  }
+  api_skip_dot_slex(of, list, sprintf_slex_node);
+  fclose(of);
 
   /* Insert 10 key/value pairs into the list. */
   for (int i = 0; i < 10; i++) {

@@ -425,7 +425,7 @@ struct sl_trace {
   }									\
 									\
   /* -- skip_dot_start_ */						\
-  static int __skip_dot_start_##decl(FILE *os, decl##_t *slist, size_t nsg) { \
+  static int __skip_dot_start_##decl(FILE *os, decl##_t *slist, size_t nsg, skip_sprintf_node_##decl##_t fn) { \
     if (nsg == 0) {							\
       fprintf(os, "digraph Skiplist {\n");				\
       fprintf(os, "label = \"Skiplist.\"\n");				\
@@ -443,10 +443,10 @@ struct sl_trace {
     decl##_node_t *head = slist->slh_head;				\
     size_t level;							\
     if (SKIP_EMPTY(slist)) fprintf(os, "Empty HeadNode"); else {	\
-      level = ARRAY_LENGTH(head->field.sle_next);			\
+      level = ARRAY_LENGTH(head->field.sle_next) - 1;			\
       do {								\
 	decl##_node_t *node = head->field.sle_next[level];		\
-	fprintf(os, "{ <f%zu> %p }", level + 1, (void *)node);		\
+	fprintf(os, "{ <f%zu> %p }", level, (void *)node);		\
 	if (level != 0) fprintf(os, " | ");				\
       } while(level--);							\
     }									\
@@ -465,9 +465,9 @@ struct sl_trace {
     fprintf(os, "}\n\n");						\
 									\
     /* Now all nodes via level 0, if non-empty */			\
-    node = slist->slh_head;				\
+    node = slist->slh_head;						\
     if (ARRAY_LENGTH(node->field.sle_next))				\
-      __skip_dot_node_##decl(os, slist, node, nsg, NULL);		\
+      __skip_dot_node_##decl(os, slist, node, nsg, fn);			\
     fprintf(os, "\n");							\
     									\
     /* The tail, sentinal node */					\
@@ -501,7 +501,7 @@ struct sl_trace {
    *									\
    * https://en.wikipedia.org/wiki/DOT_(graph_description_language)	\
    */									\
-  int prefix##skip_dot_##decl(FILE *os, decl##_t *slist) {		\
+  int prefix##skip_dot_##decl(FILE *os, decl##_t *slist, skip_sprintf_node_##decl##_t fn) { \
     size_t nsg = 0;							\
     if (__skip_integrity_check_##decl(slist) != 0) {			\
         perror("Skiplist failed integrity checks, impossible to diagram.");\
@@ -513,7 +513,7 @@ struct sl_trace {
         perror("Failed to open output file, unable to write DOT file.");\
         return -1;							\
     }									\
-    __skip_dot_start_##decl(os, slist, nsg);				\
+    __skip_dot_start_##decl(os, slist, nsg, fn);			\
     __skip_dot_finish_##decl(os, nsg);					\
     return 0;								\
   }									\

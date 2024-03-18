@@ -23,6 +23,7 @@
           packages = with pkgs; [
             autoconf
             bashInteractive
+            graphviz-nox
             ed
             gdb
             clang-tools
