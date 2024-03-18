@@ -77,6 +77,8 @@ int main() {
   n->value = -1;
   api_skip_insert_slex(list, n);
 
+  api_skip_dot_slex(NULL, list);
+
   /* Insert 10 key/value pairs into the list. */
   for (int i = 0; i < 10; i++) {
       SKIP_ALLOC_NODE(list, n, slex_node, entries);

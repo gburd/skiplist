@@ -122,9 +122,9 @@ struct sl_trace {
     }							\
   } while(0)
 #define ARRAY_FREE(var) free((var)-2)
-#define ARRAY_SIZE(list) (unsigned int)(uintptr_t)((list)-2)
+#define ARRAY_SIZE(list) (unsigned int)(uintptr_t)(list)[-2]
 #define ARRAY_SET_SIZE(list, size) (list)[-2] = (void *)(uintptr_t)(size)
-#define ARRAY_LENGTH(list) (unsigned int)(uintptr_t)((list)-1)
+#define ARRAY_LENGTH(list) (unsigned int)(uintptr_t)(list)[-1]
 #define ARRAY_SET_LENGTH(list, len) (list)[-1] = (void *)(uintptr_t)(len)
 
 /*
@@ -363,14 +363,14 @@ struct sl_trace {
   /* -- __skip_dot_node_						\
    * Writes out a fragment of a DOT file representing a node.		\
    */									\
-  static void __skip_dot_node_##decl(FILE *os, decl##_t *slist, decl##_node_t *node, size_t suffix, skip_sprintf_node_##decl##_t fn) { \
-    fprintf(os, "\"node%zu%p\"", suffix, (void*)node);			\
+  static void __skip_dot_node_##decl(FILE *os, decl##_t *slist, decl##_node_t *node, size_t nsg, skip_sprintf_node_##decl##_t fn) { \
+    fprintf(os, "\"node%zu%p\"", nsg, (void*)node);			\
     fprintf(os, " [label = \"");					\
     size_t level = ARRAY_LENGTH(node->field.sle_next);			\
     do {								\
       fprintf(os, " { <w%zu> | <f%zu> %p }", level, level, (void*)node->field.sle_next[level]); \
       if (level != 0) fprintf(os, " | ");				\
-    } while (level--);							\
+    } while(level--);							\
     if (fn) {								\
       char buf[2048];							\
       fn(node, buf);							\
@@ -385,12 +385,14 @@ struct sl_trace {
     level = 0;								\
     size_t size = ARRAY_LENGTH(node->field.sle_next);			\
     for (size_t level = 0; level <= size; level++) {			\
-      fprintf(os, "\"node%zu%p\"", suffix, (void*)node);		\
-      fprintf(os, ":f%zu -> SomeNode [style=solid];\n", level);		\
+      fprintf(os, "\"node%zu%p\"", nsg, (void*)node);		\
+      fprintf(os, ":f%zu -> ", level);					\
+      fprintf(os, "\"node%zu%p\"", nsg, (void*)node->field.sle_next[level]);	\
+      fprintf(os, ":w%zu [];\n", level);					\
     }									\
 									\
     if (node->field.sle_next[0])					\
-      __skip_dot_node_##decl(os, slist, node->field.sle_next[0], suffix, fn); \
+      __skip_dot_node_##decl(os, slist, node->field.sle_next[0], nsg, fn); \
   }									\
 									\
   /* -- __skip_dot_finish_						\
@@ -398,14 +400,22 @@ struct sl_trace {
    */									\
   static void __skip_dot_finish_##decl(FILE *os, size_t nsg) {		\
     if (nsg > 0) {							\
-      /* Link the nodes together with an invisible node. */		\
+      /* Link the nodes together with an invisible node.		\
+       *    node0 [shape=record, label = "<f0> | <f1> | <f2> | <f3> | <f4> | <f5> | <f6> | <f7> | <f8> | ", \
+       *           style=invis,						\
+       *           width=0.01];						\
+       */								\
       fprintf(os, "node0 [shape=record, label = \"");			\
       for (size_t i = 0; i < nsg; ++i) {				\
 	fprintf(os, "<f%zu> | ", i);					\
       }									\
       fprintf(os, "\", style=invis, width=0.01];\n");			\
 									\
-      /* Now connect nodes with invisible edges */			\
+      /* Now connect nodes with invisible edges				\
+       *								\
+       *    node0:f0 -> HeadNode [style=invis];				\
+       *    node0:f1 -> HeadNode1 [style=invis];			\
+       */								\
       for (size_t i = 0; i < nsg; ++i) {				\
 	fprintf(os, "node0:f%zu -> HeadNode%zu [style=invis];\n", i, i);\
       }									\
@@ -445,16 +455,17 @@ struct sl_trace {
     fprintf(os, "];\n");						\
 									\
     /* Edges for head node */						\
+    decl##_node_t *node = slist->slh_head;				\
     level = 0;								\
     do {								\
       fprintf(os, "\"HeadNode%zu\":f%zu -> ", nsg, level);		\
-      /* Write logic to handle edge connections */			\
-      fprintf(os, "SomeNode [style=solid];\n");				\
-    } while(level++ < ARRAY_LENGTH(slist));				\
+      fprintf(os, "\"node%zu%p\"", nsg, (void*)node->field.sle_next[level]);	\
+      fprintf(os, ":w%zu [];\n", level);				\
+    } while(level++ < slist->level);					\
     fprintf(os, "}\n\n");						\
 									\
     /* Now all nodes via level 0, if non-empty */			\
-    decl##_node_t *node = slist->slh_head;				\
+    node = slist->slh_head;				\
     if (ARRAY_LENGTH(node->field.sle_next))				\
       __skip_dot_node_##decl(os, slist, node, nsg, NULL);		\
     fprintf(os, "\n");							\
