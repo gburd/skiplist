@@ -125,7 +125,7 @@ struct sl_trace {
     size_t level, length, max, fanout;					\
     int (*cmp)(struct name *, struct type *, struct type *, void *);	\
     void *aux;								\
-    struct type **slh_head;						\
+    struct type *slh_head;						\
     struct type *slh_tail;						\
     TRACEBUF								\
   }
@@ -146,8 +146,8 @@ struct sl_trace {
 /*
  * Skip List access methods.
  */
-#define	SKIP_FIRST(head)		((head)->slh_head ? (head)->slh_head[0] : NULL)
-#define	SKIP_LAST(head)			((head)->slh_tail == (head)->slh_head ? NULL : (head)->slh_tail)
+#define	SKIP_FIRST(head)		((head)->slh_head)
+#define	SKIP_LAST(head)			((head)->slh_tail)
 #define	SKIP_NEXT(elm, field)		((elm)->field.sle_next[0])
 #define	SKIP_PREV(elm, field)		((elm)->field.sle_prev)
 #define	SKIP_EMPTY(head)		((head)->length == 0)
@@ -183,44 +183,67 @@ struct sl_trace {
   int __skip_cmp_##type(struct list *head, struct type *a, struct type *b, void *aux) { \
     if (a == b)								\
       return 0;								\
-    if (a == (struct type *)(head)->slh_head || b == (head)->slh_tail)	\
+    if (a == (head)->slh_head || b == (head)->slh_tail)			\
       return -1;							\
-    if (a == (head)->slh_tail || b == (struct type *)(head)->slh_head)	\
+    if (a == (head)->slh_tail || b == (head)->slh_head)			\
       return 1;								\
     fn }
 
-#define	SKIP_INIT(head, max, fanout, fn) do {	\
-    (head)->level = 0;				\
-    (head)->length = 0;				\
-    (head)->max = max;				\
-    (head)->fanout = fanout;			\
-    (head)->cmp = fn;				\
-    (head)->slh_head = NULL;			\
-    (head)->slh_tail = (head)->slh_head;	\
-    SLD_TRACE_HEAD(head);			\
+#define	SKIP_INIT(head, max, fanout, type, field, fn) do {		\
+  (head)->level = 0;							\
+  (head)->length = 0;							\
+  (head)->max = max;							\
+  (head)->fanout = fanout;						\
+  (head)->cmp = fn;							\
+  SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);			\
+  SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);			\
+  ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, max);		\
+  ARRAY_FORALL(__i, (head)->slh_head->field.sle_next) {			\
+    (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;		\
+  }									\
+  (head)->slh_head->field.sle_prev = NULL;				\
+  ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next, max);		\
+  ARRAY_FORALL(__i, (head)->slh_tail->field.sle_next) {			\
+    (head)->slh_tail->field.sle_next[__i] = NULL;			\
+  }									\
+  (head)->slh_head->field.sle_prev = (head)->slh_tail;			\
+  SLD_TRACE_HEAD(head);							\
   } while (0)
 
-#define	SKIP_DEFAULT_INIT(head, fn) do {	\
-    (head)->level = 0;				\
-    (head)->length = 0;				\
-    (head)->max = 12;				\
-    (head)->fanout = 4;				\
-    (head)->cmp = fn;				\
-    (head)->slh_head = NULL;			\
-    (head)->slh_tail = (head)->slh_head;	\
-    SLD_TRACE_HEAD(head);			\
-  } while (0)
-
-
-#define SKIP_ALLOC_NODE(head, var, type, field) do {			\
-    size_t amt = sizeof(struct type *) * (head)->max;			\
-    (var) = (struct type *)calloc(1, sizeof(struct type) + amt + 3);	\
-    if ((var) != NULL) {						\
-      (var)->field.sle_prev = (struct type *)(var) + sizeof(struct type); \
-      (var)->field.sle_next = (struct type **)((var)->field.sle_prev + (sizeof(void *) * 3)); \
-      ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);		\
-      ARRAY_SET_LENGTH((var)->field.sle_next, 0);			\
+#define	SKIP_DEFAULT_INIT(head, fn, type, field) do {			\
+    (head)->level = 0;							\
+    (head)->length = 0;							\
+    (head)->max = 12;							\
+    (head)->fanout = 4;							\
+    (head)->cmp = fn;							\
+    SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);		\
+    SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);		\
+    ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, (head)->max);	\
+    ARRAY_FORALL(__i, (head)->slh_head->field.sle_next) {		\
+      (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;		\
     }									\
+    (head)->slh_head->field.sle_prev = NULL;				\
+    ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next,  (head)->max);	\
+    ARRAY_FORALL(__i, (head)->slh_tail->field.sle_next) {		\
+      (head)->slh_tail->field.sle_next[__i] = NULL;			\
+    }									\
+    (head)->slh_head->field.sle_prev = (head)->slh_tail;		\
+    SLD_TRACE_HEAD(head);						\
+  } while (0)
+
+
+#define SKIP_ALLOC_NODE(head, var, type, field) do {		\
+    (var) = (struct type *)calloc(1, sizeof(struct type));	\
+    ARRAY_ALLOC((var)->field.sle_next, type, (head)->max);	\
+    if ((var) && (var)->field.sle_next) {			\
+      ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);	\
+      ARRAY_SET_LENGTH((var)->field.sle_next, 0);		\
+    }								\
+  } while (0)
+
+#define SKIP_FREE_NODE(node, field) do {			\
+    free((node)->field.sle_next);				\
+    free((node));						\
   } while (0)
 
 #define __SKIP_TOSS(var, max, fanout) do {			\
@@ -234,23 +257,10 @@ struct sl_trace {
   } while(0)
 
 #define SKIP_INSERT(head, type, listelm, field) do {			\
-    struct type *__elm = SKIP_FIRST(head);				\
+    if ((listelm) == NULL) break;					\
+    struct type *__prev, *__elm = (head)->slh_head;			\
     unsigned int __i;							\
     struct type **__path;						\
-    if ((listelm) == NULL) break;					\
-    if (__elm == NULL) { \
-      /* Empty list, setup header and add first element. */		\
-      ARRAY_ALLOC((head)->slh_head, type, (head)->max);			\
-      ARRAY_FORALL(__i, (head)->slh_head) {				\
-	(head)->slh_head[__i] = (head)->slh_tail;			\
-      }									\
-      (head)->slh_head[0] = (listelm);					\
-      (head)->slh_tail = (listelm);					\
-      (listelm)->field.sle_next[0] = (head)->slh_tail;			\
-      (listelm)->field.sle_prev = (struct type *)(head)->slh_head;	\
-      (head)->length = 1;						\
-      break;								\
-    }									\
     __i = (head)->level;						\
     ARRAY_ALLOC(__path, type, (head)->max);				\
     if (__path == NULL) break; /* ENOMEM */				\
@@ -259,8 +269,10 @@ struct sl_trace {
       while(__elm && (head)->cmp((head), __elm->field.sle_next[__i], (listelm), (head)->aux) < 0) \
 	__elm = __elm->field.sle_next[__i];				\
       __path[__i] = __elm;						\
+      ARRAY_SET_LENGTH(__path, ARRAY_LENGTH(__path)+1);			\
     } while(__i--);							\
     __i = 0;								\
+    __prev = __elm;							\
     __elm = __elm->field.sle_next[0];					\
     if ((head)->cmp((head), __elm, listelm, (head)->aux) == 0) {	\
       ARRAY_FREE(__path);						\
@@ -270,7 +282,7 @@ struct sl_trace {
     __SKIP_TOSS(__level, (head)->max, (head)->fanout);			\
     ARRAY_SET_LENGTH((listelm)->field.sle_next, __level);		\
     if (__level > (head)->level) {					\
-      for (__i = (head)->level; __i <= __level; __i++) {		\
+      for (__i = (head)->level + 1; __i <= __level; __i++) {		\
 	__path[__i] = (list)->slh_tail;					\
       }									\
       (head)->level = __level;						\
@@ -279,12 +291,9 @@ struct sl_trace {
       (listelm)->field.sle_next[__i] = __path[__i]->field.sle_next[__i];\
       __path[__i]->field.sle_next[__i] = (listelm);			\
     }									\
-    (listelm)->field.sle_prev = __elm;					\
-    if ((listelm)->field.sle_prev == (struct type *)(head)->slh_head) {	\
-      (head)->slh_head[0] = (listelm);					\
-    }									\
+    (listelm)->field.sle_prev = __prev;					\
     if ((listelm)->field.sle_next[0] == (head)->slh_tail) {		\
-      (head)->slh_tail = (listelm);					\
+      (head)->slh_tail->field.sle_prev = (listelm);					\
     }									\
     (head)->length++;							\
     ARRAY_FREE(__path);							\
