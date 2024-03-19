@@ -133,6 +133,8 @@ main()
   api_skip_dot_slex(of, list, sprintf_slex_node);
   fclose(of);
 
+  api_skip_destroy_slex(list);
+
 #if 0
   /* Delete a specific element in the list. */
   struct slex_node query;

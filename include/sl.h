@@ -210,7 +210,7 @@
   void prefix##skip_free_node_##decl(decl##_node_t *node)                    \
   {                                                                          \
     free_node_blk;                                                           \
-    free(node->field.sle_next);                                              \
+    ARRAY_FREE(node->field.sle_next);                                        \
     free(node);                                                              \
   }                                                                          \
                                                                              \
@@ -229,13 +229,13 @@
   /* -- skip_head_ */                                                        \
   decl##_node_t *prefix##skip_head_##decl(decl##_t *slist)                   \
   {                                                                          \
-    return slist->slh_head;                                                  \
+    return slist->slh_head->field.sle_next[0];                               \
   }                                                                          \
                                                                              \
   /* -- skip_tail_ */                                                        \
   decl##_node_t *prefix##skip_tail_##decl(decl##_t *slist)                   \
   {                                                                          \
-    return slist->slh_tail;                                                  \
+    return slist->slh_tail->field.sle_prev;                                  \
   }                                                                          \
                                                                              \
   /* -- skip_locate_ */                                                      \
@@ -446,10 +446,24 @@
   }                                                                          \
                                                                              \
   /* -- skip_destroy_ */                                                     \
-  int prefix##skip_destroy_##decl(decl##_t *slist, decl##_node_t *n)         \
+  int prefix##skip_destroy_##decl(decl##_t *slist)                           \
   {                                                                          \
-    ((void)slist); /* TODO */                                                \
-    ((void)n);                                                               \
+    decl##_node_t *node, *next;                                              \
+    if (!slist)                                                              \
+      return 0;                                                              \
+    if (prefix##skip_size_##decl(slist) == 0)                                \
+      return 0;                                                              \
+    node = prefix##skip_head_##decl(slist);                                  \
+    do {                                                                     \
+      next = prefix##skip_next_node_##decl(slist, node);                     \
+      prefix##skip_free_node_##decl(node);                                   \
+      node = next;                                                           \
+    } while (node != NULL);                                                  \
+                                                                             \
+    ARRAY_FREE(slist->slh_head->field.sle_next);                             \
+    free(slist->slh_head);                                                   \
+    ARRAY_FREE(slist->slh_tail->field.sle_next);                             \
+    free(slist->slh_tail);                                                   \
     return 0;                                                                \
   }                                                                          \
                                                                              \
