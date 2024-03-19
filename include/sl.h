@@ -25,87 +25,22 @@
  *    - https://github.com/paulross/skiplist
  *      Copyright (c) 2017-2023 Paul Ross
  *  - gist skiplist.c
- *  - queue.h
  *  - khash.h
  *  - async_nif.h
  */
 
-#ifndef _SYS_SKIPLIST_H_
-#define _SYS_SKIPLIST_H_
+#ifndef _SKIPLIST_H_
+#define _SKIPLIST_H_
 
 /*
- * This file defines a skiplist data structure with a similar API to those
- * datastructures defined in FreeBSD's <sys/queue.h> header.
+ * This file defines a skiplist data structure.
  *
  * In 1990 William Pugh published:
  *  - Skiplists: a probabilistic alternative to balanced trees.
  *    https://www.cl.cam.ac.uk/teaching/2005/Algorithms/skiplists.pdf
  * A Skiplist is an ordered data structure providing expected O(Log(n)) lookup,
  * insertion, and deletion complexity.
- *
- *
- * For details on the use of these macros, see the queue(3) manual page.
- *
- *
- *			SKIP		SPLAYED_SKIP
- * _HEAD		+		+
- * _HEAD_INITIALIZER	+		+
- * _ENTRY		+		+
- * _INIT		+		+
- * _DISPOSE		+		+
- * _EMPTY		+		+
- * _FIRST		+		+
- * _NEXT		+		+
- * _PREV		+		+
- * _LAST		-		+
- * _FOREACH		+		+
- * _FOREACH_REVERSE	+		+
- * _INSERT		+		+
- * _UPDATE		+		+
- * _BULK_INSERT		+		+
- * _REMOVE		+		+
- * _LOCATE		+		+
- *
  */
-
-#define SKIPLIST_MACRO_DEBUG 0
-#if SKIPLIST_MACRO_DEBUG
-/* Store the last 2 places the element or head was altered */
-struct sl_trace {
-  char *lastfile;
-  int lastline;
-  char *prevfile;
-  int prevline;
-};
-
-#define TRACEBUF struct sl_trace trace;
-#define TRASHIT(x)    \
-  do {                \
-    (x) = (void *)-1; \
-  } while (0)
-
-#define SLD_TRACE_HEAD(head)                         \
-  do {                                               \
-    (head)->trace.prevline = (head)->trace.lastline; \
-    (head)->trace.prevfile = (head)->trace.lastfile; \
-    (head)->trace.lastline = __LINE__;               \
-    (head)->trace.lastfile = __FILE__;               \
-  } while (0)
-
-#define SLD_TRACE_ELEM(elem)                         \
-  do {                                               \
-    (elem)->trace.prevline = (elem)->trace.lastline; \
-    (elem)->trace.prevfile = (elem)->trace.lastfile; \
-    (elem)->trace.lastline = __LINE__;               \
-    (elem)->trace.lastfile = __FILE__;               \
-  } while (0)
-
-#else
-#define SLD_TRACE_ELEM(elem)
-#define SLD_TRACE_HEAD(head)
-#define TRACEBUF
-#define TRASHIT(x)
-#endif /* QUEUE_MACRO_DEBUG */
 
 /*
  * Private, internal API.
@@ -142,24 +77,12 @@ struct sl_trace {
     void *aux;                                                       \
     struct type *slh_head;                                           \
     struct type *slh_tail;                                           \
-    TRACEBUF                                                         \
-  }
-
-#define SKIP_HEAD_DEFAULT_INITIALIZER(cmp) \
-  {                                        \
-    0, 0, 12, 4, cmp, NULL, NULL, NULL     \
-  }
-
-#define SKIP_HEAD_INITIALIZER(cmp, max, fanout) \
-  {                                             \
-    0, 0, max, fanout, cmp, NULL, NULL, NULL    \
   }
 
 #define SKIP_ENTRY(type)    \
   struct {                  \
     struct type **sle_next; \
     struct type *sle_prev;  \
-    TRACEBUF                \
   }
 
 /*
@@ -170,25 +93,6 @@ struct sl_trace {
 #define SKIP_NEXT(elm, field) ((elm)->field.sle_next[0])
 #define SKIP_PREV(elm, field) ((elm)->field.sle_prev)
 #define SKIP_EMPTY(head) ((head)->length == 0)
-
-#if 0
-#define SKIP_FOREACH(var, head, field)                    \
-  for ((var) = SKIP_FIRST(head); (var) != SKIP_END(head); \
-       (var) = SKIP_NEXT(var, field))
-
-#define SKIP_FOREACH_SAFE(var, head, field, tvar)                              \
-  for ((var) = SKIP_FIRST(head); (var) && ((tvar) = SKIP_NEXT(var, field), 1); \
-       (var) = (tvar))
-
-#define TAILQ_FOREACH_REVERSE(var, head, headname, field)            \
-  for ((var) = TAILQ_LAST(head, headname); (var) != TAILQ_END(head); \
-       (var) = TAILQ_PREV(var, headname, field))
-
-#define TAILQ_FOREACH_REVERSE_SAFE(var, head, headname, field, tvar)   \
-  for ((var) = TAILQ_LAST(head, headname); (var) != TAILQ_END(head) && \
-       ((tvar) = TAILQ_PREV(var, headname, field), 1);                 \
-       (var) = (tvar))
-#endif
 
 /*
  * Skip List functions.
@@ -207,222 +111,284 @@ struct sl_trace {
     fn                                                                     \
   }
 
-#define SKIP_INIT(head, max, fanout, type, field, fn)                        \
-  do {                                                                       \
-    (head)->level = 0;                                                       \
-    (head)->length = 0;                                                      \
-    (head)->max = max;                                                       \
-    (head)->fanout = fanout;                                                 \
-    (head)->cmp = fn;                                                        \
-    SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);                    \
-    SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);                    \
-    ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, max);                 \
-    for (size_t __i = 0; __i < ARRAY_SIZE((head)->slh_head->field.sle_next); \
-         __i++) {                                                            \
-      (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;              \
-    }                                                                        \
-    (head)->slh_head->field.sle_prev = NULL;                                 \
-    ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next, max);                 \
-    for (size_t __i = 0; __i < ARRAY_SIZE((head)->slh_tail->field.sle_next); \
-         __i++) {                                                            \
-      (head)->slh_tail->field.sle_next[__i] = NULL;                          \
-    }                                                                        \
-    (head)->slh_head->field.sle_prev = (head)->slh_tail;                     \
-    SLD_TRACE_HEAD(head);                                                    \
-  } while (0)
+#define SKIPLIST_DECL(decl, prefix, field, free_node_blk)                      \
+                                                                               \
+  /* Skiplist node type */                                                     \
+  typedef struct decl##_node decl##_node_t;                                    \
+                                                                               \
+  /* Skiplist type */                                                          \
+  typedef struct decl {                                                        \
+    size_t level, length, max, fanout;                                         \
+    int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);       \
+    void *aux;                                                                 \
+    decl##_node_t *slh_head;                                                   \
+    decl##_node_t *slh_tail;                                                   \
+  } decl##_t;                                                                  \
+                                                                               \
+  /* -- __skip_key_compare_                                                    \
+   *                                                                           \
+   * This function takes four arguments:                                       \
+   *   - a reference to the Skiplist                                           \
+   *   - the two nodes to compare, `a` and `b`                                 \
+   *   - `aux` an additional auxiliary argument                                \
+   * and returns:                                                              \
+   *   a  < b : return -1                                                      \
+   *   a == b : return 0                                                       \
+   *   a  > b : return 1                                                       \
+   */                                                                          \
+  static int __skip_key_compare_##decl(decl##_t *slist, decl##_node_t *a,      \
+    decl##_node_t *b, void *aux)                                               \
+  {                                                                            \
+    if (a == b)                                                                \
+      return 0;                                                                \
+    if (a == slist->slh_head || b == slist->slh_tail)                          \
+      return -1;                                                               \
+    if (a == slist->slh_tail || b == slist->slh_head)                          \
+      return 1;                                                                \
+    return slist->cmp(slist, a, b, aux);                                       \
+  }                                                                            \
+                                                                               \
+  /* -- __skip_toss_ */                                                        \
+  static int __skip_toss_##decl(size_t max, size_t fanout)                     \
+  {                                                                            \
+    size_t level = 0;                                                          \
+    while (level + 1 < max) {                                                  \
+      if (rand() % fanout == 0) /* NOLINT(*-msc50-cpp) */                      \
+        level++;                                                               \
+      else                                                                     \
+        break;                                                                 \
+    }                                                                          \
+    return level;                                                              \
+  }                                                                            \
+                                                                               \
+  /* -- skip_alloc_node_ */                                                    \
+  int prefix##skip_alloc_node_##decl(decl##_t *slist, decl##_node_t **node)    \
+  {                                                                            \
+    decl##_node_t *n;                                                          \
+    n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t));                     \
+    ARRAY_ALLOC(n->field.sle_next, struct decl##_node, slist->max);            \
+    if (n && n->field.sle_next) {                                              \
+      ARRAY_SET_SIZE(n->field.sle_next, slist->max);                           \
+      ARRAY_SET_LENGTH(n->field.sle_next, 0);                                  \
+      *node = n;                                                               \
+      return 0;                                                                \
+    }                                                                          \
+    return ENOMEM;                                                             \
+  }                                                                            \
+                                                                               \
+  /* -- skip_init_                                                             \
+   * max: 12, fanout: 4 are good defaults.                                     \
+   */                                                                          \
+  int prefix##skip_init_##decl(decl##_t *slist, size_t max, size_t fanout,     \
+    int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *))       \
+  {                                                                            \
+    int rc = 0;                                                                \
+    slist->level = 0;                                                          \
+    slist->length = 0;                                                         \
+    slist->max = max;                                                          \
+    slist->fanout = fanout;                                                    \
+    slist->cmp = cmp;                                                          \
+    rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);              \
+    if (rc)                                                                    \
+      goto fail;                                                               \
+    rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);              \
+    if (rc)                                                                    \
+      goto fail;                                                               \
+    ARRAY_SET_LENGTH(slist->slh_head->field.sle_next, max);                    \
+    for (size_t __i = 0; __i < max; __i++)                                     \
+      slist->slh_head->field.sle_next[__i] = slist->slh_tail;                  \
+    slist->slh_head->field.sle_prev = NULL;                                    \
+    ARRAY_SET_LENGTH(slist->slh_tail->field.sle_next, max);                    \
+    for (size_t __i = 0; __i < max; __i++)                                     \
+      slist->slh_tail->field.sle_next[__i] = NULL;                             \
+    slist->slh_head->field.sle_prev = slist->slh_tail;                         \
+  fail:;                                                                       \
+    return rc;                                                                 \
+  }                                                                            \
+                                                                               \
+  /* -- skip_free_node_  */                                                    \
+  void prefix##skip_free_node_##decl(decl##_node_t *node)                      \
+  {                                                                            \
+    free_node_blk;                                                             \
+    free(node->field.sle_next);                                                \
+    free(node);                                                                \
+  }                                                                            \
+                                                                               \
+  /* -- skip_destroy_ */                                                       \
+  int prefix##skip_destroy_##decl(decl##_t *slist, decl##_node_t *n)           \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_size_ */                                                          \
+  int prefix##skip_size_##decl(decl##_t *slist, decl##_node_t *n)              \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_empty_ */                                                         \
+  int prefix##skip_empty_##decl(decl##_t *slist)                               \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_head_ */                                                          \
+  int prefix##skip_head_##decl(decl##_t *slist, decl##_node_t *n)              \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_tail_ */                                                          \
+  int prefix##skip_tail_##decl(decl##_t *slist, decl##_node_t *n)              \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_locate_ */                                                        \
+  decl##_node_t *prefix##skip_locate_##decl(decl##_t *slist, decl##_node_t *n) \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return NULL;                                                               \
+  }                                                                            \
+                                                                               \
+  /* -- skip_insert_ */                                                        \
+  int prefix##skip_insert_##decl(decl##_t *slist, decl##_node_t *n)            \
+  {                                                                            \
+    if (n == NULL)                                                             \
+      return ENOMEM;                                                           \
+    decl##_node_t *prev, *elm = slist->slh_head;                               \
+    unsigned int i;                                                            \
+    decl##_node_t **path;                                                      \
+    i = slist->level;                                                          \
+    ARRAY_ALLOC(path, decl##_node_t, slist->max);                              \
+    if (path == NULL)                                                          \
+      return ENOMEM;                                                           \
+    /* Find the position in the list where this element belongs. */            \
+    do {                                                                       \
+      while (elm &&                                                            \
+        __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,            \
+          slist->aux) < 0)                                                     \
+        elm = elm->field.sle_next[i];                                          \
+      path[i] = elm;                                                           \
+      ARRAY_SET_LENGTH(path, ARRAY_LENGTH(path) + 1);                          \
+    } while (i--);                                                             \
+    i = 0;                                                                     \
+    prev = elm;                                                                \
+    elm = elm->field.sle_next[0];                                              \
+    if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {           \
+      /* Don't overwrite, to do that use _REPLACE not _INSERT */               \
+      ARRAY_FREE(path);                                                        \
+      return -1;                                                               \
+    }                                                                          \
+    size_t level = __skip_toss_##decl(slist->max, slist->fanout);              \
+    ARRAY_SET_LENGTH(n->field.sle_next, level);                                \
+    if (level > slist->level) {                                                \
+      for (i = slist->level + 1; i <= level; i++) {                            \
+        path[i] = slist->slh_tail;                                             \
+      }                                                                        \
+      slist->level = level;                                                    \
+    }                                                                          \
+    for (i = 0; i <= level; i++) {                                             \
+      n->field.sle_next[i] = path[i]->field.sle_next[i];                       \
+      path[i]->field.sle_next[i] = n;                                          \
+    }                                                                          \
+    n->field.sle_prev = prev;                                                  \
+    if (n->field.sle_next[0] == slist->slh_tail) {                             \
+      slist->slh_tail->field.sle_prev = n;                                     \
+    }                                                                          \
+    slist->length++;                                                           \
+    ARRAY_FREE(path);                                                          \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_insert_dup_ */                                                    \
+  int prefix##skip_insert_dup_##decl(decl##_t *slist, decl##_node_t *n)        \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_update_ */                                                        \
+  int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *n)            \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_delete_ */                                                        \
+  int prefix##skip_delete_##decl(decl##_t *slist, decl##_node_t *n)            \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_find_ */                                                          \
+  int prefix##skip_find_##decl(decl##_t *slist, decl##_node_t *n)              \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_find_gte */                                                       \
+  int prefix##skip_find_gte_##decl(decl##_t *slist, decl##_node_t *n)          \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_find_lte */                                                       \
+  int prefix##skip_find_lte_##decl(decl##_t *slist, decl##_node_t *n)          \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_next_node_ */                                                     \
+  int prefix##skip_next_node_##decl(decl##_t *slist, decl##_node_t *n)         \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- skip_prev_node_ */                                                     \
+  int prefix##skip_prev_node_##decl(decl##_t *slist, decl##_node_t *n)         \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    ((void)n);                                                                 \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
+  /* -- __skip_integrity_check_ */                                             \
+  static int __skip_integrity_check_##decl(decl##_t *slist)                    \
+  {                                                                            \
+    ((void)slist); /* TODO */                                                  \
+    return 0;                                                                  \
+  }
 
-#define SKIP_DEFAULT_INIT(head, fn, type, field)                             \
-  do {                                                                       \
-    (head)->level = 0;                                                       \
-    (head)->length = 0;                                                      \
-    (head)->max = 12;                                                        \
-    (head)->fanout = 4;                                                      \
-    (head)->cmp = fn;                                                        \
-    SKIP_ALLOC_NODE(head, (head)->slh_head, type, field);                    \
-    SKIP_ALLOC_NODE(head, (head)->slh_tail, type, field);                    \
-    ARRAY_SET_LENGTH((head)->slh_head->field.sle_next, (head)->max);         \
-    for (size_t __i = 0; __i < ARRAY_SIZE((head)->slh_head->field.sle_next); \
-         __i++) {                                                            \
-      (head)->slh_head->field.sle_next[__i] = (head)->slh_tail;              \
-    }                                                                        \
-    (head)->slh_head->field.sle_prev = NULL;                                 \
-    ARRAY_SET_LENGTH((head)->slh_tail->field.sle_next, (head)->max);         \
-    for (size_t __i = 0; __i < ARRAY_SIZE((head)->slh_tail->field.sle_next); \
-         __i++) {                                                            \
-      (head)->slh_tail->field.sle_next[__i] = NULL;                          \
-    }                                                                        \
-    (head)->slh_head->field.sle_prev = (head)->slh_tail;                     \
-    SLD_TRACE_HEAD(head);                                                    \
-  } while (0)
-
-#define SKIP_ALLOC_NODE(head, var, type, field)                   \
-  do {                                                            \
-    (var) = (struct type *)calloc(1, sizeof(struct type));        \
-    ARRAY_ALLOC((var)->field.sle_next, struct type, (head)->max); \
-    if ((var) && (var)->field.sle_next) {                         \
-      ARRAY_SET_SIZE((var)->field.sle_next, (head)->max);         \
-      ARRAY_SET_LENGTH((var)->field.sle_next, 0);                 \
-    }                                                             \
-  } while (0)
-
-#define SKIPLIST_DECL(decl, prefix, field)                                  \
-                                                                            \
-  /* Skiplist node type */                                                  \
-  typedef struct decl##_node decl##_node_t;                                 \
-                                                                            \
-  /* Skiplist type */                                                       \
-  typedef struct decl {                                                     \
-    size_t level, length, max, fanout;                                      \
-    int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);    \
-    void *aux;                                                              \
-    decl##_node_t *slh_head;                                                \
-    decl##_node_t *slh_tail;                                                \
-    TRACEBUF                                                                \
-  } decl##_t;                                                               \
-                                                                            \
-  /* -- __skip_key_compare_                                                 \
-   *                                                                        \
-   * This function takes four arguments:                                    \
-   *   - a reference to the Skiplist                                        \
-   *   - the two nodes to compare, `a` and `b`                              \
-   *   - `aux` an additional auxiliary argument                             \
-   * and returns:                                                           \
-   *   a  < b : return -1                                                   \
-   *   a == b : return 0                                                    \
-   *   a  > b : return 1                                                    \
-   */                                                                       \
-  static int __skip_key_compare_##decl(decl##_t *slist, decl##_node_t *a,   \
-    decl##_node_t *b, void *aux)                                            \
-  {                                                                         \
-    if (a == b)                                                             \
-      return 0;                                                             \
-    if (a == slist->slh_head || b == slist->slh_tail)                       \
-      return -1;                                                            \
-    if (a == slist->slh_tail || b == slist->slh_head)                       \
-      return 1;                                                             \
-    return slist->cmp(slist, a, b, aux);                                    \
-  }                                                                         \
-                                                                            \
-  /* -- __skip_toss_ */                                                     \
-  static int __skip_toss_##decl(size_t max, size_t fanout)                  \
-  {                                                                         \
-    size_t level = 0;                                                       \
-    while (level + 1 < max) {                                               \
-      if (rand() % fanout == 0) /* NOLINT(*-msc50-cpp) */                   \
-        level++;                                                            \
-      else                                                                  \
-        break;                                                              \
-    }                                                                       \
-    return level;                                                           \
-  }                                                                         \
-                                                                            \
-  /* -- skip_alloc_node_ */                                                 \
-  int prefix##skip_alloc_node_##decl(decl##_t *slist, decl##_node_t **node) \
-  {                                                                         \
-    decl##_node_t *n;                                                       \
-    n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t));                  \
-    ARRAY_ALLOC(n->field.sle_next, struct decl##_node, slist->max);         \
-    if (n && n->field.sle_next) {                                           \
-      ARRAY_SET_SIZE(n->field.sle_next, slist->max);                        \
-      ARRAY_SET_LENGTH(n->field.sle_next, 0);                               \
-      *node = n;                                                            \
-      return 0;                                                             \
-    }                                                                       \
-    return ENOMEM;                                                          \
-  }                                                                         \
-                                                                            \
-  /* -- skip_init_                                                          \
-   * max: 12, fanout: 4 are good defaults.                                  \
-   */                                                                       \
-  int prefix##skip_init_##decl(decl##_t *slist, size_t max, size_t fanout,  \
-    int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *))    \
-  {                                                                         \
-    int rc = 0;                                                             \
-    slist->level = 0;                                                       \
-    slist->length = 0;                                                      \
-    slist->max = max;                                                       \
-    slist->fanout = fanout;                                                 \
-    slist->cmp = cmp;                                                       \
-    rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);           \
-    if (rc)                                                                 \
-      goto fail;                                                            \
-    rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);           \
-    if (rc)                                                                 \
-      goto fail;                                                            \
-    ARRAY_SET_LENGTH(slist->slh_head->field.sle_next, max);                 \
-    for (size_t __i = 0; __i < max; __i++)                                  \
-      slist->slh_head->field.sle_next[__i] = slist->slh_tail;               \
-    slist->slh_head->field.sle_prev = NULL;                                 \
-    ARRAY_SET_LENGTH(slist->slh_tail->field.sle_next, max);                 \
-    for (size_t __i = 0; __i < max; __i++)                                  \
-      slist->slh_tail->field.sle_next[__i] = NULL;                          \
-    slist->slh_head->field.sle_prev = slist->slh_tail;                      \
-  fail:;                                                                    \
-    return rc;                                                              \
-  }                                                                         \
-                                                                            \
-  /* -- skip_free_node_ */                                                  \
-  void prefix##skip_free_node_##decl(decl##_node_t *node)                   \
-  {                                                                         \
-    free(node->field.sle_next);                                             \
-    free(node);                                                             \
-  }                                                                         \
-                                                                            \
-  /* -- skip_insert_ */                                                     \
-  int prefix##skip_insert_##decl(decl##_t *slist, decl##_node_t *n)         \
-  {                                                                         \
-    if (n == NULL)                                                          \
-      return ENOMEM;                                                        \
-    decl##_node_t *prev, *elm = slist->slh_head;                            \
-    unsigned int i;                                                         \
-    decl##_node_t **path;                                                   \
-    i = slist->level;                                                       \
-    ARRAY_ALLOC(path, decl##_node_t, slist->max);                           \
-    if (path == NULL)                                                       \
-      return ENOMEM;                                                        \
-    /* Find the position in the list where this element belongs. */         \
-    do {                                                                    \
-      while (elm &&                                                         \
-        __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,         \
-          slist->aux) < 0)                                                  \
-        elm = elm->field.sle_next[i];                                       \
-      path[i] = elm;                                                        \
-      ARRAY_SET_LENGTH(path, ARRAY_LENGTH(path) + 1);                       \
-    } while (i--);                                                          \
-    i = 0;                                                                  \
-    prev = elm;                                                             \
-    elm = elm->field.sle_next[0];                                           \
-    if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {        \
-      /* Don't overwrite, to do that use _REPLACE not _INSERT */            \
-      ARRAY_FREE(path);                                                     \
-      return -1;                                                            \
-    }                                                                       \
-    size_t level = __skip_toss_##decl(slist->max, slist->fanout);           \
-    ARRAY_SET_LENGTH(n->field.sle_next, level);                             \
-    if (level > slist->level) {                                             \
-      for (i = slist->level + 1; i <= level; i++) {                         \
-        path[i] = slist->slh_tail;                                          \
-      }                                                                     \
-      slist->level = level;                                                 \
-    }                                                                       \
-    for (i = 0; i <= level; i++) {                                          \
-      n->field.sle_next[i] = path[i]->field.sle_next[i];                    \
-      path[i]->field.sle_next[i] = n;                                       \
-    }                                                                       \
-    n->field.sle_prev = prev;                                               \
-    if (n->field.sle_next[0] == slist->slh_tail) {                          \
-      slist->slh_tail->field.sle_prev = n;                                  \
-    }                                                                       \
-    slist->length++;                                                        \
-    ARRAY_FREE(path);                                                       \
-    return 0;                                                               \
-  }                                                                         \
-                                                                            \
-  /* -- __skip_integrity_check_ */                                          \
-  static int __skip_integrity_check_##decl(decl##_t *slist)                 \
-  {                                                                         \
-    ((void)slist); /* TODO */                                               \
-    return 0;                                                               \
+#define SKIPLIST_GETTER(decl, prefix, name, ktype, vtype, qblk, rblk) \
+  vtype prefix##skip_##name##_##decl(decl##_t *slist, ktype key)      \
+  {                                                                   \
+    decl##_node_t *node, query;                                       \
+    qblk;                                                             \
+    node = prefix##skip_locate_##decl(slist, &query);                 \
+    rblk;                                                             \
   }
 
 #define SKIPLIST_DECL_DOT(decl, prefix, field)                                \
@@ -602,25 +568,4 @@ struct sl_trace {
     return 0;                                                                 \
   }
 
-#if 0
-#define SKIP_REMOVE(head, elm, field)                             \
-  do {                                                            \
-    if ((elm)->field.le_next != NULL)                             \
-      (elm)->field.le_next->field.le_prev = (elm)->field.le_prev; \
-    *(elm)->field.le_prev = (elm)->field.le_next;                 \
-    _Q_INVALIDATE((elm)->field.le_prev);                          \
-    _Q_INVALIDATE((elm)->field.le_next);                          \
-  } while (0)
-
-#define SKIP_REPLACE(elm, elm2, field)                               \
-  do {                                                               \
-    if (((elm2)->field.le_next = (elm)->field.le_next) != NULL)      \
-      (elm2)->field.le_next->field.le_prev = &(elm2)->field.le_next; \
-    (elm2)->field.le_prev = (elm)->field.le_prev;                    \
-    *(elm2)->field.le_prev = (elm2);                                 \
-    _Q_INVALIDATE((elm)->field.le_prev);                             \
-    _Q_INVALIDATE((elm)->field.le_next);                             \
-  } while (0)
-#endif
-
-#endif /* _SYS_SKIPLIST_H_ */
+#endif /* _SKIPLIST_H_ */

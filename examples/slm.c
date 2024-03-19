@@ -28,9 +28,21 @@ struct slex_node {
 
 /*
  * Generate all the access functions for our type of Skiplist.
- * The last argument to this macro is a block of code used to
- * compare the nodes you defined above.
- * This block can expect four arguments:
+ */
+SKIPLIST_DECL(slex, api_, entries, { (void)node; })
+
+/*
+ * Getter
+ * It can be useful to have simple get/put-style API, but to
+ * do that you'll have to supply some blocks of code used to
+ * extract data from within your nodes.
+ */
+SKIPLIST_GETTER(
+  slex, api_, get, int, int, { query.key = key; }, { return node->value; })
+
+/*
+ * Now we need a way to compare the nodes you defined above.
+ * Let's create a function with four arguments:
  *   - a reference to the Skiplist, `slist`
  *   - the two nodes to compare, `a` and `b`
  *   - and `aux`, which you can use to pass into this function
@@ -38,18 +50,17 @@ struct slex_node {
  *     `aux` is passed from the value in the Skiplist, you can
  *     modify that value at any time to suit your needs.
  *
- * Your block should result in a return statement:
+ * Your function should result in a return statement:
  *   a  < b : return -1
  *   a == b : return 0
  *   a  > b : return 1
  *
  * This result provides the ordering within the Skiplist.  Sometimes
- * your block of code will not be used when comparing nodes.  This
- * happens when `a` or `b` are references to the head or tail of the
+ * your function will not be used when comparing nodes.  This will
+ * happen when `a` or `b` are references to the head or tail of the
  * list or when `a == b`.  In those cases the comparison function
  * returns before using the code in your block, don't panic. :)
  */
-SKIPLIST_DECL(slex, api_, entries)
 int
 __slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
 {
@@ -85,12 +96,16 @@ main()
     goto fail;
   }
   rc = api_skip_init_slex(list, 12, 4, __slm_key_compare);
+  if (rc)
+    return rc;
 
   struct slex_node *n;
 
   /* Insert 7 key/value pairs into the list. */
   for (int i = -2; i <= 2; i++) {
-    SKIP_ALLOC_NODE(list, n, slex_node, entries);
+    rc = api_skip_alloc_node_slex(list, &n);
+    if (rc)
+      return rc;
     n->key = i;
     n->value = i;
     api_skip_insert_slex(list, n);
