@@ -40,8 +40,8 @@ SKIPLIST_DECL(
  * do that you'll have to supply some blocks of code used to
  * extract data from within your nodes.
  */
-SKIPLIST_GETTER(
-  slex, api_, get, int, int, { query.key = key; }, { return node->value; })
+SKIPLIST_GETTERS(
+  slex, api_, int, int, { query.key = key; }, { return node->value; })
 
 /*
  * Now we need a way to compare the nodes you defined above.

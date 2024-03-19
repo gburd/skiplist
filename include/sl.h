@@ -238,7 +238,10 @@
     return slist->slh_tail->field.sle_prev;                                  \
   }                                                                          \
                                                                              \
-  /* -- skip_locate_ */                                                      \
+  /* -- skip_locate_                                                         \
+   * Locates a node that matches another node returning the path to that     \
+   * node and the match in path[0].                                          \
+   */                                                                        \
   decl##_node_t **prefix##skip_locate_##decl(decl##_t *slist,                \
     decl##_node_t *n)                                                        \
   {                                                                          \
@@ -246,7 +249,7 @@
     decl##_node_t **path;                                                    \
     decl##_node_t *elm = slist->slh_head;                                    \
                                                                              \
-    if (n == NULL)                                                           \
+    if (!slist || !n)                                                        \
       return NULL;                                                           \
                                                                              \
     i = slist->max + 1;                                                      \
@@ -336,6 +339,88 @@
   }                                                                          \
   */                                                                         \
                                                                              \
+  /* -- skip_find_                                                           \
+   * Find a node that matches another node.  This differs from the locate()  \
+   * API in that it does not return the path to the node, only the match.    \
+   * This avoids an alloc/free for the path.                                 \
+   */                                                                        \
+  decl##_node_t *prefix##skip_find_##decl(decl##_t *slist, decl##_node_t *n) \
+  {                                                                          \
+    unsigned int i;                                                          \
+    decl##_node_t *elm = slist->slh_head;                                    \
+                                                                             \
+    if (!slist || !n)                                                        \
+      return NULL;                                                           \
+                                                                             \
+    i = slist->max + 1;                                                      \
+    i = slist->level;                                                        \
+                                                                             \
+    do {                                                                     \
+      while (elm &&                                                          \
+        __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,          \
+          slist->aux) < 0)                                                   \
+        elm = elm->field.sle_next[i];                                        \
+    } while (i--);                                                           \
+    elm = elm->field.sle_next[0];                                            \
+    if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {         \
+      return elm;                                                            \
+    }                                                                        \
+    return NULL;                                                             \
+  }                                                                          \
+                                                                             \
+  /* -- skip_find_gte                                                        \
+   * Return the matching node or the next greater node after that.           \
+   */                                                                        \
+  decl##_node_t *prefix##skip_find_gte_##decl(decl##_t *slist,               \
+    decl##_node_t *n)                                                        \
+  {                                                                          \
+    unsigned int i;                                                          \
+    decl##_node_t *elm = slist->slh_head;                                    \
+                                                                             \
+    if (!slist || !n)                                                        \
+      return NULL;                                                           \
+                                                                             \
+    i = slist->max + 1;                                                      \
+    i = slist->level;                                                        \
+                                                                             \
+    do {                                                                     \
+      while (elm &&                                                          \
+        __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,          \
+          slist->aux) < 0)                                                   \
+        elm = elm->field.sle_next[i];                                        \
+    } while (i--);                                                           \
+    elm = elm->field.sle_next[0];                                            \
+    return elm;                                                              \
+  }                                                                          \
+                                                                             \
+  /* -- skip_find_lte                                                        \
+   * Return the matching node or the last one before it.                     \
+   */                                                                        \
+  decl##_node_t *prefix##skip_find_lte_##decl(decl##_t *slist,               \
+    decl##_node_t *n)                                                        \
+  {                                                                          \
+    unsigned int i;                                                          \
+    decl##_node_t *elm = slist->slh_head;                                    \
+                                                                             \
+    if (!slist || !n)                                                        \
+      return NULL;                                                           \
+                                                                             \
+    i = slist->max + 1;                                                      \
+    i = slist->level;                                                        \
+                                                                             \
+    do {                                                                     \
+      while (elm &&                                                          \
+        __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,          \
+          slist->aux) < 0)                                                   \
+        elm = elm->field.sle_next[i];                                        \
+    } while (i--);                                                           \
+    if (__skip_key_compare_##decl(slist, elm->field.sle_next[0], n,          \
+          slist->aux) == 0) {                                                \
+      return elm->field.sle_next[0];                                         \
+    }                                                                        \
+    return elm;                                                              \
+  }                                                                          \
+                                                                             \
   /* -- skip_update_                                                         \
    * Locates a node in the list that equals the `new` node and then          \
    * uses the `update_node_blk` to update the contents.                      \
@@ -344,15 +429,13 @@
    */                                                                        \
   int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *new)        \
   {                                                                          \
-    decl##_node_t **path, *node;                                             \
+    decl##_node_t *node;                                                     \
                                                                              \
     if (!slist || !new)                                                      \
       return -1;                                                             \
                                                                              \
-    path = prefix##skip_locate_##decl(slist, new);                           \
-    if (ARRAY_SIZE(path) > 0) {                                              \
-      node = path[0];                                                        \
-      ARRAY_FREE(path);                                                      \
+    node = prefix##skip_find_##decl(slist, new);                             \
+    if (node) {                                                              \
       update_node_blk;                                                       \
       return 0;                                                              \
     }                                                                        \
@@ -394,32 +477,6 @@
       }                                                                      \
       slist->length--;                                                       \
     }                                                                        \
-    return 0;                                                                \
-  }                                                                          \
-                                                                             \
-  /* -- skip_find_ */                                                        \
-  decl##_node_t *prefix##skip_find_##decl(decl##_t *slist, decl##_node_t *n) \
-  {                                                                          \
-    ((void)slist); /* TODO */                                                \
-    ((void)n);                                                               \
-    return 0;                                                                \
-  }                                                                          \
-                                                                             \
-  /* -- skip_find_gte */                                                     \
-  decl##_node_t *prefix##skip_find_gte_##decl(decl##_t *slist,               \
-    decl##_node_t *n)                                                        \
-  {                                                                          \
-    ((void)slist); /* TODO */                                                \
-    ((void)n);                                                               \
-    return 0;                                                                \
-  }                                                                          \
-                                                                             \
-  /* -- skip_find_lte */                                                     \
-  decl##_node_t *prefix##skip_find_lte_##decl(decl##_t *slist,               \
-    decl##_node_t *n)                                                        \
-  {                                                                          \
-    ((void)slist); /* TODO */                                                \
-    ((void)n);                                                               \
     return 0;                                                                \
   }                                                                          \
                                                                              \
@@ -474,19 +531,39 @@
     return 0;                                                                \
   }
 
-#define SKIPLIST_GETTER(decl, prefix, name, ktype, vtype, qblk, rblk) \
-  vtype prefix##skip_##name##_##decl(decl##_t *slist, ktype key)      \
-  {                                                                   \
-    decl##_node_t **path, *node, query;                               \
-                                                                      \
-    qblk;                                                             \
-    path = prefix##skip_locate_##decl(slist, &query);                 \
-    if (ARRAY_SIZE(path) > 0) {                                       \
-      node = path[0];                                                 \
-      ARRAY_FREE(path);                                               \
-      rblk;                                                           \
-    }                                                                 \
-    return (vtype)0;                                                  \
+#define SKIPLIST_GETTERS(decl, prefix, ktype, vtype, qblk, rblk) \
+  vtype prefix##skip_get_##decl(decl##_t *slist, ktype key)      \
+  {                                                              \
+    decl##_node_t *node, query;                                  \
+                                                                 \
+    qblk;                                                        \
+    node = prefix##skip_find_##decl(slist, &query);              \
+    if (node) {                                                  \
+      rblk;                                                      \
+    }                                                            \
+    return (vtype)0;                                             \
+  }                                                              \
+  vtype prefix##skip_gte_##decl(decl##_t *slist, ktype key)      \
+  {                                                              \
+    decl##_node_t *node, query;                                  \
+                                                                 \
+    qblk;                                                        \
+    node = prefix##skip_find_gte_##decl(slist, &query);          \
+    if (node != slist->slh_tail) {                               \
+      rblk;                                                      \
+    }                                                            \
+    return (vtype)0;                                             \
+  }                                                              \
+  vtype prefix##skip_lte_##decl(decl##_t *slist, ktype key)      \
+  {                                                              \
+    decl##_node_t *node, query;                                  \
+                                                                 \
+    qblk;                                                        \
+    node = prefix##skip_find_lte_##decl(slist, &query);          \
+    if (node != slist->slh_head) {                               \
+      rblk;                                                      \
+    }                                                            \
+    return (vtype)0;                                             \
   }
 
 #define SKIPLIST_DECL_DOT(decl, prefix, field)                                \
