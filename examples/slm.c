@@ -1,9 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <errno.h>
-#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "../include/sl.h"
 
 /*
@@ -49,53 +49,60 @@ struct slex_node {
  * list or when `a == b`.  In those cases the comparison function
  * returns before using the code in your block, don't panic. :)
  */
-SKIPLIST_DECL(slex, api_, entries, {
-    (void)aux;
-    if (a->key < b->key)
-        return -1;
-    if (a->key > b->key)
-        return 1;
-    return 0;
-})
-
-void sprintf_slex_node(slex_node_t *node, char *buf) {
-  sprintf(buf, "%d", node->key);
+SKIPLIST_DECL(slex, api_, entries)
+int
+__slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
+{
+  (void)list;
+  (void)aux;
+  if (a->key < b->key)
+    return -1;
+  if (a->key > b->key)
+    return 1;
+  return 0;
 }
 
-int main() {
-/* Allocate and initialize a Skiplist. */
-    slex_t _list = SKIP_HEAD_DEFAULT_INITIALIZER(__skip_key_compare_slex);
-  _list.slh_tail = (struct slex_node *)&_list.slh_head; // TODO...
-    /* Dynamic allocation, init. */
-  slex_t *list = (slex_t *)malloc(sizeof(slex_t));
-  SKIP_DEFAULT_INIT(list, __skip_key_compare_slex, slex_node, entries);
-#ifdef STATIC_INIT
-  free(list);
-  slex_t *list = &_list;
-#else
+#define DOT
+#ifdef DOT
+/* Also declare the functions used to visualize a Sliplist (DOT/Graphviz) */
+SKIPLIST_DECL_DOT(slex, api_, entries)
+
+void
+sprintf_slex_node(slex_node_t *node, char *buf)
+{
+  sprintf(buf, "%d:%d", node->key, node->value);
+}
 #endif
 
-  struct slex_node *n;
-  SKIP_ALLOC_NODE(list, n, slex_node, entries);
-  n->key = -1;
-  n->value = -1;
-  api_skip_insert_slex(list, n);
+int
+main()
+{
+  int rc = 0;
+  /* Allocate and initialize a Skiplist. */
+  slex_t *list = (slex_t *)malloc(sizeof(slex_t));
+  if (list == NULL) {
+    rc = ENOMEM;
+    goto fail;
+  }
+  rc = api_skip_init_slex(list, 12, 4, __slm_key_compare);
 
-  FILE* of = fopen("/tmp/slm.dot", "w");
+  struct slex_node *n;
+
+  /* Insert 7 key/value pairs into the list. */
+  for (int i = -2; i <= 2; i++) {
+    SKIP_ALLOC_NODE(list, n, slex_node, entries);
+    n->key = i;
+    n->value = i;
+    api_skip_insert_slex(list, n);
+  }
+
+  FILE *of = fopen("/tmp/slm.dot", "w");
   if (!of) {
-      perror("Failed to open file /tmp/slm.dot");
-      return EXIT_FAILURE;
+    perror("Failed to open file /tmp/slm.dot");
+    return EXIT_FAILURE;
   }
   api_skip_dot_slex(of, list, sprintf_slex_node);
   fclose(of);
-
-  /* Insert 10 key/value pairs into the list. */
-  for (int i = 0; i < 10; i++) {
-      SKIP_ALLOC_NODE(list, n, slex_node, entries);
-      n->key = i;
-      n->value = i;
-      api_skip_insert_slex(list, n);
-  }
 
 #if 0
   /* Delete a specific element in the list. */
@@ -124,5 +131,6 @@ int main() {
   }
   SKIP_INIT(&head);
 #endif
-  return 0;
+fail:;
+  return rc;
 }

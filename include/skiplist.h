@@ -50,13 +50,13 @@ extern "C" {
 #endif
 
 typedef struct _sl_node {
-    atm_node_ptr *next;
-    atm_bool is_fully_linked;
-    atm_bool being_modified;
-    atm_bool removed;
-    uint8_t top_layer; /* 0: bottom */
-    atm_uint16_t ref_count;
-    atm_uint32_t accessing_next;
+  atm_node_ptr *next;
+  atm_bool is_fully_linked;
+  atm_bool being_modified;
+  atm_bool removed;
+  uint8_t top_layer; /* 0: bottom */
+  atm_uint16_t ref_count;
+  atm_uint32_t accessing_next;
 } sl_node;
 
 /*
@@ -67,26 +67,26 @@ typedef struct _sl_node {
 typedef int sl_cmp_t(sl_node *a, sl_node *b, void *aux);
 
 typedef struct {
-    size_t fanout;
-    size_t maxLayer;
-    void *aux;
+  size_t fanout;
+  size_t maxLayer;
+  void *aux;
 } sl_raw_config;
 
 typedef struct {
-    sl_node head;
-    sl_node tail;
-    sl_cmp_t *cmp_func;
-    void *aux;
-    atm_uint32_t num_entries;
-    atm_uint32_t *layer_entries;
-    atm_uint8_t top_layer;
-    uint8_t fanout;
-    uint8_t max_layer;
+  sl_node head;
+  sl_node tail;
+  sl_cmp_t *cmp_func;
+  void *aux;
+  atm_uint32_t num_entries;
+  atm_uint32_t *layer_entries;
+  atm_uint8_t top_layer;
+  uint8_t fanout;
+  uint8_t max_layer;
 } sl_raw;
 
 #ifndef sl_get_entry
 #define sl_get_entry(ELEM, STRUCT, MEMBER) \
-    ((STRUCT *)((uint8_t *)(ELEM)-offsetof(STRUCT, MEMBER)))
+  ((STRUCT *)((uint8_t *)(ELEM)-offsetof(STRUCT, MEMBER)))
 #endif
 
 void sl_init(sl_raw *slist, sl_cmp_t *cmp_func);

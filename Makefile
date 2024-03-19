@@ -44,7 +44,7 @@ clean:
 	rm -f $(EXAMPLES)
 
 format:
-	clang-format -i include/*.h src/*.c tests/*.c tests/*.h
+	clang-format -i include/*.h src/*.c tests/*.c tests/*.h examples/*.c
 
 %.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
@@ -60,3 +60,7 @@ examples/mls.c: examples/slm.c
 
 examples/mls: examples/mls.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
+
+#dot:
+#	./examples/mls
+#	dot -Tpdf /tmp/slm.dot -o /tmp/slm.pdf >/dev/null 2>&1

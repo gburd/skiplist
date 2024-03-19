@@ -1,5 +1,6 @@
 # Generated from CLion Inspection settings
 #bugprone-reserved-identifier,
+#misc-no-recursion,
 ---
 Checks: '-*,
 -deprecated-non-prototype
@@ -74,7 +75,6 @@ hicpp-exception-baseclass,
 hicpp-multiway-paths-covered,
 misc-misplaced-const,
 misc-new-delete-overloads,
-misc-no-recursion,
 misc-non-copyable-objects,
 misc-throw-by-value-catch-by-reference,
 misc-unconventional-assign-operator,
