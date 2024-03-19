@@ -249,7 +249,7 @@
     decl##_node_t **path;                                                    \
     decl##_node_t *elm = slist->slh_head;                                    \
                                                                              \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
                                                                              \
     i = slist->max + 1;                                                      \
@@ -349,10 +349,9 @@
     unsigned int i;                                                          \
     decl##_node_t *elm = slist->slh_head;                                    \
                                                                              \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
                                                                              \
-    i = slist->max + 1;                                                      \
     i = slist->level;                                                        \
                                                                              \
     do {                                                                     \
@@ -374,13 +373,13 @@
   decl##_node_t *prefix##skip_find_gte_##decl(decl##_t *slist,               \
     decl##_node_t *n)                                                        \
   {                                                                          \
+    int cmp;                                                                 \
     unsigned int i;                                                          \
     decl##_node_t *elm = slist->slh_head;                                    \
                                                                              \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
                                                                              \
-    i = slist->max + 1;                                                      \
     i = slist->level;                                                        \
                                                                              \
     do {                                                                     \
@@ -389,7 +388,10 @@
           slist->aux) < 0)                                                   \
         elm = elm->field.sle_next[i];                                        \
     } while (i--);                                                           \
-    elm = elm->field.sle_next[0];                                            \
+    do {                                                                     \
+      elm = elm->field.sle_next[0];                                          \
+      cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);            \
+    } while (cmp < 0);                                                       \
     return elm;                                                              \
   }                                                                          \
                                                                              \
@@ -399,13 +401,13 @@
   decl##_node_t *prefix##skip_find_lte_##decl(decl##_t *slist,               \
     decl##_node_t *n)                                                        \
   {                                                                          \
+    int cmp;                                                                 \
     unsigned int i;                                                          \
     decl##_node_t *elm = slist->slh_head;                                    \
                                                                              \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
                                                                              \
-    i = slist->max + 1;                                                      \
     i = slist->level;                                                        \
                                                                              \
     do {                                                                     \
@@ -414,9 +416,14 @@
           slist->aux) < 0)                                                   \
         elm = elm->field.sle_next[i];                                        \
     } while (i--);                                                           \
-    if (__skip_key_compare_##decl(slist, elm->field.sle_next[0], n,          \
-          slist->aux) == 0) {                                                \
-      return elm->field.sle_next[0];                                         \
+    elm = elm->field.sle_next[0];                                            \
+    if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {         \
+      return elm;                                                            \
+    } else {                                                                 \
+      do {                                                                   \
+        elm = elm->field.sle_prev;                                           \
+        cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);          \
+      } while (cmp > 0);                                                     \
     }                                                                        \
     return elm;                                                              \
   }                                                                          \
@@ -431,7 +438,7 @@
   {                                                                          \
     decl##_node_t *node;                                                     \
                                                                              \
-    if (!slist || !new)                                                      \
+    if (slist == NULL || new == NULL)                                        \
       return -1;                                                             \
                                                                              \
     node = prefix##skip_find_##decl(slist, new);                             \
@@ -448,7 +455,7 @@
     size_t i, s;                                                             \
     decl##_node_t **path, *node;                                             \
                                                                              \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return -1;                                                             \
     if (slist->length == 0)                                                  \
       return 0;                                                              \
@@ -484,7 +491,7 @@
   decl##_node_t *prefix##skip_next_node_##decl(decl##_t *slist,              \
     decl##_node_t *n)                                                        \
   {                                                                          \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
     if (n->field.sle_next[0] == slist->slh_tail)                             \
       return NULL;                                                           \
@@ -495,7 +502,7 @@
   decl##_node_t *prefix##skip_prev_node_##decl(decl##_t *slist,              \
     decl##_node_t *n)                                                        \
   {                                                                          \
-    if (!slist || !n)                                                        \
+    if (slist == NULL || n == NULL)                                          \
       return NULL;                                                           \
     if (n->field.sle_prev == slist->slh_head)                                \
       return NULL;                                                           \
@@ -506,7 +513,7 @@
   int prefix##skip_destroy_##decl(decl##_t *slist)                           \
   {                                                                          \
     decl##_node_t *node, *next;                                              \
-    if (!slist)                                                              \
+    if (slist == NULL)                                                       \
       return 0;                                                              \
     if (prefix##skip_size_##decl(slist) == 0)                                \
       return 0;                                                              \

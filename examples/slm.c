@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -125,6 +126,18 @@ main()
   q.key = 0;
   api_skip_remove_slex(list, &q);
 
+  assert(api_skip_gte_slex(list, -3) == -20);
+  assert(api_skip_gte_slex(list, -2) == -20);
+  assert(api_skip_gte_slex(list, 0) == 10);
+  assert(api_skip_gte_slex(list, 2) == 20);
+  assert(api_skip_gte_slex(list, 3) == 0);
+
+  assert(api_skip_lte_slex(list, -3) == 0);
+  assert(api_skip_lte_slex(list, -2) == -20);
+  assert(api_skip_lte_slex(list, 0) == -10);
+  assert(api_skip_lte_slex(list, 2) == 20);
+  assert(api_skip_lte_slex(list, 3) == 20);
+
   FILE *of = fopen("/tmp/slm.dot", "w");
   if (!of) {
     perror("Failed to open file /tmp/slm.dot");
@@ -135,33 +148,6 @@ main()
 
   api_skip_destroy_slex(list);
 
-#if 0
-  /* Delete a specific element in the list. */
-  struct slex_node query;
-  query.key = 4;
-  struct slex_node *removed = SKIP_REMOVE(list, q, entries);
-  free(removed);
-  /* Forward traversal. */
-  SKIP_FOREACH(np, &head, entries)
-    np-> ...
-    /* Reverse traversal. */
-    SKIP_FOREACH_REVERSE(np, &head, skiphead, entries)
-    np-> ...
-    /* Skiplist Deletion. */
-    while (!SKIP_EMPTY(&head)) {
-      n1 = SKIP_FIRST(&head);
-      SKIP_REMOVE(&head, n1, entries);
-      free(n1);
-    }
-  /* Faster Skiplist Deletion. */
-  n1 = SKIP_FIRST(&head);
-  while (n1 != NULL) {
-    n2 = SKIP_NEXT(n1, entries);
-    free(n1);
-    n1 = n2;
-  }
-  SKIP_INIT(&head);
-#endif
 fail:;
   return rc;
 }
