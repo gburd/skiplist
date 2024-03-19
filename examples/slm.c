@@ -29,7 +29,10 @@ struct slex_node {
 /*
  * Generate all the access functions for our type of Skiplist.
  */
-SKIPLIST_DECL(slex, api_, entries, { (void)node; })
+SKIPLIST_DECL(
+  slex, api_, entries,
+  /* free node */ { (void)node; },
+  /* update node */ { node->value = new->value; })
 
 /*
  * Getter
@@ -103,13 +106,24 @@ main()
 
   /* Insert 7 key/value pairs into the list. */
   for (int i = -2; i <= 2; i++) {
+    int v;
+    slex_node_t new;
     rc = api_skip_alloc_node_slex(list, &n);
     if (rc)
       return rc;
     n->key = i;
     n->value = i;
     api_skip_insert_slex(list, n);
+    v = api_skip_get_slex(list, i);
+    ((void)v);
+    new.key = n->key;
+    new.value = n->value * 10;
+    api_skip_update_slex(list, &new);
   }
+
+  slex_node_t q;
+  q.key = 0;
+  api_skip_remove_slex(list, &q);
 
   FILE *of = fopen("/tmp/slm.dot", "w");
   if (!of) {
