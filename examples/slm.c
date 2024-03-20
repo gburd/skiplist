@@ -30,18 +30,18 @@
  * another, logic you'll provide in SKIP_DECL as a block below.
  */
 struct slex_node {
-  int key;
-  int value;
-  SKIP_ENTRY(slex_node) entries;
+    int key;
+    int value;
+    SKIP_ENTRY(slex_node) entries;
 };
 
 /*
  * Generate all the access functions for our type of Skiplist.
  */
 SKIPLIST_DECL(
-  slex, api_, entries,
-  /* free node */ { (void)node; },
-  /* update node */ { node->value = new->value; })
+    slex, api_, entries,
+    /* free node */ { (void)node; },
+    /* update node */ { node->value = new->value; })
 
 /*
  * Getter
@@ -50,7 +50,7 @@ SKIPLIST_DECL(
  * extract data from within your nodes.
  */
 SKIPLIST_GETTERS(
-  slex, api_, int, int, { query.key = key; }, { return node->value; })
+    slex, api_, int, int, { query.key = key; }, { return node->value; })
 
 /*
  * Now we need a way to compare the nodes you defined above.
@@ -76,13 +76,13 @@ SKIPLIST_GETTERS(
 int
 __slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
 {
-  (void)list;
-  (void)aux;
-  if (a->key < b->key)
-    return -1;
-  if (a->key > b->key)
-    return 1;
-  return 0;
+    (void)list;
+    (void)aux;
+    if (a->key < b->key)
+        return -1;
+    if (a->key > b->key)
+        return 1;
+    return 0;
 }
 
 #define DOT
@@ -93,71 +93,71 @@ SKIPLIST_DECL_DOT(slex, api_, entries)
 void
 sprintf_slex_node(slex_node_t *node, char *buf)
 {
-  sprintf(buf, "%d:%d", node->key, node->value);
+    sprintf(buf, "%d:%d", node->key, node->value);
 }
 #endif
 
 int
 main()
 {
-  int rc = 0;
-  /* Allocate and initialize a Skiplist. */
-  slex_t *list = (slex_t *)malloc(sizeof(slex_t));
-  if (list == NULL) {
-    rc = ENOMEM;
-    goto fail;
-  }
-  rc = api_skip_init_slex(list, 12, __slm_key_compare);
-  if (rc)
-    return rc;
-
-  struct slex_node *n;
-
-  /* Insert 7 key/value pairs into the list. */
-  for (int i = -200; i <= 200; i++) {
-    int v;
-    slex_node_t new;
-    rc = api_skip_alloc_node_slex(list, &n);
+    int rc = 0;
+    /* Allocate and initialize a Skiplist. */
+    slex_t *list = (slex_t *)malloc(sizeof(slex_t));
+    if (list == NULL) {
+        rc = ENOMEM;
+        goto fail;
+    }
+    rc = api_skip_init_slex(list, 12, __slm_key_compare);
     if (rc)
-      return rc;
-    n->key = i;
-    n->value = i;
-    api_skip_insert_slex(list, n);
-    v = api_skip_get_slex(list, i);
-    ((void)v);
-    new.key = n->key;
-    new.value = n->value * 10;
-    api_skip_update_slex(list, &new);
-  }
+        return rc;
 
-  slex_node_t q;
-  q.key = 0;
-  api_skip_remove_slex(list, &q);
+    struct slex_node *n;
 
-//  assert(api_skip_gte_slex(list, -3000000) == -20);
-  assert(api_skip_gte_slex(list, -2) == -20);
-  assert(api_skip_gte_slex(list, 0) == 10);
-//  assert(api_skip_gte_slex(list, 0) == 0);
-  assert(api_skip_gte_slex(list, 2) == 20);
-  assert(api_skip_gte_slex(list, 30000000) == 0);
+    /* Insert 7 key/value pairs into the list. */
+    for (int i = -50; i <= 50; i++) {
+        int v;
+        slex_node_t new;
+        rc = api_skip_alloc_node_slex(list, &n);
+        if (rc)
+            return rc;
+        n->key = i;
+        n->value = i;
+        api_skip_insert_slex(list, n);
+        v = api_skip_get_slex(list, i);
+        ((void)v);
+        new.key = n->key;
+        new.value = n->value * 10;
+        api_skip_update_slex(list, &new);
+    }
 
-  assert(api_skip_lte_slex(list, -3000000) == 0);
-  assert(api_skip_lte_slex(list, -2) == -20);
-  assert(api_skip_lte_slex(list, 0) == -10);
-//  assert(api_skip_lte_slex(list, 0) == 0);
-  assert(api_skip_lte_slex(list, 2) == 20);
-//  assert(api_skip_lte_slex(list, 30000000) == 20);
+    slex_node_t q;
+    q.key = 0;
+    api_skip_remove_slex(list, &q);
 
-  FILE *of = fopen("/tmp/slm.dot", "w");
-  if (!of) {
-    perror("Failed to open file /tmp/slm.dot");
-    return EXIT_FAILURE;
-  }
-  api_skip_dot_slex(of, list, 0, sprintf_slex_node);
-  fclose(of);
+    //  assert(api_skip_gte_slex(list, -3000000) == -20);
+    assert(api_skip_gte_slex(list, -2) == -20);
+    assert(api_skip_gte_slex(list, 0) == 10);
+    //  assert(api_skip_gte_slex(list, 0) == 0);
+    assert(api_skip_gte_slex(list, 2) == 20);
+    assert(api_skip_gte_slex(list, 30000000) == 0);
 
-  api_skip_destroy_slex(list);
+    assert(api_skip_lte_slex(list, -3000000) == 0);
+    assert(api_skip_lte_slex(list, -2) == -20);
+    assert(api_skip_lte_slex(list, 0) == -10);
+    //  assert(api_skip_lte_slex(list, 0) == 0);
+    assert(api_skip_lte_slex(list, 2) == 20);
+    //  assert(api_skip_lte_slex(list, 30000000) == 20);
+
+    FILE *of = fopen("/tmp/slm.dot", "w");
+    if (!of) {
+        perror("Failed to open file /tmp/slm.dot");
+        return EXIT_FAILURE;
+    }
+    api_skip_dot_slex(of, list, 0, sprintf_slex_node);
+    fclose(of);
+
+    api_skip_destroy_slex(list);
 
 fail:;
-  return rc;
+    return rc;
 }

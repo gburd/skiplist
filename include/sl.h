@@ -104,14 +104,16 @@
         struct type *slh_tail;                                           \
     }
 
-#define SKIP_ENTRY(type)        \
-    struct {                    \
-        struct __sle {          \
-            struct type **next; \
-            size_t cap;         \
-            size_t len;         \
-        } sle;                  \
-        struct type *sle_prev;  \
+#define SKIP_ENTRY(type)                 \
+    struct __skiplist_entry {            \
+        struct __skiplist_idx {          \
+            struct type *prev, **next;   \
+            size_t cap, len;             \
+        } sle;                           \
+        struct __skiplist_revs {         \
+            struct __skiplist_idx **rev; \
+            size_t ref;                  \
+        } **slr;                         \
     }
 
 /*
@@ -120,7 +122,7 @@
 #define SKIP_FIRST(head) ((head)->slh_head)
 #define SKIP_LAST(head) ((head)->slh_tail)
 #define SKIP_NEXT(elm, field) ((elm)->field.sle.next[0])
-#define SKIP_PREV(elm, field) ((elm)->field.sle_prev)
+#define SKIP_PREV(elm, field) ((elm)->field.sle.prev)
 #define SKIP_EMPTY(head) ((head)->length == 0)
 
 /*
@@ -204,8 +206,8 @@
     {                                                                                                                           \
         decl##_node_t *n;                                                                                                       \
         /* Calculate the size of the struct sle within decl##_node_t, multiply                                                  \
-           by array size. */                                                                                                    \
-        size_t sle_arr_sz = (sizeof(size_t) + offsetof(struct __sle, len)) * slist->max;                                        \
+           by array size. (16/24 bytes on 32/64 bit systems) */                                                                 \
+        size_t sle_arr_sz = sizeof(struct __skiplist_idx) * slist->max;                                                         \
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                     \
         if (n == NULL)                                                                                                          \
             return ENOMEM;                                                                                                      \
@@ -239,11 +241,11 @@
         slist->slh_head->field.sle.len = slist->max;                                                                            \
         for (i = 0; i < slist->max; i++)                                                                                        \
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                               \
-        slist->slh_head->field.sle_prev = NULL;                                                                                 \
+        slist->slh_head->field.sle.prev = NULL;                                                                                 \
         slist->slh_tail->field.sle.len = slist->max;                                                                            \
         for (i = 0; i < slist->max; i++)                                                                                        \
             slist->slh_tail->field.sle.next[i] = NULL;                                                                          \
-        slist->slh_head->field.sle_prev = slist->slh_tail;                                                                      \
+        slist->slh_head->field.sle.prev = slist->slh_tail;                                                                      \
         /* NOTE: Here's a testing aid, simply set `max` to a negative number to                                                 \
          * seed the PRNG in a predictable way and have reproducible random numbers.                                             \
          */                                                                                                                     \
@@ -283,7 +285,7 @@
     /* -- skip_tail_ */                                                                                                         \
     decl##_node_t *prefix##skip_tail_##decl(decl##_t *slist)                                                                    \
     {                                                                                                                           \
-        return slist->slh_tail->field.sle_prev;                                                                                 \
+        return slist->slh_tail->field.sle.prev;                                                                                 \
     }                                                                                                                           \
                                                                                                                                 \
     /* -- __skip_locate_                                                                                                        \
@@ -350,9 +352,9 @@
                     n->field.sle.next[i] = slist->slh_tail;                                                                     \
                 }                                                                                                               \
             }                                                                                                                   \
-            n->field.sle_prev = path[1];                                                                                        \
+            n->field.sle.prev = path[1];                                                                                        \
             if (n->field.sle.next[0] == slist->slh_tail) {                                                                      \
-                slist->slh_tail->field.sle_prev = n;                                                                            \
+                slist->slh_tail->field.sle.prev = n;                                                                            \
             }                                                                                                                   \
             if (level > slist->level) {                                                                                         \
                 slist->level = level;                                                                                           \
@@ -453,7 +455,7 @@
             return elm;                                                                                                         \
         } else {                                                                                                                \
             do {                                                                                                                \
-                elm = elm->field.sle_prev;                                                                                      \
+                elm = elm->field.sle.prev;                                                                                      \
                 cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                     \
             } while (cmp > 0);                                                                                                  \
         }                                                                                                                       \
@@ -503,7 +505,7 @@
         len = __skip_locate_##decl(slist, n, path);                                                                             \
         node = path[0];                                                                                                         \
         if (node) {                                                                                                             \
-            node->field.sle.next[0]->field.sle_prev = node->field.sle_prev;                                                     \
+            node->field.sle.next[0]->field.sle.prev = node->field.sle.prev;                                                     \
             for (i = 1; i <= len; i++) {                                                                                        \
                 if (path[i]->field.sle.next[i - 1] != node)                                                                     \
                     break;                                                                                                      \
@@ -546,9 +548,9 @@
     {                                                                                                                           \
         if (slist == NULL || n == NULL)                                                                                         \
             return NULL;                                                                                                        \
-        if (n->field.sle_prev == slist->slh_head)                                                                               \
+        if (n->field.sle.prev == slist->slh_head)                                                                               \
             return NULL;                                                                                                        \
-        return n->field.sle_prev;                                                                                               \
+        return n->field.sle.prev;                                                                                               \
     }                                                                                                                           \
                                                                                                                                 \
     /* -- skip_destroy_ */                                                                                                      \
@@ -769,10 +771,10 @@
             fprintf(os, "\"node%zu %p\" [label = \"", nsg, (void *)slist->slh_tail);                                                \
             level = tail->field.sle.len - 1;                                                                                        \
             do {                                                                                                                    \
-                fprintf(os, "<w%zu> %p", level, (void *)node->field.sle_prev);                                                      \
-                if (level && node->field.sle_prev != slist->slh_head)                                                               \
+                fprintf(os, "<w%zu> %p", level, (void *)node->field.sle.prev);                                                      \
+                if (level && node->field.sle.prev != slist->slh_head)                                                               \
                     fprintf(os, " | ");                                                                                             \
-            } while (level-- && node->field.sle_prev != slist->slh_head);                                                           \
+            } while (level-- && node->field.sle.prev != slist->slh_head);                                                           \
             fprintf(os, "\" shape = \"record\"];\n");                                                                               \
         }                                                                                                                           \
                                                                                                                                     \
