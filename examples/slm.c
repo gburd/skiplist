@@ -143,7 +143,7 @@ main()
     perror("Failed to open file /tmp/slm.dot");
     return EXIT_FAILURE;
   }
-  api_skip_dot_slex(of, list, sprintf_slex_node);
+  api_skip_dot_slex(of, list, 0, sprintf_slex_node);
   fclose(of);
 
   api_skip_destroy_slex(list);
