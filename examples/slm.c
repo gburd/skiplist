@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
+#define SKIPLIST_MAX_HEIGHT 12
 #include "../include/sl.h"
 
 /*
@@ -99,7 +102,7 @@ main()
     rc = ENOMEM;
     goto fail;
   }
-  rc = api_skip_init_slex(list, 12, 4, __slm_key_compare);
+  rc = api_skip_init_slex(list, 12, __slm_key_compare);
   if (rc)
     return rc;
 
