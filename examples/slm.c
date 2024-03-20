@@ -41,7 +41,9 @@ struct slex_node {
 SKIPLIST_DECL(
     slex, api_, entries,
     /* free node */ { (void)node; },
-    /* update node */ { node->value = new->value; })
+    /* update node */ { node->value = new->value; },
+    /* copy node */ { new->key = node->key; new->value = node->value; },
+    int, /* into array */ { elm = node->value; })
 
 /*
  * Getter
