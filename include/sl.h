@@ -299,7 +299,7 @@
         __skip_key_compare_##decl(slist, elm->field.sle_next[i], n,          \
           slist->aux) < 0)                                                   \
         elm = elm->field.sle_next[i];                                        \
-      path[i] = elm;                                                     \
+      path[i] = elm;                                                         \
       ARRAY_SET_LENGTH(path, ARRAY_LENGTH(path) + 1);                        \
     } while (i--);                                                           \
     i = 0;                                                                   \
@@ -315,12 +315,12 @@
     size_t level = __skip_toss_##decl(slist->max, slist->fanout);            \
     ARRAY_SET_LENGTH(n->field.sle_next, level);                              \
     if (level > slist->level) {                                              \
-      for (i = slist->level + 1; i <= level; i++) {                              \
+      for (i = slist->level + 1; i <= level; i++) {                          \
         path[i] = slist->slh_tail;                                           \
       }                                                                      \
       slist->level = level;                                                  \
     }                                                                        \
-    for (i = 0; i <= level; i++) {                                            \
+    for (i = 0; i <= level; i++) {                                           \
       n->field.sle_next[i] = path[i]->field.sle_next[i];                     \
       path[i]->field.sle_next[i] = n;                                        \
     }                                                                        \
