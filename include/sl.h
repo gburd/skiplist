@@ -226,6 +226,9 @@
         slist->level = 0;                                                                                                       \
         slist->length = 0;                                                                                                      \
         slist->max = (size_t)(max < 0 ? -max : max);                                                                            \
+        slist->max = SKIPLIST_MAX_HEIGHT == 1 ? slist->max : SKIPLIST_MAX_HEIGHT;                                               \
+        if (SKIPLIST_MAX_HEIGHT > 1 && slist->max > SKIPLIST_MAX_HEIGHT)                                                        \
+            return -1;                                                                                                          \
         slist->cmp = cmp;                                                                                                       \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                           \
         if (rc)                                                                                                                 \
@@ -241,8 +244,9 @@
         for (i = 0; i < slist->max; i++)                                                                                        \
             slist->slh_tail->field.sle.next[i] = NULL;                                                                          \
         slist->slh_head->field.sle_prev = slist->slh_tail;                                                                      \
-        /* Testing aid: set `max` to a negative number to seed the PRNG in a                                                    \
-           predictable way and have reproducible numbers. */                                                                    \
+        /* NOTE: Here's a testing aid, simply set `max` to a negative number to                                                 \
+         * seed the PRNG in a predictable way and have reproducible random numbers.                                             \
+         */                                                                                                                     \
         if (max < 0)                                                                                                            \
             srand(-max);                                                                                                        \
         else                                                                                                                    \
@@ -315,7 +319,7 @@
     /* -- __skip_insert_ */                                                                                                     \
     static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *n, int flags)                                               \
     {                                                                                                                           \
-        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT];                                                                        \
+        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                    \
         size_t i, len, level;                                                                                                   \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                 \
                                                                                                                                 \
@@ -344,12 +348,16 @@
                     path[i + 1]->field.sle.next[i] = n;                                                                         \
                 } else {                                                                                                        \
                     n->field.sle.next[i] = slist->slh_tail;                                                                     \
-                    slist->level++;                                                                                             \
                 }                                                                                                               \
             }                                                                                                                   \
             n->field.sle_prev = path[1];                                                                                        \
             if (n->field.sle.next[0] == slist->slh_tail) {                                                                      \
                 slist->slh_tail->field.sle_prev = n;                                                                            \
+            }                                                                                                                   \
+            if (level > slist->level) {                                                                                         \
+                slist->level = level;                                                                                           \
+                slist->slh_head->entries.sle.len = slist->level;                                                                \
+                slist->slh_tail->entries.sle.len = slist->level;                                                                \
             }                                                                                                                   \
             slist->length++;                                                                                                    \
                                                                                                                                 \
@@ -476,7 +484,7 @@
     /* -- skip_remove_ */                                                                                                       \
     int prefix##skip_remove_##decl(decl##_t *slist, decl##_node_t *n)                                                           \
     {                                                                                                                           \
-        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT];                                                                        \
+        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                    \
         size_t i, len, level;                                                                                                   \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                 \
                                                                                                                                 \
@@ -511,9 +519,13 @@
                                                                                                                                 \
             /* Find all levels in the first element in the list that point                                                      \
                at the tail and shrink the level. */                                                                             \
-            while (slist->level > 0 && slist->slh_head->field.sle.next[slist->level] == slist->slh_tail) {                      \
-                slist->level--;                                                                                                 \
-            }                                                                                                                   \
+            i = 0;                                                                                                              \
+            node = slist->slh_head;                                                                                             \
+            while (node->field.sle.next[i] != slist->slh_tail && i++ < slist->level)                                            \
+                ;                                                                                                               \
+            slist->level = i;                                                                                                   \
+            slist->slh_head->field.sle.len = i;                                                                                 \
+            slist->slh_tail->field.sle.len = i;                                                                                 \
             slist->length--;                                                                                                    \
         }                                                                                                                       \
         return 0;                                                                                                               \
