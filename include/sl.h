@@ -17,16 +17,18 @@
  * I'd like to thank others for thoughtfully licensing their work, the
  * community of software engineers succeeds when we work together.
  *
- * Portions of this code are derived from copyrighted work:
+ * Portions of this code are derived from other copyrighted works:
  *
- *  - MIT LICENSE
+ *  - MIT License
  *    - https://github.com/greensky00/skiplist
  *      2017-2024 Jung-Sang Ahn <jungsang.ahn@gmail.com>
  *    - https://github.com/paulross/skiplist
- *      Copyright (c) 2017-2023 Paul Ross
- *  - gist skiplist.c
- *  - khash.h
- *  - async_nif.h
+ *      Copyright (c) 2017-2023 Paul Ross <paulross@uky.edu>
+ *    - https://github.com/JP-Ellis/rust-skiplist
+ *      Copyright (c) 2015 Joshua Ellis <github@jpellis.me>
+ *  - Public Domain
+ *    - https://gist.github.com/zhpengg/2873424
+ *      Zhipeng Li <zhpeng.is@gmail.com>
  */
 
 #ifndef _SKIPLIST_H_
@@ -82,9 +84,51 @@
  *
  * References for this implementation include, but are not limited to:
  *
- *  - Skiplists: a probabilistic alternative to balanced trees.
- *    https://www.cl.cam.ac.uk/teaching/2005/Algorithms/skiplists.pdf
- *    1990 William Pugh published:
+ *  - Skip lists: a probabilistic alternative to balanced trees
+ *    @article{10.1145/78973.78977,
+ *      author = {Pugh, William},
+ *      title = {Skip lists: a probabilistic alternative to balanced trees},
+ *      year = {1990}, issue_date = {June 1990},
+ *      publisher = {Association for Computing Machinery},
+ *      address = {New York, NY, USA},
+ *      volume = {33}, number = {6}, issn = {0001-0782},
+ *      url = {https://doi.org/10.1145/78973.78977},
+ *      doi = {10.1145/78973.78977},
+ *      journal = {Commun. ACM}, month = {jun}, pages = {668–676}, numpages = {9},
+ *      keywords = {trees, searching, data structures},
+ *      download = {https://www.cl.cam.ac.uk/teaching/2005/Algorithms/skiplists.pdf}
+ *    }
+ *
+ *  - Tutorial: The Ubiquitous Skiplist, its Variants, and Applications in Modern Big Data Systems
+ *    @article{Vadrevu2023TutorialTU,
+ *      title={Tutorial: The Ubiquitous Skiplist, its Variants, and Applications in Modern Big Data Systems},
+ *      author={Venkata Sai Pavan Kumar Vadrevu and Lu Xing and Walid G. Aref},
+ *      journal={ArXiv},
+ *      year={2023},
+ *      volume={abs/2304.09983},
+ *      url={https://api.semanticscholar.org/CorpusID:258236678},
+ *      download={https://arxiv.org/pdf/2304.09983.pdf}
+ *    }
+ *
+ *  - The Splay-List: A Distribution-Adaptive Concurrent Skip-List
+ *    @misc{aksenov2020splaylist,
+ *      title={The Splay-List: A Distribution-Adaptive Concurrent Skip-List},
+ *      author={Vitaly Aksenov and Dan Alistarh and Alexandra Drozdova and Amirkeivan Mohtashami},
+ *      year={2020},
+ *      eprint={2008.01009},
+ *      archivePrefix={arXiv},
+ *      primaryClass={cs.DC},
+ *      download={https://arxiv.org/pdf/2008.01009.pdf}
+ *    }
+ *
+ *  - JellyFish: A Fast Skip List with MVCC},
+ *    @article{Yeon2020JellyFishAF,
+ *      title={JellyFish: A Fast Skip List with MVCC},
+ *      author={Jeseong Yeon and Leeju Kim and Youil Han and Hyeon Gyu Lee and Eunji Lee and Bryan Suk Joon Kim},
+ *      journal={Proceedings of the 21st International Middleware Conference},
+ *      year={2020},
+ *      url={https://api.semanticscholar.org/CorpusID:228086012}
+ *    }
  */
 
 /*

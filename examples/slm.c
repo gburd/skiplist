@@ -43,17 +43,27 @@ struct slex_node {
  */
 SKIPLIST_DECL(
     slex, api_, entries,
-    /* free node */ { (void)node; },
+    /* free node */ { free(node->value); },
     /* update node */ { node->value = new->value; },
     /* snapshot node */
     {
         new->key = node->key;
-        new->value = strncpy(new->value, node->value, strlen(node->value));
+        char *nv = calloc(strlen(node->value) + 1, sizeof(char));
+        if (nv == NULL)
+            return NULL; /* leaks some memory... TODO */
+        new->value = strncpy(nv, node->value, strlen(node->value));
     },
     /* size in bytes of the content stored in an entry by you */
-    {
-        size = strlen(node->value) + 1;
-    })
+    { size = strlen(node->value) + 1; })
+
+/* Optional: Create the functions used to visualize a Skiplist (DOT/Graphviz) */
+SKIPLIST_DECL_DOT(slex, api_, entries)
+
+void
+sprintf_slex_node(slex_node_t *node, char *buf)
+{
+    sprintf(buf, "%d:%s", node->key, node->value);
+}
 
 /*
  * Getter
@@ -97,23 +107,31 @@ __slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
     return 0;
 }
 
-static char* to_lower(char* str) {
+static char *
+to_lower(char *str)
+{
     char *p = str;
-    for ( ; *p; ++p) *p = *p >= 'A' && *p <= 'Z' ? *p|0x60 : *p;
+    for (; *p; ++p)
+        *p = *p >= 'A' && *p <= 'Z' ? *p | 0x60 : *p;
     return str;
 }
 
-static char* to_upper(char* str) {
+static char *
+to_upper(char *str)
+{
     char *p = str;
-    for ( ; *p; ++p) *p = *p >= 'a' && *p <= 'z' ? *p&~0x20 : *p;
+    for (; *p; ++p)
+        *p = *p >= 'a' && *p <= 'z' ? *p & ~0x20 : *p;
     return str;
 }
 
-static char *int_to_roman_numeral(int num){
-    int del[] = {1000,900,500,400,100,90,50,40,10,9,5,4,1}; // Key value in Roman counting
-    char * sym[] = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" }; //Symbols for key values
-    // The maximum length of the Roman numeral representation for the maximum signed 64-bit integer would be approximately 19 * 3 = 57 characters, assuming every digit is
-    // represented by its Roman numeral equivalent up to 3 repetitions.  Therefore, 64 should be more than enough.
+static char *
+int_to_roman_numeral(int num)
+{
+    int del[] = { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };                    // Key value in Roman counting
+    char *sym[] = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" }; // Symbols for key values
+    // The maximum length of the Roman numeral representation for the maximum signed 64-bit integer would be approximately 19 * 3 = 57 characters, assuming
+    // every digit is represented by its Roman numeral equivalent up to 3 repetitions.  Therefore, 64 should be more than enough.
     char *res = (char *)calloc(64, sizeof(char));
     int i = 0;
     if (num < 0) {
@@ -125,39 +143,29 @@ static char *int_to_roman_numeral(int num){
         res[0] = '0';
         return res;
     }
-    while (num){                 //while input number is not zero
-        while (num/del[i]){      //while a number contains the largest key value possible
-            strcat(res, sym[i]); //append the symbol for this key value to res string
-            num -= del[i];       //subtract the key value from number
+    while (num) {                // while input number is not zero
+        while (num / del[i]) {   // while a number contains the largest key value possible
+            strcat(res, sym[i]); // append the symbol for this key value to res string
+            num -= del[i];       // subtract the key value from number
         }
-        i++;                     //proceed to the next key value
+        i++; // proceed to the next key value
     }
     return res;
 }
 
-void shuffle(int *array, size_t n) {
+void
+shuffle(int *array, size_t n)
+{
     if (n > 1) {
         size_t i;
         for (i = n - 1; i > 0; i--) {
-            size_t j = (unsigned int)(rand() % (i+1)); /* NOLINT(*-msc50-cpp) */
+            size_t j = (unsigned int)(rand() % (i + 1)); /* NOLINT(*-msc50-cpp) */
             int t = array[j];
             array[j] = array[i];
             array[i] = t;
         }
     }
 }
-
-#define DOT
-#ifdef DOT
-/* Also declare the functions used to visualize a Sliplist (DOT/Graphviz) */
-SKIPLIST_DECL_DOT(slex, api_, entries)
-
-void
-sprintf_slex_node(slex_node_t *node, char *buf)
-{
-    sprintf(buf, "%d:%s", node->key, node->value);
-}
-#endif
 
 #define TEST_ARRAY_SIZE 50
 
