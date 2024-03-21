@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -135,6 +136,11 @@ main()
     slex_node_t q;
     q.key = 0;
     api_skip_remove_slex(list, &q);
+
+    slex_snap_t *snap = api_skip_snapshot_slex(list);
+    slex_t *restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
+    api_skip_dispose_snapshot_slex(snap);
+    api_skip_destroy_slex(restored);
 
     //  assert(api_skip_gte_slex(list, -3000000) == -20);
     assert(api_skip_gte_slex(list, -2) == -20);
