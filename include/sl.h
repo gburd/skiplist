@@ -581,8 +581,7 @@
      */                                                                                                                                               \
     decl##_snap_t *prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                      \
     {                                                                                                                                                 \
-        size_t *sz, size, bytes, i;                                                                                                                   \
-        uintptr_t offset;                                                                                                                             \
+        size_t bytes, i;                                                                                                                              \
         decl##_snap_t *snap;                                                                                                                          \
         decl##_node_t *node, *new;                                                                                                                    \
                                                                                                                                                       \
@@ -590,13 +589,6 @@
             return 0;                                                                                                                                 \
                                                                                                                                                       \
         bytes = sizeof(decl##_snap_t) + (slist->length * sizeof(decl##_node_t));                                                                      \
-        node = prefix##skip_head_##decl(slist);                                                                                                       \
-        while (node) {                                                                                                                                \
-            sizeof_entry_blk;                                                                                                                         \
-            bytes += sizeof(size_t);                                                                                                                  \
-            bytes += size;                                                                                                                            \
-            node = prefix##skip_next_node_##decl(slist, node);                                                                                        \
-        }                                                                                                                                             \
         snap = (decl##_snap_t *)calloc(1, bytes);                                                                                                     \
         if (snap == NULL)                                                                                                                             \
             return NULL;                                                                                                                              \
@@ -681,6 +673,99 @@
             snap->list.length--;                                                                                                                      \
         }                                                                                                                                             \
         free(snap);                                                                                                                                   \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /* -- skip_serialize_                                                                                                                             \
+     * Similar to snapshot, but includes the values and encodes them                                                                                  \
+     * in a portable manner.                                                                                                                          \
+     */                                                                                                                                               \
+    decl##_snap_t *prefix##skip_serialize_##decl(decl##_t *slist)                                                                                     \
+    {                                                                                                                                                 \
+        size_t size, bytes, i;                                                                                                                        \
+        decl##_snap_t *snap;                                                                                                                          \
+        decl##_node_t *node, *new;                                                                                                                    \
+                                                                                                                                                      \
+        if (slist == NULL)                                                                                                                            \
+            return 0;                                                                                                                                 \
+                                                                                                                                                      \
+        bytes = sizeof(decl##_snap_t) + (slist->length * sizeof(decl##_node_t));                                                                      \
+        node = prefix##skip_head_##decl(slist);                                                                                                       \
+        while (node) {                                                                                                                                \
+            sizeof_entry_blk;                                                                                                                         \
+            bytes += sizeof(size_t);                                                                                                                  \
+            bytes += size;                                                                                                                            \
+            node = prefix##skip_next_node_##decl(slist, node);                                                                                        \
+        }                                                                                                                                             \
+        snap = (decl##_snap_t *)calloc(1, bytes);                                                                                                     \
+        if (snap == NULL)                                                                                                                             \
+            return NULL;                                                                                                                              \
+                                                                                                                                                      \
+        snap->bytes = bytes;                                                                                                                          \
+        snap->list.length = slist->length;                                                                                                            \
+        snap->list.max = slist->max;                                                                                                                  \
+        snap->nodes = (decl##_node_t *)(snap + sizeof(decl##_snap_t));                                                                                \
+                                                                                                                                                      \
+        i = 0;                                                                                                                                        \
+        node = prefix##skip_head_##decl(slist);                                                                                                       \
+        while (node) {                                                                                                                                \
+            decl##_node_t *n = (decl##_node_t *)snap->nodes + (i++ * sizeof(decl##_node_t));                                                          \
+            new = (decl##_node_t *)&n;                                                                                                                \
+            snap_node_blk;                                                                                                                            \
+            node = prefix##skip_next_node_##decl(slist, node);                                                                                        \
+        }                                                                                                                                             \
+        return snap;                                                                                                                                  \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /* -- skip_deserialize_snapshot_ */                                                                                                               \
+    decl##_t *prefix##skip_deserialize_##decl(decl##_snap_t *snap, int (*cmp)(decl##_t * head, decl##_node_t * a, decl##_node_t * b, void *aux))      \
+    {                                                                                                                                                 \
+        int rc;                                                                                                                                       \
+        size_t i;                                                                                                                                     \
+        decl##_t *slist;                                                                                                                              \
+        decl##_node_t *node, *new;                                                                                                                    \
+                                                                                                                                                      \
+        if (snap == NULL || cmp == NULL)                                                                                                              \
+            return 0;                                                                                                                                 \
+        slist = (decl##_t *)calloc(1, sizeof(decl##_t));                                                                                              \
+        if (slist == NULL)                                                                                                                            \
+            return NULL;                                                                                                                              \
+                                                                                                                                                      \
+        slist->cmp = cmp;                                                                                                                             \
+        slist->max = snap->list.max;                                                                                                                  \
+                                                                                                                                                      \
+        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                 \
+        if (rc)                                                                                                                                       \
+            goto fail;                                                                                                                                \
+        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);                                                                                 \
+        if (rc)                                                                                                                                       \
+            goto fail;                                                                                                                                \
+                                                                                                                                                      \
+        slist->slh_head->field.sle.len = 0;                                                                                                           \
+        for (i = 0; i < slist->max; i++)                                                                                                              \
+            slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
+        slist->slh_head->field.sle.prev = NULL;                                                                                                       \
+                                                                                                                                                      \
+        slist->slh_tail->field.sle.len = slist->max;                                                                                                  \
+        for (i = 0; i < slist->max; i++)                                                                                                              \
+            slist->slh_tail->field.sle.next[i] = NULL;                                                                                                \
+        slist->slh_tail->field.sle.prev = slist->slh_head;                                                                                            \
+                                                                                                                                                      \
+        i = 0;                                                                                                                                        \
+        while (snap->list.length > 0) {                                                                                                               \
+            decl##_node_t *n = (decl##_node_t *)snap->nodes + (i++ * sizeof(decl##_node_t));                                                          \
+            node = (decl##_node_t *)&n;                                                                                                               \
+            rc = prefix##skip_alloc_node_##decl(slist, &new);                                                                                         \
+            snap_node_blk;                                                                                                                            \
+            __skip_insert_##decl(slist, new, 1);                                                                                                      \
+            snap->list.length--;                                                                                                                      \
+        }                                                                                                                                             \
+        return slist;                                                                                                                                 \
+    fail:;                                                                                                                                            \
+        if (slist->slh_head)                                                                                                                          \
+            free(slist->slh_head);                                                                                                                    \
+        if (slist->slh_tail)                                                                                                                          \
+            free(slist->slh_tail);                                                                                                                    \
+        return NULL;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* -- __skip_integrity_check_ */                                                                                                                  \
