@@ -201,6 +201,8 @@
         struct decl##_node **nodes;                                                                                                                   \
     };                                                                                                                                                \
                                                                                                                                                       \
+    typedef enum { SKIP_EQ = 0, SKIP_LTE = -1, SKIP_LT = -2, SKIP_GTE = 1, SKIP_GT = 2 } skip_pos_##decl_t;                                           \
+                                                                                                                                                      \
     /* -- __skip_key_compare_                                                                                                                         \
      *                                                                                                                                                \
      * This function takes four arguments:                                                                                                            \
@@ -423,12 +425,14 @@
         return __skip_insert_##decl(slist, n, 1);                                                                                                     \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_find_                                                                                                                                  \
-     * Find a node that matches another node.  This differs from the locate()                                                                         \
+    /* -- skip_position_eq_                                                                                                                           \
+     * Find a node that matches the node `n`.  This differs from the locate()                                                                         \
      * API in that it does not return the path to the node, only the match.                                                                           \
-     * This avoids an alloc/free for the path.                                                                                                        \
+     *                                                                                                                                                \
+     * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
+     * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_find_##decl(decl##_t *slist, decl##_node_t *n)                                                                        \
+    decl##_node_t *prefix##skip_position_eq_##decl(decl##_t *slist, decl##_node_t *n)                                                                 \
     {                                                                                                                                                 \
         unsigned int i;                                                                                                                               \
         decl##_node_t *elm = slist->slh_head;                                                                                                         \
@@ -449,10 +453,15 @@
         return NULL;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_find_gte                                                                                                                               \
-     * Return the matching node or the next greater node after that.                                                                                  \
+    /* -- skip_position_gte                                                                                                                           \
+     * Position and return a cursor at the first node that is equal to                                                                                \
+     * or greater than the provided node `n`, otherwise if the largest                                                                                \
+     * key is less than the key in `n` return NULL.                                                                                                   \
+     *                                                                                                                                                \
+     * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
+     * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_find_gte_##decl(decl##_t *slist, decl##_node_t *n)                                                                    \
+    decl##_node_t *prefix##skip_position_gte_##decl(decl##_t *slist, decl##_node_t *n)                                                                \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
@@ -474,10 +483,45 @@
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_find_lte                                                                                                                               \
-     * Return the matching node or the last one before it.                                                                                            \
+    /* -- skip_position_gt TODO                                                                                                                       \
+     * Position and return a cursor at the first node that is greater than                                                                            \
+     * the provided node `n`. If the largestkey is less than the key in `n`                                                                           \
+     * return NULL.                                                                                                                                   \
+     *                                                                                                                                                \
+     * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
+     * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_find_lte_##decl(decl##_t *slist, decl##_node_t *n)                                                                    \
+    decl##_node_t *prefix##skip_position_gt_##decl(decl##_t *slist, decl##_node_t *n)                                                                 \
+    {                                                                                                                                                 \
+        int cmp;                                                                                                                                      \
+        unsigned int i;                                                                                                                               \
+        decl##_node_t *elm = slist->slh_head;                                                                                                         \
+                                                                                                                                                      \
+        if (slist == NULL || n == NULL)                                                                                                               \
+            return NULL;                                                                                                                              \
+                                                                                                                                                      \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
+                                                                                                                                                      \
+        do {                                                                                                                                          \
+            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+                elm = elm->field.sle.next[i];                                                                                                         \
+        } while (i--);                                                                                                                                \
+        do {                                                                                                                                          \
+            elm = elm->field.sle.next[0];                                                                                                             \
+            cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
+        } while (cmp < 0);                                                                                                                            \
+        return elm;                                                                                                                                   \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /* -- skip_position_lte                                                                                                                           \
+     * Position and return a cursor at the last node that is less than                                                                                \
+     * or equal to node `n`.                                                                                                                          \
+     * Return NULL if nothing is less than or equal.                                                                                                  \
+     *                                                                                                                                                \
+     * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
+     * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
+     */                                                                                                                                               \
+    decl##_node_t *prefix##skip_position_lte_##decl(decl##_t *slist, decl##_node_t *n)                                                                \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
@@ -504,9 +548,74 @@
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
+    /* -- skip_position_lt TODO                                                                                                                       \
+     * Position and return a cursor at the last node that is less than                                                                                \
+     * to the node `n`. Return NULL if nothing is less than or equal.                                                                                 \
+     *                                                                                                                                                \
+     * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
+     * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
+     */                                                                                                                                               \
+    decl##_node_t *prefix##skip_position_lt_##decl(decl##_t *slist, decl##_node_t *n)                                                                 \
+    {                                                                                                                                                 \
+        int cmp;                                                                                                                                      \
+        unsigned int i;                                                                                                                               \
+        decl##_node_t *elm = slist->slh_head;                                                                                                         \
+                                                                                                                                                      \
+        if (slist == NULL || n == NULL)                                                                                                               \
+            return NULL;                                                                                                                              \
+                                                                                                                                                      \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
+                                                                                                                                                      \
+        do {                                                                                                                                          \
+            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+                elm = elm->field.sle.next[i];                                                                                                         \
+        } while (i--);                                                                                                                                \
+        elm = elm->field.sle.next[0];                                                                                                                 \
+        if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {                                                                              \
+            return elm;                                                                                                                               \
+        } else {                                                                                                                                      \
+            do {                                                                                                                                      \
+                elm = elm->field.sle.prev;                                                                                                            \
+                cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                           \
+            } while (cmp > 0);                                                                                                                        \
+        }                                                                                                                                             \
+        return elm;                                                                                                                                   \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /* -- skip_position_                                                                                                                              \
+     * Position a cursor relative to `n`.                                                                                                             \
+     * This avoids an alloc/free for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                          \
+     */                                                                                                                                               \
+    decl##_node_t *prefix##skip_position_##decl(decl##_t *slist, skip_pos_##decl_t op, decl##_node_t *n)                                              \
+    {                                                                                                                                                 \
+        decl##_node_t *node;                                                                                                                          \
+                                                                                                                                                      \
+        switch (op) {                                                                                                                                 \
+        case (SKIP_LT):                                                                                                                               \
+            node = prefix##skip_position_lt_##decl(slist, n);                                                                                         \
+            break;                                                                                                                                    \
+        case (SKIP_LTE):                                                                                                                              \
+            node = prefix##skip_position_lte_##decl(slist, n);                                                                                        \
+            break;                                                                                                                                    \
+        case (SKIP_GTE):                                                                                                                              \
+            node = prefix##skip_position_gte_##decl(slist, n);                                                                                        \
+            break;                                                                                                                                    \
+        case (SKIP_GT):                                                                                                                               \
+            node = prefix##skip_position_gt_##decl(slist, n);                                                                                         \
+            break;                                                                                                                                    \
+        default:                                                                                                                                      \
+        case (SKIP_EQ):                                                                                                                               \
+            node = prefix##skip_position_eq_##decl(slist, n);                                                                                         \
+            break;                                                                                                                                    \
+        }                                                                                                                                             \
+        return node;                                                                                                                                  \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
     /* -- skip_update_                                                                                                                                \
      * Locates a node in the list that equals the `new` node and then                                                                                 \
      * uses the `update_node_blk` to update the contents.                                                                                             \
+     *                                                                                                                                                \
+     *                                                                                                                                                \
      * WARNING: Do not update the portion of the node used for ordering                                                                               \
      * (e.g. `key`) unless you really know what you're doing.                                                                                         \
      */                                                                                                                                               \
@@ -517,7 +626,7 @@
         if (slist == NULL || new == NULL)                                                                                                             \
             return -1;                                                                                                                                \
                                                                                                                                                       \
-        node = prefix##skip_find_##decl(slist, new);                                                                                                  \
+        node = prefix##skip_position_eq_##decl(slist, new);                                                                                           \
         if (node) {                                                                                                                                   \
             update_node_blk;                                                                                                                          \
             return 0;                                                                                                                                 \
@@ -615,7 +724,7 @@
         return 0;                                                                                                                                     \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_snapshot_                                                                                                                              \
+    /* -- skip_snapshot_ TODO/WIP                                                                                                                     \
      * A snapshot is a read-only view of a Skiplist at a point in                                                                                     \
      * time.  Once taken, a snapshot must be restored or disposed.                                                                                    \
      * Any number of snapshots can be created.                                                                                                        \
@@ -653,7 +762,7 @@
         return snap;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_restore_snapshot_ */                                                                                                                   \
+    /* -- skip_restore_snapshot_ TODO/WIP */                                                                                                          \
     decl##_t *prefix##skip_restore_snapshot_##decl(decl##_snap_t *snap, int (*cmp)(decl##_t * head, decl##_node_t * a, decl##_node_t * b, void *aux)) \
     {                                                                                                                                                 \
         int rc;                                                                                                                                       \
@@ -705,7 +814,7 @@
         return NULL;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_dispose_snapshot_ */                                                                                                                   \
+    /* -- skip_dispose_snapshot_ TODO/WIP */                                                                                                          \
     void prefix##skip_dispose_snapshot_##decl(decl##_snap_t *snap)                                                                                    \
     {                                                                                                                                                 \
         decl##_node_t *node;                                                                                                                          \
@@ -719,7 +828,7 @@
         free(snap);                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_serialize_                                                                                                                             \
+    /* -- skip_serialize_ TODO/WIP                                                                                                                    \
      * Similar to snapshot, but includes the values and encodes them                                                                                  \
      * in a portable manner.                                                                                                                          \
      */                                                                                                                                               \
@@ -760,7 +869,7 @@
         return snap;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_deserialize_snapshot_ */                                                                                                               \
+    /* -- skip_deserialize_snapshot_ TODO/WIP */                                                                                                      \
     decl##_t *prefix##skip_deserialize_##decl(decl##_snap_t *snap, int (*cmp)(decl##_t * head, decl##_node_t * a, decl##_node_t * b, void *aux))      \
     {                                                                                                                                                 \
         int rc;                                                                                                                                       \
@@ -812,46 +921,65 @@
         return NULL;                                                                                                                                  \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- __skip_integrity_check_ */                                                                                                                  \
+    /* -- __skip_integrity_check_ TODO */                                                                                                             \
     static int __skip_integrity_check_##decl(decl##_t *slist)                                                                                         \
     {                                                                                                                                                 \
-        ((void)slist); /* TODO */                                                                                                                     \
+        ((void)slist);                                                                                                                                \
         return 0;                                                                                                                                     \
     }
 
-#define SKIPLIST_GETTERS(decl, prefix, ktype, vtype, qblk, rblk) \
-    vtype prefix##skip_get_##decl(decl##_t *slist, ktype key)    \
-    {                                                            \
-        decl##_node_t *node, query;                              \
-                                                                 \
-        qblk;                                                    \
-        node = prefix##skip_find_##decl(slist, &query);          \
-        if (node) {                                              \
-            rblk;                                                \
-        }                                                        \
-        return (vtype)0;                                         \
-    }                                                            \
-    vtype prefix##skip_gte_##decl(decl##_t *slist, ktype key)    \
-    {                                                            \
-        decl##_node_t *node, query;                              \
-                                                                 \
-        qblk;                                                    \
-        node = prefix##skip_find_gte_##decl(slist, &query);      \
-        if (node != slist->slh_tail) {                           \
-            rblk;                                                \
-        }                                                        \
-        return (vtype)0;                                         \
-    }                                                            \
-    vtype prefix##skip_lte_##decl(decl##_t *slist, ktype key)    \
-    {                                                            \
-        decl##_node_t *node, query;                              \
-                                                                 \
-        qblk;                                                    \
-        node = prefix##skip_find_lte_##decl(slist, &query);      \
-        if (node != slist->slh_head) {                           \
-            rblk;                                                \
-        }                                                        \
-        return (vtype)0;                                         \
+#define SKIPLIST_KV_ACCESS(decl, prefix, ktype, vtype, qblk, rblk)                           \
+    vtype prefix##skip_get_##decl(decl##_t *slist, ktype key)                                \
+    {                                                                                        \
+        decl##_node_t *node, query;                                                          \
+                                                                                             \
+        qblk;                                                                                \
+        node = prefix##skip_position_eq_##decl(slist, &query);                               \
+        if (node) {                                                                          \
+            rblk;                                                                            \
+        }                                                                                    \
+        return (vtype)0;                                                                     \
+    }                                                                                        \
+                                                                                             \
+    decl##_node_t *prefix##skip_pos_##decl(decl##_t *slist, skip_pos_##decl_t op, ktype key) \
+    {                                                                                        \
+        decl##_node_t *node, query;                                                          \
+                                                                                             \
+        qblk;                                                                                \
+        node = prefix##skip_position_##decl(slist, op, &query);                              \
+        if (node != slist->slh_head && node != slist->slh_tail)                              \
+            return node;                                                                     \
+        return NULL;                                                                         \
+    }                                                                                        \
+                                                                                             \
+    int prefix##skip_put_##decl(decl##_t *slist, ktype key, vtype value)                     \
+    {                                                                                        \
+        int rc;                                                                              \
+        decl##_node_t *node;                                                                 \
+        rc = prefix##skip_alloc_node_##decl(slist, &node);                                   \
+        if (rc)                                                                              \
+            return rc;                                                                       \
+        node->key = key;                                                                     \
+        node->value = value;                                                                 \
+        rc = prefix##skip_insert_##decl(slist, node);                                        \
+        if (rc)                                                                              \
+            prefix##skip_free_node_##decl(node);                                             \
+        return rc;                                                                           \
+    }                                                                                        \
+                                                                                             \
+    int prefix##skip_set_##decl(decl##_t *slist, ktype key, vtype value)                     \
+    {                                                                                        \
+        decl##_node_t node;                                                                  \
+        node.key = key;                                                                      \
+        node.value = value;                                                                  \
+        return prefix##skip_update_##decl(slist, &node);                                     \
+    }                                                                                        \
+                                                                                             \
+    int prefix##skip_del_##decl(decl##_t *slist, ktype key)                                  \
+    {                                                                                        \
+        decl##_node_t node;                                                                  \
+        node.key = key;                                                                      \
+        return prefix##skip_remove_##decl(slist, &node);                                     \
     }
 
 #define SKIPLIST_DECL_DOT(decl, prefix, field)                                                                                      \

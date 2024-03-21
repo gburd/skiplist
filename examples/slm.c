@@ -50,7 +50,7 @@ SKIPLIST_DECL(
         new->key = node->key;
         char *nv = calloc(strlen(node->value) + 1, sizeof(char));
         if (nv == NULL)
-            return NULL; /* leaks some memory... TODO */
+            return NULL; // leaks some memory... TODO
         new->value = strncpy(nv, node->value, strlen(node->value));
     },
     /* size in bytes of the content stored in an entry by you */
@@ -66,13 +66,15 @@ sprintf_slex_node(slex_node_t *node, char *buf)
 }
 
 /*
- * Getter
+ * Getters and Setters
  * It can be useful to have simple get/put-style API, but to
  * do that you'll have to supply some blocks of code used to
  * extract data from within your nodes.
  */
-SKIPLIST_GETTERS(
-    slex, api_, int, char *, { query.key = key; }, { return node->value; })
+SKIPLIST_KV_ACCESS(
+    slex, api_, int, char *,
+    /* query blk */ { query.key = key; },
+    /* return blk */ { return node->value; })
 
 /*
  * Now we need a way to compare the nodes you defined above.
@@ -196,43 +198,32 @@ main()
         array[j] = i;
     shuffle(array, asz);
 
-    for (int i = 0; i <= asz; i++) {
-        struct slex_node *n;
-        char *v;
-        slex_node_t new;
-        rc = api_skip_alloc_node_slex(list, &n);
-        if (rc)
-            return rc;
-        n->key = array[i];
-        n->value = to_lower(int_to_roman_numeral(array[i]));
-        api_skip_insert_slex(list, n);
-        v = api_skip_get_slex(list, array[i]);
-        ((void)v);
-        new.key = n->key;
-        new.value = to_upper(n->value);
-        api_skip_update_slex(list, &new);
+    for (int i = 0; i < asz; i++) {
+        rc = api_skip_put_slex(list, array[i], to_lower(int_to_roman_numeral(array[i])));
+        char *v = api_skip_get_slex(list, array[i]);
+        api_skip_set_slex(list, array[i], to_upper(v));
     }
 
-    slex_node_t q;
-    q.key = 0;
-    api_skip_remove_slex(list, &q);
+    api_skip_del_slex(list, 0);
 
+#if 0
     snap = api_skip_snapshot_slex(list);
     restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
     api_skip_dispose_snapshot_slex(snap);
     api_skip_destroy_slex(restored);
+#endif
 
-    assert(api_skip_gte_slex(list, -6) == int_to_roman_numeral(-5));
-    assert(api_skip_gte_slex(list, -2) == int_to_roman_numeral(-2));
-    assert(api_skip_gte_slex(list, 0) == int_to_roman_numeral(0));
-    assert(api_skip_gte_slex(list, 2) == int_to_roman_numeral(2));
-    assert(api_skip_gte_slex(list, 6) == int_to_roman_numeral(0));
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE) -1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_slex(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
 
-    assert(api_skip_lte_slex(list, -6) == int_to_roman_numeral(0));
-    assert(api_skip_lte_slex(list, -2) == int_to_roman_numeral(-2));
-    assert(api_skip_lte_slex(list, 0) == int_to_roman_numeral(-10));
-    assert(api_skip_lte_slex(list, 2) == int_to_roman_numeral(2));
-    assert(api_skip_lte_slex(list, 6) == int_to_roman_numeral(20));
+    assert(api_skip_pos_slex(list, SKIP_LTE, -(TEST_ARRAY_SIZE) - 1) == NULL);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
     FILE *of = fopen("/tmp/slm.dot", "w");
     if (!of) {
