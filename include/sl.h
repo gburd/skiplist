@@ -217,7 +217,7 @@
     {                                                                                                                                                 \
         int rc = 0;                                                                                                                                   \
         size_t i;                                                                                                                                     \
-        slist->level = 0;                                                                                                                             \
+                                                                                                                                                      \
         slist->length = 0;                                                                                                                            \
         slist->max = (size_t)(max < 0 ? -max : max);                                                                                                  \
         slist->max = SKIPLIST_MAX_HEIGHT == 1 ? slist->max : SKIPLIST_MAX_HEIGHT;                                                                     \
@@ -231,7 +231,7 @@
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
                                                                                                                                                       \
-        slist->slh_head->field.sle.len = slist->max;                                                                                                  \
+        slist->slh_head->field.sle.len = 0;                                                                                                           \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
         slist->slh_head->field.sle.prev = NULL;                                                                                                       \
@@ -299,7 +299,7 @@
             return 0;                                                                                                                                 \
                                                                                                                                                       \
         /* Find the node that matches `node` or NULL. */                                                                                              \
-        i = slist->level;                                                                                                                             \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
         do {                                                                                                                                          \
             while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
                 elm = elm->field.sle.next[i];                                                                                                         \
@@ -340,7 +340,7 @@
             level = __skip_toss_##decl(slist->max - 1);                                                                                               \
             n->field.sle.len = level + 1;                                                                                                             \
             for (i = 0; i <= level; i++) {                                                                                                            \
-                if (i <= slist->level) {                                                                                                              \
+                if (i <= slist->slh_head->field.sle.len) {                                                                                            \
                     n->field.sle.next[i] = path[i + 1]->field.sle.next[i];                                                                            \
                     path[i + 1]->field.sle.next[i] = n;                                                                                               \
                 } else {                                                                                                                              \
@@ -351,10 +351,9 @@
             if (n->field.sle.next[0] == slist->slh_tail) {                                                                                            \
                 slist->slh_tail->field.sle.prev = n;                                                                                                  \
             }                                                                                                                                         \
-            if (level > slist->level) {                                                                                                               \
-                slist->level = level;                                                                                                                 \
-                slist->slh_head->entries.sle.len = slist->level;                                                                                      \
-                slist->slh_tail->entries.sle.len = slist->level;                                                                                      \
+            if (level > slist->slh_head->field.sle.len) {                                                                                             \
+                slist->slh_head->field.sle.len = level;                                                                                               \
+                slist->slh_tail->field.sle.len = level;                                                                                               \
             }                                                                                                                                         \
             slist->length++;                                                                                                                          \
                                                                                                                                                       \
@@ -389,7 +388,7 @@
         if (slist == NULL || n == NULL)                                                                                                               \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        i = slist->level;                                                                                                                             \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
                                                                                                                                                       \
         do {                                                                                                                                          \
             while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
@@ -414,7 +413,7 @@
         if (slist == NULL || n == NULL)                                                                                                               \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        i = slist->level;                                                                                                                             \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
                                                                                                                                                       \
         do {                                                                                                                                          \
             while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
@@ -439,7 +438,7 @@
         if (slist == NULL || n == NULL)                                                                                                               \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        i = slist->level;                                                                                                                             \
+        i = slist->slh_head->field.sle.len;                                                                                                           \
                                                                                                                                                       \
         do {                                                                                                                                          \
             while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
@@ -518,9 +517,8 @@
                at the tail and shrink the level. */                                                                                                   \
             i = 0;                                                                                                                                    \
             node = slist->slh_head;                                                                                                                   \
-            while (node->field.sle.next[i] != slist->slh_tail && i++ < slist->level)                                                                  \
+            while (node->field.sle.next[i] != slist->slh_tail && i++ < slist->slh_head->field.sle.len)                                                \
                 ;                                                                                                                                     \
-            slist->level = i;                                                                                                                         \
             slist->slh_head->field.sle.len = i;                                                                                                       \
             slist->slh_tail->field.sle.len = i;                                                                                                       \
             slist->length--;                                                                                                                          \
@@ -592,7 +590,6 @@
         if (snap == NULL)                                                                                                                             \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        snap->list.level = slist->level;                                                                                                              \
         snap->list.length = slist->length;                                                                                                            \
         snap->list.max = slist->max;                                                                                                                  \
         snap->nodes = (decl##_node_t **)(snap + sizeof(decl##_snap_t));                                                                               \
@@ -621,10 +618,6 @@
         if (slist == NULL)                                                                                                                            \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        slist->cmp = cmp;                                                                                                                             \
-        slist->level = snap->list.level;                                                                                                              \
-        slist->length = snap->list.length;                                                                                                            \
-        slist->max = snap->list.max;                                                                                                                  \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                 \
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
@@ -632,7 +625,11 @@
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
                                                                                                                                                       \
-        slist->slh_head->field.sle.len = slist->max;                                                                                                  \
+        slist->cmp = cmp;                                                                                                                             \
+        slist->length = snap->list.length;                                                                                                            \
+        slist->max = snap->list.max;                                                                                                                  \
+                                                                                                                                                      \
+        slist->slh_head->field.sle.len = 0;                                                                                                           \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
         slist->slh_head->field.sle.prev = NULL;                                                                                                       \
@@ -659,7 +656,7 @@
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* -- skip_dispose_snapshot_ */                                                                                                                   \
-    int prefix##skip_dispose_snapshot_##decl(decl##_snap_t *snap)                                                                                     \
+    void prefix##skip_dispose_snapshot_##decl(decl##_snap_t *snap)                                                                                    \
     {                                                                                                                                                 \
         size_t i;                                                                                                                                     \
         decl##_node_t *node = snap->nodes[0];                                                                                                         \
@@ -670,7 +667,6 @@
             free_node_blk;                                                                                                                            \
         } while (++i < snap->list.length);                                                                                                            \
         free(snap);                                                                                                                                   \
-        return 0;                                                                                                                                     \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* -- skip_to_array_ */                                                                                                                           \
