@@ -95,16 +95,7 @@
 #define SKIPLIST_MAX_HEIGHT 1
 #endif
 
-#define SKIP_HEAD(name, type)                                            \
-    struct name {                                                        \
-        size_t level, length, max;                                       \
-        int (*cmp)(struct name *, struct type *, struct type *, void *); \
-        void *aux;                                                       \
-        struct type *slh_head;                                           \
-        struct type *slh_tail;                                           \
-    }
-
-#define SKIP_ENTRY(type)               \
+#define SKIPLIST_ENTRY(type)           \
     struct __skiplist_entry {          \
         struct __skiplist_idx {        \
             struct type *prev, **next; \
@@ -194,8 +185,8 @@
         size_t level = 0;                                                                                                                             \
         double probability = 0.5;                                                                                                                     \
                                                                                                                                                       \
-        double random_value = (double)rand() / RAND_MAX;                                                                                              \
-        while (random_value < probability && level < max) { /* NOLINT(*-msc50-cpp) */                                                                 \
+        double random_value = (double)rand() / RAND_MAX; /* NOLINT(*-msc50-cpp) */                                                                    \
+        while (random_value < probability && level < max) {                                                                                           \
             level++;                                                                                                                                  \
             probability *= 0.5;                                                                                                                       \
         }                                                                                                                                             \
@@ -239,14 +230,17 @@
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);                                                                                 \
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
+                                                                                                                                                      \
         slist->slh_head->field.sle.len = slist->max;                                                                                                  \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
         slist->slh_head->field.sle.prev = NULL;                                                                                                       \
+                                                                                                                                                      \
         slist->slh_tail->field.sle.len = slist->max;                                                                                                  \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_tail->field.sle.next[i] = NULL;                                                                                                \
-        slist->slh_head->field.sle.prev = slist->slh_tail;                                                                                            \
+        slist->slh_tail->field.sle.prev = slist->slh_head;                                                                                            \
+                                                                                                                                                      \
         /* NOTE: Here's a testing aid, simply set `max` to a negative number to                                                                       \
          * seed the PRNG in a predictable way and have reproducible random numbers.                                                                   \
          */                                                                                                                                           \
@@ -343,7 +337,7 @@
                 /* Don't insert, duplicate flag not set. */                                                                                           \
                 return -1;                                                                                                                            \
             }                                                                                                                                         \
-            level = __skip_toss_##decl(slist->max);                                                                                                   \
+            level = __skip_toss_##decl(slist->max - 1);                                                                                               \
             n->field.sle.len = level + 1;                                                                                                             \
             for (i = 0; i <= level; i++) {                                                                                                            \
                 if (i <= slist->level) {                                                                                                              \
@@ -598,15 +592,15 @@
         if (snap == NULL)                                                                                                                             \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        memcpy(&snap->list, slist, sizeof(decl##_t));                                                                                                 \
-        snap->list.cmp = NULL;                                                                                                                        \
+        snap->list.level = slist->level;                                                                                                              \
+        snap->list.length = slist->length;                                                                                                            \
+        snap->list.max = slist->max;                                                                                                                  \
         snap->nodes = (decl##_node_t **)(snap + sizeof(decl##_snap_t));                                                                               \
                                                                                                                                                       \
         node = prefix##skip_head_##decl(slist);                                                                                                       \
         i = 0;                                                                                                                                        \
         do {                                                                                                                                          \
-            new = (decl##_node_t *)snap->nodes + i;                                                                                                   \
-            memcpy(new, node, sizeof(decl##_node_t));                                                                                                 \
+            new = (decl##_node_t *)snap->nodes + (i * sizeof(decl##_node_t));                                                                         \
             snap_node_blk;                                                                                                                            \
             node = prefix##skip_next_node_##decl(slist, node);                                                                                        \
         } while (++i < slist->length);                                                                                                                \
@@ -619,7 +613,7 @@
         int rc;                                                                                                                                       \
         size_t i;                                                                                                                                     \
         decl##_t *slist;                                                                                                                              \
-        decl##_node_t *n;                                                                                                                             \
+        decl##_node_t *node, *new;                                                                                                                    \
                                                                                                                                                       \
         if (snap == NULL || cmp == NULL)                                                                                                              \
             return 0;                                                                                                                                 \
@@ -627,30 +621,33 @@
         if (slist == NULL)                                                                                                                            \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
-        memcpy(slist, &snap->list, sizeof(decl##_t));                                                                                                 \
         slist->cmp = cmp;                                                                                                                             \
+        slist->level = snap->list.level;                                                                                                              \
+        slist->length = snap->list.length;                                                                                                            \
+        slist->max = snap->list.max;                                                                                                                  \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                 \
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);                                                                                 \
         if (rc)                                                                                                                                       \
             goto fail;                                                                                                                                \
+                                                                                                                                                      \
         slist->slh_head->field.sle.len = slist->max;                                                                                                  \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
         slist->slh_head->field.sle.prev = NULL;                                                                                                       \
+                                                                                                                                                      \
         slist->slh_tail->field.sle.len = slist->max;                                                                                                  \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_tail->field.sle.next[i] = NULL;                                                                                                \
-        slist->slh_head->field.sle.prev = slist->slh_tail;                                                                                            \
+        slist->slh_tail->field.sle.prev = slist->slh_head;                                                                                            \
                                                                                                                                                       \
         i = 0;                                                                                                                                        \
         do {                                                                                                                                          \
-            /* memcpy head from snap, set cmp fn, memcpy each node into newly                                                                         \
-               allocated node, insert into list allow dups */                                                                                         \
-            n = calloc(1, sizeof(decl##_node_t));                                                                                                     \
-            memcpy(n, snap->nodes + i, sizeof(decl##_node_t));                                                                                        \
-            __skip_insert_##decl(slist, n, 1);                                                                                                        \
+            rc = prefix##skip_alloc_node_##decl(slist, &new);                                                                                         \
+            node = (decl##_node_t *)snap->nodes + (i * sizeof(decl##_node_t));                                                                        \
+            snap_node_blk;                                                                                                                            \
+            __skip_insert_##decl(slist, new, 1);                                                                                                      \
         } while (++i < slist->length);                                                                                                                \
         return 0;                                                                                                                                     \
     fail:;                                                                                                                                            \

@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,7 +32,7 @@
 struct slex_node {
     int key;
     int value;
-    SKIP_ENTRY(slex_node) entries;
+    SKIPLIST_ENTRY(slex_node) entries;
 };
 
 /*
@@ -43,7 +42,7 @@ SKIPLIST_DECL(
     slex, api_, entries,
     /* free node */ { (void)node; },
     /* update node */ { node->value = new->value; },
-    /* copy node */ { new->key = node->key; new->value = node->value; },
+    /* snapshot node */ { new->key = node->key; new->value = node->value; },
     int, /* into array */ { elm = node->value; })
 
 /*
