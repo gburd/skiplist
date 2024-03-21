@@ -203,6 +203,8 @@ main()
         char *v = api_skip_get_slex(list, array[i]);
         api_skip_set_slex(list, array[i], to_upper(v));
     }
+    api_skip_dup_slex(list, -1, int_to_roman_numeral(-1));
+    api_skip_dup_slex(list, 1, int_to_roman_numeral(1));
 
     api_skip_del_slex(list, 0);
 
@@ -213,13 +215,25 @@ main()
     api_skip_destroy_slex(restored);
 #endif
 
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE) -1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
     assert(api_skip_pos_slex(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
 
-    assert(api_skip_pos_slex(list, SKIP_LTE, -(TEST_ARRAY_SIZE) - 1) == NULL);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_slex(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
+
+    assert(api_skip_pos_slex(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+
+    assert(api_skip_pos_slex(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);

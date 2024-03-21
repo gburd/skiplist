@@ -483,7 +483,7 @@
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_position_gt TODO                                                                                                                       \
+    /* -- skip_position_gt_                                                                                                                           \
      * Position and return a cursor at the first node that is greater than                                                                            \
      * the provided node `n`. If the largestkey is less than the key in `n`                                                                           \
      * return NULL.                                                                                                                                   \
@@ -509,7 +509,7 @@
         do {                                                                                                                                          \
             elm = elm->field.sle.next[0];                                                                                                             \
             cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
-        } while (cmp < 0);                                                                                                                            \
+        } while (cmp <= 0);                                                                                                                           \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
@@ -543,12 +543,12 @@
             do {                                                                                                                                      \
                 elm = elm->field.sle.prev;                                                                                                            \
                 cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                           \
-            } while (cmp > 0);                                                                                                                        \
+            } while (cmp >= 0);                                                                                                                       \
         }                                                                                                                                             \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_position_lt TODO                                                                                                                       \
+    /* -- skip_position_lt_                                                                                                                           \
      * Position and return a cursor at the last node that is less than                                                                                \
      * to the node `n`. Return NULL if nothing is less than or equal.                                                                                 \
      *                                                                                                                                                \
@@ -571,14 +571,10 @@
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         elm = elm->field.sle.next[0];                                                                                                                 \
-        if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {                                                                              \
-            return elm;                                                                                                                               \
-        } else {                                                                                                                                      \
-            do {                                                                                                                                      \
-                elm = elm->field.sle.prev;                                                                                                            \
-                cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                           \
-            } while (cmp > 0);                                                                                                                        \
-        }                                                                                                                                             \
+        do {                                                                                                                                          \
+            elm = elm->field.sle.prev;                                                                                                                \
+            cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
+        } while (cmp >= 0);                                                                                                                           \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
@@ -634,7 +630,7 @@
         return -1;                                                                                                                                    \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_remove_ */                                                                                                                             \
+    /* -- skip_remove_ BUG: prev pointer wrong!*/                                                                                                     \
     int prefix##skip_remove_##decl(decl##_t *slist, decl##_node_t *n)                                                                                 \
     {                                                                                                                                                 \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
@@ -962,6 +958,21 @@
         node->key = key;                                                                     \
         node->value = value;                                                                 \
         rc = prefix##skip_insert_##decl(slist, node);                                        \
+        if (rc)                                                                              \
+            prefix##skip_free_node_##decl(node);                                             \
+        return rc;                                                                           \
+    }                                                                                        \
+                                                                                             \
+    int prefix##skip_dup_##decl(decl##_t *slist, ktype key, vtype value)                     \
+    {                                                                                        \
+        int rc;                                                                              \
+        decl##_node_t *node;                                                                 \
+        rc = prefix##skip_alloc_node_##decl(slist, &node);                                   \
+        if (rc)                                                                              \
+            return rc;                                                                       \
+        node->key = key;                                                                     \
+        node->value = value;                                                                 \
+        rc = prefix##skip_insert_dup_##decl(slist, node);                                    \
         if (rc)                                                                              \
             prefix##skip_free_node_##decl(node);                                             \
         return rc;                                                                           \
