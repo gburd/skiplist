@@ -1,9 +1,12 @@
+#include <sys/time.h>
+
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -31,7 +34,7 @@
  */
 struct slex_node {
     int key;
-    int value;
+    char *value;
     SKIPLIST_ENTRY(slex_node) entries;
 };
 
@@ -42,8 +45,15 @@ SKIPLIST_DECL(
     slex, api_, entries,
     /* free node */ { (void)node; },
     /* update node */ { node->value = new->value; },
-    /* snapshot node */ { new->key = node->key; new->value = node->value; },
-    int, /* into array */ { elm = node->value; })
+    /* snapshot node */
+    {
+        new->key = node->key;
+        new->value = strncpy(new->value, node->value, strlen(node->value));
+    },
+    /* size in bytes of the content stored in an entry by you */
+    {
+        size = strlen(node->value) + 1;
+    })
 
 /*
  * Getter
@@ -52,7 +62,7 @@ SKIPLIST_DECL(
  * extract data from within your nodes.
  */
 SKIPLIST_GETTERS(
-    slex, api_, int, int, { query.key = key; }, { return node->value; })
+    slex, api_, int, char *, { query.key = key; }, { return node->value; })
 
 /*
  * Now we need a way to compare the nodes you defined above.
@@ -87,6 +97,56 @@ __slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
     return 0;
 }
 
+static char* to_lower(char* str) {
+    char *p = str;
+    for ( ; *p; ++p) *p = *p >= 'A' && *p <= 'Z' ? *p|0x60 : *p;
+    return str;
+}
+
+static char* to_upper(char* str) {
+    char *p = str;
+    for ( ; *p; ++p) *p = *p >= 'a' && *p <= 'z' ? *p&~0x20 : *p;
+    return str;
+}
+
+static char *int_to_roman_numeral(int num){
+    int del[] = {1000,900,500,400,100,90,50,40,10,9,5,4,1}; // Key value in Roman counting
+    char * sym[] = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" }; //Symbols for key values
+    // The maximum length of the Roman numeral representation for the maximum signed 64-bit integer would be approximately 19 * 3 = 57 characters, assuming every digit is
+    // represented by its Roman numeral equivalent up to 3 repetitions.  Therefore, 64 should be more than enough.
+    char *res = (char *)calloc(64, sizeof(char));
+    int i = 0;
+    if (num < 0) {
+        res[0] = '-';
+        i++;
+        num = -num;
+    }
+    if (num == 0) {
+        res[0] = '0';
+        return res;
+    }
+    while (num){                 //while input number is not zero
+        while (num/del[i]){      //while a number contains the largest key value possible
+            strcat(res, sym[i]); //append the symbol for this key value to res string
+            num -= del[i];       //subtract the key value from number
+        }
+        i++;                     //proceed to the next key value
+    }
+    return res;
+}
+
+void shuffle(int *array, size_t n) {
+    if (n > 1) {
+        size_t i;
+        for (i = n - 1; i > 0; i--) {
+            size_t j = (unsigned int)(rand() % (i+1)); /* NOLINT(*-msc50-cpp) */
+            int t = array[j];
+            array[j] = array[i];
+            array[i] = t;
+        }
+    }
+}
+
 #define DOT
 #ifdef DOT
 /* Also declare the functions used to visualize a Sliplist (DOT/Graphviz) */
@@ -95,40 +155,53 @@ SKIPLIST_DECL_DOT(slex, api_, entries)
 void
 sprintf_slex_node(slex_node_t *node, char *buf)
 {
-    sprintf(buf, "%d:%d", node->key, node->value);
+    sprintf(buf, "%d:%s", node->key, node->value);
 }
 #endif
+
+#define TEST_ARRAY_SIZE 50
 
 int
 main()
 {
     int rc = 0;
+
     /* Allocate and initialize a Skiplist. */
     slex_t *list = (slex_t *)malloc(sizeof(slex_t));
-    if (list == NULL) {
-        rc = ENOMEM;
-        goto fail;
-    }
+    if (list == NULL)
+        return ENOMEM;
+
     rc = api_skip_init_slex(list, 12, __slm_key_compare);
     if (rc)
         return rc;
 
-    struct slex_node *n;
+    /* Test creating a snapshot of an empty Skiplist */
+    slex_snap_t *snap = api_skip_snapshot_slex(list);
+    slex_t *restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
+    api_skip_dispose_snapshot_slex(snap);
+    api_skip_destroy_slex(restored);
 
     /* Insert 7 key/value pairs into the list. */
-    for (int i = -50; i <= 50; i++) {
-        int v;
+    int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
+    int array[(TEST_ARRAY_SIZE * 2) + 1];
+    for (int j = 0, i = -amt; i <= amt; i++, j++)
+        array[j] = i;
+    shuffle(array, asz);
+
+    for (int i = 0; i <= asz; i++) {
+        struct slex_node *n;
+        char *v;
         slex_node_t new;
         rc = api_skip_alloc_node_slex(list, &n);
         if (rc)
             return rc;
-        n->key = i;
-        n->value = i;
+        n->key = array[i];
+        n->value = to_lower(int_to_roman_numeral(array[i]));
         api_skip_insert_slex(list, n);
-        v = api_skip_get_slex(list, i);
+        v = api_skip_get_slex(list, array[i]);
         ((void)v);
         new.key = n->key;
-        new.value = n->value * 10;
+        new.value = to_upper(n->value);
         api_skip_update_slex(list, &new);
     }
 
@@ -136,24 +209,22 @@ main()
     q.key = 0;
     api_skip_remove_slex(list, &q);
 
-    slex_snap_t *snap = api_skip_snapshot_slex(list);
-    slex_t *restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
+    snap = api_skip_snapshot_slex(list);
+    restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
     api_skip_dispose_snapshot_slex(snap);
     api_skip_destroy_slex(restored);
 
-    //  assert(api_skip_gte_slex(list, -3000000) == -20);
-    assert(api_skip_gte_slex(list, -2) == -20);
-    assert(api_skip_gte_slex(list, 0) == 10);
-    //  assert(api_skip_gte_slex(list, 0) == 0);
-    assert(api_skip_gte_slex(list, 2) == 20);
-    assert(api_skip_gte_slex(list, 30000000) == 0);
+    assert(api_skip_gte_slex(list, -6) == int_to_roman_numeral(-5));
+    assert(api_skip_gte_slex(list, -2) == int_to_roman_numeral(-2));
+    assert(api_skip_gte_slex(list, 0) == int_to_roman_numeral(0));
+    assert(api_skip_gte_slex(list, 2) == int_to_roman_numeral(2));
+    assert(api_skip_gte_slex(list, 6) == int_to_roman_numeral(0));
 
-    assert(api_skip_lte_slex(list, -3000000) == 0);
-    assert(api_skip_lte_slex(list, -2) == -20);
-    assert(api_skip_lte_slex(list, 0) == -10);
-    //  assert(api_skip_lte_slex(list, 0) == 0);
-    assert(api_skip_lte_slex(list, 2) == 20);
-    //  assert(api_skip_lte_slex(list, 30000000) == 20);
+    assert(api_skip_lte_slex(list, -6) == int_to_roman_numeral(0));
+    assert(api_skip_lte_slex(list, -2) == int_to_roman_numeral(-2));
+    assert(api_skip_lte_slex(list, 0) == int_to_roman_numeral(-10));
+    assert(api_skip_lte_slex(list, 2) == int_to_roman_numeral(2));
+    assert(api_skip_lte_slex(list, 6) == int_to_roman_numeral(20));
 
     FILE *of = fopen("/tmp/slm.dot", "w");
     if (!of) {
@@ -165,6 +236,5 @@ main()
 
     api_skip_destroy_slex(list);
 
-fail:;
     return rc;
 }
