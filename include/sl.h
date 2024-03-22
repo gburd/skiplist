@@ -148,18 +148,12 @@
  * levels).
  */
 #define SKIPLIST_ENTRY(type)           \
-    struct __skiplist_entry {          \
-        struct __skiplist_idx {        \
+    struct __skiplist_##decl_entry {   \
+        struct __skiplist_##decl_idx { \
             struct type *prev, **next; \
             size_t height;             \
         } sle;                         \
     }
-
-/*
- * Skip List access methods.
- */
-#define SKIP_FIRST(head) ((head)->slh_head)
-#define SKIP_LAST(head) ((head)->slh_tail)
 
 /*
  * Skip List node comparison function.  This macro builds a function used when
@@ -306,7 +300,7 @@
         decl##_node_t *n;                                                                                                                             \
         /* Calculate the size of the struct sle within decl##_node_t, multiply                                                                        \
            by array size. (16/24 bytes on 32/64 bit systems) */                                                                                       \
-        size_t sle_arr_sz = sizeof(struct __skiplist_idx) * slist->max;                                                                               \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_idx) * slist->max;                                                                        \
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                                           \
         if (n == NULL)                                                                                                                                \
             return ENOMEM;                                                                                                                            \
@@ -975,13 +969,114 @@
         if (slist->slh_tail)                                                                                                                          \
             free(slist->slh_tail);                                                                                                                    \
         return NULL;                                                                                                                                  \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /* -- __skip_integrity_check_ TODO */                                                                                                             \
-    static int __skip_integrity_check_##decl(decl##_t *slist)                                                                                         \
-    {                                                                                                                                                 \
-        ((void)slist);                                                                                                                                \
-        return 0;                                                                                                                                     \
+    }
+
+#define SKIPLIST_INTEGRITY_CHECK(decl, prefix, field)                                                                            \
+    /* -- __skip_integrity_check_ */                                                                                             \
+    static int __skip_integrity_check_##decl(decl##_t *slist, int flags)                                                         \
+    {                                                                                                                            \
+        unsigned nth, n_err = 0;                                                                                                 \
+        size_t size;                                                                                                             \
+        FILE *of = stderr;                                                                                                       \
+        decl##_node_t *node;                                                                                                     \
+        struct __skiplist_##decl_idx *this, *that, *prev, *next;                                                                 \
+                                                                                                                                 \
+        if (slist == NULL) {                                                                                                     \
+            fprintf(of, "slist was NULL, nothing to check");                                                                     \
+            n_err++;                                                                                                             \
+            return n_err;                                                                                                        \
+        }                                                                                                                        \
+                                                                                                                                 \
+        /* Check the Skiplist header (slh) */                                                                                    \
+                                                                                                                                 \
+        if (slist->slh_head == NULL) {                                                                                           \
+            fprintf(of, "skiplist slh_head is NULL");                                                                            \
+            n_err++;                                                                                                             \
+            return n_err;                                                                                                        \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (slist->slh_tail == NULL) {                                                                                           \
+            fprintf(of, "skiplist slh_tail is NULL");                                                                            \
+            n_err++;                                                                                                             \
+            return n_err;                                                                                                        \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (slist->cmp == NULL) {                                                                                                \
+            fprintf(of, "skiplist comparison function (cmp) is NULL");                                                           \
+            n_err++;                                                                                                             \
+            return n_err;                                                                                                        \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (slist->level >= slist->max) {                                                                                        \
+            /* level is 0-based, max of 12 means level cannot be > 11 */                                                         \
+            fprintf(of, "skiplist level in header was >= max");                                                                  \
+            n_err++;                                                                                                             \
+            if (flags)                                                                                                           \
+                return n_err;                                                                                                    \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (SKIPLIST_MAX_HEIGHT < 1) {                                                                                           \
+            fprintf(of, "SKIPLIST_MAX_HEIGHT cannot be less than 1");                                                            \
+            n_err++;                                                                                                             \
+            if (flags)                                                                                                           \
+                return n_err;                                                                                                    \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (SKIPLIST_MAX_HEIGHT > 0 && slist->max > SKIPLIST_MAX_HEIGHT) {                                                       \
+            fprintf(of, "slist->max cannot be greater than SKIPLIST_MAX_HEIGHT");                                                \
+            n_err++;                                                                                                             \
+            if (flags)                                                                                                           \
+                return n_err;                                                                                                    \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (slist->length > 0 && slist->slh_head->field.sle.next[0] != slist->slh_tail) {                                        \
+            fprintf(of, "slist->length is 0, but head->next == tail, not an internal node");                                     \
+            n_err++;                                                                                                             \
+            if (flags)                                                                                                           \
+                return n_err;                                                                                                    \
+        }                                                                                                                        \
+                                                                                                                                 \
+        if (slist->length > 0 && slist->slh_tail->field.sle.prev != slist->slh_head) {                                           \
+            fprintf(of, "slist->length is 0, but tail->prev == head, not an internal node");                                     \
+            n_err++;                                                                                                             \
+            if (flags)                                                                                                           \
+                return n_err;                                                                                                    \
+        }                                                                                                                        \
+                                                                                                                                 \
+        /* Validate the head node */                                                                                             \
+                                                                                                                                 \
+        /* Validate the tail node */                                                                                             \
+                                                                                                                                 \
+        /* Validate each node */                                                                                                 \
+        nth = 0;                                                                                                                 \
+        size = prefix##skip_size_##decl(slist);                                                                                  \
+        node = prefix##skip_head_##decl(slist);                                                                                  \
+        do {                                                                                                                     \
+            this = &node->field.sle;                                                                                             \
+            if (this->next == NULL) {                                                                                            \
+                fprintf(of, "the %u node's [%p] next field should never NULL", nth, (void *)node);                               \
+                n_err++;                                                                                                         \
+                if (flags)                                                                                                       \
+                    return n_err;                                                                                                \
+            }                                                                                                                    \
+            if (this->prev == NULL) {                                                                                            \
+                fprintf(of, "the %u node [%p] prev field should never NULL", nth, (void *)node);                                 \
+                n_err++;                                                                                                         \
+                if (flags)                                                                                                       \
+                    return n_err;                                                                                                \
+            }                                                                                                                    \
+            if (*this->next != node + (sizeof(struct __skiplist_##decl_idx) * slist->max)) {                                     \
+                fprintf(of, "the %u node's [%p] next field isn't at the proper offset relative to the node", nth, (void *)node); \
+                n_err++;                                                                                                         \
+                if (flags)                                                                                                       \
+                    return n_err;                                                                                                \
+            }                                                                                                                    \
+                                                                                                                                 \
+            node = prefix##skip_next_node_##decl(slist, node);                                                                   \
+            nth++;                                                                                                               \
+        } while (node != NULL);                                                                                                  \
+                                                                                                                                 \
+        return 0;                                                                                                                \
     }
 
 #define SKIPLIST_KV_ACCESS(decl, prefix, ktype, vtype, qblk, rblk)                           \
@@ -1177,7 +1272,7 @@
                                                                                                                                     \
         if (slist == NULL || fn == NULL)                                                                                            \
             return nsg;                                                                                                             \
-        if (__skip_integrity_check_##decl(slist) != 0) {                                                                            \
+        if (__skip_integrity_check_##decl(slist, 1) != 0) {                                                                         \
             perror("Skiplist failed integrity checks, impossible to diagram.");                                                     \
             return -1;                                                                                                              \
         }                                                                                                                           \

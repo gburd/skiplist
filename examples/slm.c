@@ -56,6 +56,13 @@ SKIPLIST_DECL(
     /* size in bytes of the content stored in an entry by you */
     { size = strlen(node->value) + 1; })
 
+/*
+ * Optional: Create a function that validates as much as possible the
+ * integrity of a Skiplist.  This is called by the DOT function to
+ * ensure that it's possible to generate a graph.
+ */
+SKIPLIST_INTEGRITY_CHECK(slex, api_, entries)
+
 /* Optional: Create the functions used to visualize a Skiplist (DOT/Graphviz) */
 SKIPLIST_DECL_DOT(slex, api_, entries)
 
