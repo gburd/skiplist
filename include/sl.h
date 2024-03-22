@@ -227,8 +227,8 @@
  *   return cmp(list, a, b, aux);
  *  }
  */
-#define SKIP_COMPARATOR(list, type, fn_blk)                                             \
-    int __skip_cmp_##type(struct list *head, struct type *a, struct type *b, void *aux) \
+#define SKIP_COMPARATOR(list, decl, fn_blk)                                             \
+    int __skip_cmp_##decl(struct list *head, struct decl *a, struct decl *b, void *aux) \
     {                                                                                   \
         if (a == b)                                                                     \
             return 0;                                                                   \
@@ -985,146 +985,175 @@
         return NULL;                                                                                                                                  \
     }
 
-#define SKIPLIST_INTEGRITY_CHECK(decl, prefix, field)                                                                                                \
-    /* -- __skip_integrity_failure_ */                                                                                                               \
-    static void __attribute__((format(printf, 1, 2))) __skip_integrity_failure_##decl(const char *fmt, ...)                                          \
-    {                                                                                                                                                \
-        va_list args;                                                                                                                                \
-        __skip_debugf(fmt, args);                                                                                                                    \
-    }                                                                                                                                                \
-                                                                                                                                                     \
-    /* -- __skip_integrity_check_ */                                                                                                                 \
-    static int __skip_integrity_check_##decl(decl##_t *slist, int flags)                                                                             \
-    {                                                                                                                                                \
-        size_t size;                                                                                                                                 \
-        unsigned nth, n_err = 0;                                                                                                                     \
-        decl##_node_t *node;                                                                                                                         \
-        struct __skiplist_##decl_idx *this, *that, *prev, *next;                                                                                     \
-                                                                                                                                                     \
-        if (slist == NULL) {                                                                                                                         \
-            __skip_integrity_failure_##decl("slist was NULL, nothing to check");                                                                     \
-            n_err++;                                                                                                                                 \
-            return n_err;                                                                                                                            \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        /* Check the Skiplist header (slh) */                                                                                                        \
-                                                                                                                                                     \
-        if (slist->slh_head == NULL) {                                                                                                               \
-            __skip_integrity_failure_##decl("skiplist slh_head is NULL");                                                                            \
-            n_err++;                                                                                                                                 \
-            return n_err;                                                                                                                            \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (slist->slh_tail == NULL) {                                                                                                               \
-            __skip_integrity_failure_##decl("skiplist slh_tail is NULL");                                                                            \
-            n_err++;                                                                                                                                 \
-            return n_err;                                                                                                                            \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (slist->cmp == NULL) {                                                                                                                    \
-            __skip_integrity_failure_##decl("skiplist comparison function (cmp) is NULL");                                                           \
-            n_err++;                                                                                                                                 \
-            return n_err;                                                                                                                            \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (slist->max < 2) {                                                                                                                        \
-            __skip_integrity_failure_##decl("skiplist max level must be 1 at minimum");                                                              \
-            n_err++;                                                                                                                                 \
-            if (flags)                                                                                                                               \
-                return n_err;                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (slist->level >= slist->max) {                                                                                                            \
-            /* level is 0-based, max of 12 means level cannot be > 11 */                                                                             \
-            __skip_integrity_failure_##decl("skiplist level in header was >= max");                                                                  \
-            n_err++;                                                                                                                                 \
-            if (flags)                                                                                                                               \
-                return n_err;                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (SKIPLIST_MAX_HEIGHT < 1) {                                                                                                               \
-            __skip_integrity_failure_##decl("SKIPLIST_MAX_HEIGHT cannot be less than 1");                                                            \
-            n_err++;                                                                                                                                 \
-            if (flags)                                                                                                                               \
-                return n_err;                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (SKIPLIST_MAX_HEIGHT > 0 && slist->max > SKIPLIST_MAX_HEIGHT) {                                                                           \
-            __skip_integrity_failure_##decl("slist->max cannot be greater than SKIPLIST_MAX_HEIGHT");                                                \
-            n_err++;                                                                                                                                 \
-            if (flags)                                                                                                                               \
-                return n_err;                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        node = slist->slh_head;                                                                                                                      \
-        for (nth = 0; nth < node->field.sle.height; nth++) {                                                                                         \
-            if (node->field.sle.next[nth] == NULL) {                                                                                                 \
-                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                  \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-            if (node->field.sle.next[nth] == slist->slh_tail)                                                                                        \
-                break;                                                                                                                               \
-        }                                                                                                                                            \
-        for (; nth < node->field.sle.height; nth++) {                                                                                                \
-            if (node->field.sle.next[nth] == NULL) {                                                                                                 \
-                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                  \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-            if (node->field.sle.next[nth] != slist->slh_tail) {                                                                                      \
-                __skip_integrity_failure_##decl("after internal nodes, the head's %u next node should always be the tail", nth);                     \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                               \
-            __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node");                                     \
-            n_err++;                                                                                                                                 \
-            if (flags)                                                                                                                               \
-                return n_err;                                                                                                                        \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        /* Validate the head node */                                                                                                                 \
-                                                                                                                                                     \
-        /* Validate the tail node */                                                                                                                 \
-                                                                                                                                                     \
-        /* Validate each node */                                                                                                                     \
-        nth = 0;                                                                                                                                     \
-        size = prefix##skip_size_##decl(slist);                                                                                                      \
-        node = prefix##skip_head_##decl(slist);                                                                                                      \
-        while (node) {                                                                                                                               \
-            this = &node->field.sle;                                                                                                                 \
-            if (this->next == NULL) {                                                                                                                \
-                __skip_integrity_failure_##decl("the %u node's [%p] next field should never NULL", nth, (void *)node);                               \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-            if (this->prev == NULL) {                                                                                                                \
-                __skip_integrity_failure_##decl("the %u node [%p] prev field should never NULL", nth, (void *)node);                                 \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-            uintptr_t a = (uintptr_t)this->next;                                                                                                     \
-            uintptr_t b = (intptr_t)((uintptr_t)node + sizeof(decl##_node_t));                                                                       \
-            if (a != b) {                                                                                                                            \
-                __skip_integrity_failure_##decl("the %u node's [%p] next field isn't at the proper offset relative to the node", nth, (void *)node); \
-                n_err++;                                                                                                                             \
-                if (flags)                                                                                                                           \
-                    return n_err;                                                                                                                    \
-            }                                                                                                                                        \
-                                                                                                                                                     \
-            node = prefix##skip_next_node_##decl(slist, node);                                                                                       \
-            nth++;                                                                                                                                   \
-        }                                                                                                                                            \
-                                                                                                                                                     \
-        return 0;                                                                                                                                    \
+#define SKIPLIST_INTEGRITY_CHECK(decl, prefix, field)                                                                                                  \
+    /* -- __skip_integrity_failure_ */                                                                                                                 \
+    static void __attribute__((format(printf, 1, 2))) __skip_integrity_failure_##decl(const char *fmt, ...)                                            \
+    {                                                                                                                                                  \
+        va_list args;                                                                                                                                  \
+        __skip_debugf(fmt, args);                                                                                                                      \
+    }                                                                                                                                                  \
+                                                                                                                                                       \
+    /* -- __skip_integrity_check_ */                                                                                                                   \
+    static int __skip_integrity_check_##decl(decl##_t *slist, int flags)                                                                               \
+    {                                                                                                                                                  \
+        unsigned nth, n_err = 0;                                                                                                                       \
+        decl##_node_t *node, *prev, *next;                                                                                                             \
+        struct __skiplist_##decl_idx *this;                                                                                                            \
+                                                                                                                                                       \
+        if (slist == NULL) {                                                                                                                           \
+            __skip_integrity_failure_##decl("slist was NULL, nothing to check");                                                                       \
+            n_err++;                                                                                                                                   \
+            return n_err;                                                                                                                              \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        /* Check the Skiplist header (slh) */                                                                                                          \
+                                                                                                                                                       \
+        if (slist->slh_head == NULL) {                                                                                                                 \
+            __skip_integrity_failure_##decl("skiplist slh_head is NULL");                                                                              \
+            n_err++;                                                                                                                                   \
+            return n_err;                                                                                                                              \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (slist->slh_tail == NULL) {                                                                                                                 \
+            __skip_integrity_failure_##decl("skiplist slh_tail is NULL");                                                                              \
+            n_err++;                                                                                                                                   \
+            return n_err;                                                                                                                              \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (slist->cmp == NULL) {                                                                                                                      \
+            __skip_integrity_failure_##decl("skiplist comparison function (cmp) is NULL");                                                             \
+            n_err++;                                                                                                                                   \
+            return n_err;                                                                                                                              \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (slist->max < 2) {                                                                                                                          \
+            __skip_integrity_failure_##decl("skiplist max level must be 1 at minimum");                                                                \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (slist->level >= slist->max) {                                                                                                              \
+            /* level is 0-based, max of 12 means level cannot be > 11 */                                                                               \
+            __skip_integrity_failure_##decl("skiplist level in header was >= max");                                                                    \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (SKIPLIST_MAX_HEIGHT < 1) {                                                                                                                 \
+            __skip_integrity_failure_##decl("SKIPLIST_MAX_HEIGHT cannot be less than 1");                                                              \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (SKIPLIST_MAX_HEIGHT > 0 && slist->max > SKIPLIST_MAX_HEIGHT) {                                                                             \
+            __skip_integrity_failure_##decl("slist->max cannot be greater than SKIPLIST_MAX_HEIGHT");                                                  \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        node = slist->slh_head;                                                                                                                        \
+        for (nth = 0; nth < node->field.sle.height; nth++) {                                                                                           \
+            if (node->field.sle.next[nth] == NULL) {                                                                                                   \
+                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                    \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (node->field.sle.next[nth] == slist->slh_tail)                                                                                          \
+                break;                                                                                                                                 \
+        }                                                                                                                                              \
+        for (; nth < node->field.sle.height; nth++) {                                                                                                  \
+            if (node->field.sle.next[nth] == NULL) {                                                                                                   \
+                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                    \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (node->field.sle.next[nth] != slist->slh_tail) {                                                                                        \
+                __skip_integrity_failure_##decl("after internal nodes, the head's %u next node should always be the tail", nth);                       \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                                 \
+            __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node");                                       \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        /* Validate the head node */                                                                                                                   \
+                                                                                                                                                       \
+        /* Validate the tail node */                                                                                                                   \
+                                                                                                                                                       \
+        /* Validate each node */                                                                                                                       \
+        nth = 0;                                                                                                                                       \
+        node = prefix##skip_head_##decl(slist);                                                                                                        \
+        while (node) {                                                                                                                                 \
+            this = &node->field.sle;                                                                                                                   \
+            if (this->next == NULL) {                                                                                                                  \
+                __skip_integrity_failure_##decl("the %uth node's [%p] next field should never NULL", nth, (void *)node);                               \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (this->prev == NULL) {                                                                                                                  \
+                __skip_integrity_failure_##decl("the %u node [%p] prev field should never NULL", nth, (void *)node);                                   \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            uintptr_t a = (uintptr_t)this->next;                                                                                                       \
+            uintptr_t b = (intptr_t)((uintptr_t)node + sizeof(decl##_node_t));                                                                         \
+            if (a != b) {                                                                                                                              \
+                __skip_integrity_failure_##decl("the %uth node's [%p] next field isn't at the proper offset relative to the node", nth, (void *)node); \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            next = this->next[0];                                                                                                                      \
+            prev = this->prev;                                                                                                                         \
+            if (__skip_key_compare_##decl(slist, node, node, slist->aux) != 0) {                                                                       \
+                __skip_integrity_failure_##decl("the %uth node [%p] is not equal to itself", nth, (void *)node);                                       \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (__skip_key_compare_##decl(slist, node, prev, slist->aux) < 0) {                                                                        \
+                __skip_integrity_failure_##decl("the %uth node [%p] is not greater than the prev node [%p]", nth, (void *)node, (void *)prev);         \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (__skip_key_compare_##decl(slist, node, next, slist->aux) > 0) {                                                                        \
+                __skip_integrity_failure_##decl("the %uth node [%p] is not less than the next node [%p]", nth, (void *)node, (void *)next);            \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (__skip_key_compare_##decl(slist, prev, node, slist->aux) > 0) {                                                                        \
+                __skip_integrity_failure_##decl("the prev node [%p] is not less than the %uth node [%p]", (void *)prev, nth, (void *)node);            \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            if (__skip_key_compare_##decl(slist, next, node, slist->aux) < 0) {                                                                        \
+                __skip_integrity_failure_##decl("the next node [%p] is not greater than the %uth node [%p]", (void *)next, nth, (void *)node);         \
+                n_err++;                                                                                                                               \
+                if (flags)                                                                                                                             \
+                    return n_err;                                                                                                                      \
+            }                                                                                                                                          \
+            node = prefix##skip_next_node_##decl(slist, node);                                                                                         \
+            nth++;                                                                                                                                     \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        return 0;                                                                                                                                      \
     }
 
 #define SKIPLIST_KV_ACCESS(decl, prefix, ktype, vtype, qblk, rblk)                           \
