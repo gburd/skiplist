@@ -453,14 +453,13 @@
                 return -1;                                                                                                                            \
             }                                                                                                                                         \
             level = __skip_toss_##decl(slist->max - 1);                                                                                               \
-            n->field.sle.height = level + 1;                                                                                                          \
-            for (i = 0; i <= level; i++) {                                                                                                            \
-                if (i <= slist->slh_head->field.sle.height) {                                                                                         \
-                    n->field.sle.next[i] = path[i + 1]->field.sle.next[i];                                                                            \
-                    path[i + 1]->field.sle.next[i] = n;                                                                                               \
-                } else {                                                                                                                              \
-                    n->field.sle.next[i] = slist->slh_tail;                                                                                           \
-                }                                                                                                                                     \
+            n->field.sle.height = level;                                                                                                              \
+            for (i = slist->slh_head->field.sle.height + 1; i < n->field.sle.height + 1; i++) {                                                       \
+                path[i + 1] = slist->slh_tail;                                                                                                        \
+            }                                                                                                                                         \
+            for (i = 0; i < n->field.sle.height + 1; i++) {                                                                                           \
+                n->field.sle.next[i] = path[i + 1]->field.sle.next[i];                                                                                \
+                path[i + 1]->field.sle.next[i] = n;                                                                                                   \
             }                                                                                                                                         \
             n->field.sle.prev = path[1];                                                                                                              \
             n->field.sle.next[0]->field.sle.prev = n;                                                                                                 \
@@ -1058,24 +1057,32 @@
         }                                                                                                                                            \
                                                                                                                                                      \
         node = slist->slh_head;                                                                                                                      \
-        for (nth = 0; nth < node->field.sle.height; nth++) {                                                                                        \
-            if (node->field.sle.next[nth] == NULL || node->field.sle.next[nth] == slist->slh_tail) {                                                 \
-                __skip_integrity_failure_##decl("the head's %u next node reference should not be NULL or pointing to the tail", nth);                \
+        for (nth = 0; nth < node->field.sle.height; nth++) {                                                                                         \
+            if (node->field.sle.next[nth] == NULL) {                                                                                                 \
+                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                  \
                 n_err++;                                                                                                                             \
                 if (flags)                                                                                                                           \
                     return n_err;                                                                                                                    \
             }                                                                                                                                        \
+            if (node->field.sle.next[nth] == slist->slh_tail)                                                                                        \
+                break;                                                                                                                               \
         }                                                                                                                                            \
-        for (; nth < slist->max; nth++) {                                                                                                            \
+        for (; nth < node->field.sle.height; nth++) {                                                                                                \
+            if (node->field.sle.next[nth] == NULL) {                                                                                                 \
+                __skip_integrity_failure_##decl("the head's %u next node should not be NULL", nth);                                                  \
+                n_err++;                                                                                                                             \
+                if (flags)                                                                                                                           \
+                    return n_err;                                                                                                                    \
+            }                                                                                                                                        \
             if (node->field.sle.next[nth] != slist->slh_tail) {                                                                                      \
-                __skip_integrity_failure_##decl("the head's %u next node reference above it's current height should always point to the tail", nth); \
+                __skip_integrity_failure_##decl("after internal nodes, the head's %u next node should always be the tail", nth);                     \
                 n_err++;                                                                                                                             \
                 if (flags)                                                                                                                           \
                     return n_err;                                                                                                                    \
             }                                                                                                                                        \
         }                                                                                                                                            \
                                                                                                                                                      \
-        if (slist->length > 0 && slist->slh_tail->field.sle.prev != slist->slh_head) {                                                               \
+        if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                               \
             __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node");                                     \
             n_err++;                                                                                                                                 \
             if (flags)                                                                                                                               \
@@ -1104,7 +1111,9 @@
                 if (flags)                                                                                                                           \
                     return n_err;                                                                                                                    \
             }                                                                                                                                        \
-            if (*this->next != node + (sizeof(struct __skiplist_##decl_idx) * slist->max)) {                                                         \
+            uintptr_t a = (uintptr_t)this->next;                                                                                                     \
+            uintptr_t b = (intptr_t)((uintptr_t)node + sizeof(decl##_node_t));                                                                       \
+            if (a != b) {                                                                                                                            \
                 __skip_integrity_failure_##decl("the %u node's [%p] next field isn't at the proper offset relative to the node", nth, (void *)node); \
                 n_err++;                                                                                                                             \
                 if (flags)                                                                                                                           \
