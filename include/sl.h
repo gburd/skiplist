@@ -997,178 +997,189 @@
         return prefix##skip_remove_##decl(slist, &node);                                     \
     }
 
-#define SKIPLIST_DECL_DOT(decl, prefix, field)                                                                                      \
-                                                                                                                                    \
-    /* A type for a function that writes into a char[2048] buffer                                                                   \
-     * a description of the value within the node. */                                                                               \
-    typedef void (*skip_sprintf_node_##decl##_t)(decl##_node_t *, char *);                                                          \
-                                                                                                                                    \
-    /* -- __skip_dot_node_                                                                                                          \
-     * Writes out a fragment of a DOT file representing a node.                                                                     \
-     */                                                                                                                             \
-    static void __skip_dot_node_##decl(FILE *os, decl##_t *slist, decl##_node_t *node, size_t nsg, skip_sprintf_node_##decl##_t fn) \
-    {                                                                                                                               \
-        char buf[2048];                                                                                                             \
-        size_t level, height = node->field.sle.len;                                                                                 \
-        decl##_node_t *next;                                                                                                        \
-                                                                                                                                    \
-        fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                           \
-        fprintf(os, " [label = \"");                                                                                                \
-        level = height;                                                                                                             \
-        while (level--) {                                                                                                           \
-            fprintf(os, " { <w%zu> | <f%zu> %p } |", level, level, (void *)node->field.sle.next[level]);                            \
-        }                                                                                                                           \
-        if (fn) {                                                                                                                   \
-            fn(node, buf);                                                                                                          \
-            fprintf(os, " <f0> %s\"\n", buf);                                                                                       \
-        } else {                                                                                                                    \
-            fprintf(os, " <f0> ?\"\n");                                                                                             \
-        }                                                                                                                           \
-        fprintf(os, "shape = \"record\"\n");                                                                                        \
-        fprintf(os, "];\n");                                                                                                        \
-                                                                                                                                    \
-        /* Now edges */                                                                                                             \
-        level = 0;                                                                                                                  \
-        for (level = 0; level < height; level++) {                                                                                  \
-            fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                       \
-            fprintf(os, ":f%zu -> ", level);                                                                                        \
-            fprintf(os, "\"node%zu %p\"", nsg, (void *)node->field.sle.next[level]);                                                \
-            fprintf(os, ":w%zu [];\n", level);                                                                                      \
-        }                                                                                                                           \
-        next = prefix##skip_next_node_##decl(slist, node);                                                                          \
-        if (next)                                                                                                                   \
-            __skip_dot_node_##decl(os, slist, next, nsg, fn);                                                                       \
-    }                                                                                                                               \
-                                                                                                                                    \
-    /* -- __skip_dot_finish_                                                                                                        \
-     * Finalize the DOT file of the internal representation.                                                                        \
-     */                                                                                                                             \
-    static void __skip_dot_finish_##decl(FILE *os, size_t nsg)                                                                      \
-    {                                                                                                                               \
-        size_t i;                                                                                                                   \
-        if (nsg > 0) {                                                                                                              \
-            /* Link the nodes together with an invisible node.                                                                      \
-             *    node0 [shape=record, label = "<f0> | <f1> | <f2> | <f3> |                                                         \
-             * <f4> | <f5> | <f6> | <f7> | <f8> | ", style=invis, width=0.01];                                                      \
-             */                                                                                                                     \
-            fprintf(os, "node0 [shape=record, label = \"");                                                                         \
-            for (i = 0; i < nsg; ++i) {                                                                                             \
-                fprintf(os, "<f%zu> | ", i);                                                                                        \
-            }                                                                                                                       \
-            fprintf(os, "\", style=invis, width=0.01];\n");                                                                         \
-                                                                                                                                    \
-            /* Now connect nodes with invisible edges                                                                               \
-             *                                                                                                                      \
-             *    node0:f0 -> HeadNode [style=invis];                                                                               \
-             *    node0:f1 -> HeadNode1 [style=invis];                                                                              \
-             */                                                                                                                     \
-            for (i = 0; i < nsg; ++i) {                                                                                             \
-                fprintf(os, "node0:f%zu -> HeadNode%zu [style=invis];\n", i, i);                                                    \
-            }                                                                                                                       \
-            nsg = 0;                                                                                                                \
-        }                                                                                                                           \
-        fprintf(os, "}\n");                                                                                                         \
-    }                                                                                                                               \
-                                                                                                                                    \
-    /* -- skip_dot_start_ */                                                                                                        \
-    static int __skip_dot_start_##decl(FILE *os, decl##_t *slist, size_t nsg, skip_sprintf_node_##decl##_t fn)                      \
-    {                                                                                                                               \
-        size_t level;                                                                                                               \
-        decl##_node_t *head, *tail;                                                                                                 \
-        if (nsg == 0) {                                                                                                             \
-            fprintf(os, "digraph Skiplist {\n");                                                                                    \
-            fprintf(os, "label = \"Skiplist.\"\n");                                                                                 \
-            fprintf(os, "graph [rankdir = \"LR\"];\n");                                                                             \
-            fprintf(os, "node [fontsize = \"12\" shape = \"ellipse\"];\n");                                                         \
-            fprintf(os, "edge [];\n\n");                                                                                            \
-        }                                                                                                                           \
-        fprintf(os, "subgraph cluster%zu {\n", nsg);                                                                                \
-        fprintf(os, "style=dashed\n");                                                                                              \
-        fprintf(os, "label=\"Skip list iteration %zu\"\n\n", nsg);                                                                  \
-        fprintf(os, "\"HeadNode%zu\" [\n", nsg);                                                                                    \
-        fprintf(os, "label = \"");                                                                                                  \
-                                                                                                                                    \
-        /* Write out the fields */                                                                                                  \
-        head = slist->slh_head;                                                                                                     \
-        if (SKIP_EMPTY(slist))                                                                                                      \
-            fprintf(os, "Empty HeadNode");                                                                                          \
-        else {                                                                                                                      \
-            level = head->field.sle.len - 1;                                                                                        \
-            do {                                                                                                                    \
-                decl##_node_t *node = head->field.sle.next[level];                                                                  \
-                fprintf(os, "{ <f%zu> %p }", level, (void *)node);                                                                  \
-                if (level && head->field.sle.next[level] != slist->slh_tail)                                                        \
-                    fprintf(os, " | ");                                                                                             \
-            } while (level-- && head->field.sle.next[level] != slist->slh_tail);                                                    \
-        }                                                                                                                           \
-        fprintf(os, "\"\n");                                                                                                        \
-        fprintf(os, "shape = \"record\"\n");                                                                                        \
-        fprintf(os, "];\n");                                                                                                        \
-                                                                                                                                    \
-        /* Edges for head node */                                                                                                   \
-        decl##_node_t *node = slist->slh_head;                                                                                      \
-        for (level = 0; level < slist->slh_head->field.sle.len; level++) {                                                          \
-            if (node->field.sle.next[level] == slist->slh_tail)                                                                     \
-                break;                                                                                                              \
-            fprintf(os, "\"HeadNode%zu\":f%zu -> ", nsg, level);                                                                    \
-            fprintf(os, "\"node%zu %p\"", nsg, (void *)node->field.sle.next[level]);                                                \
-            fprintf(os, ":w%zu [];\n", level);                                                                                      \
-        }                                                                                                                           \
-        fprintf(os, "\n");                                                                                                          \
-                                                                                                                                    \
-        /* Now all nodes via level 0, if non-empty */                                                                               \
-        node = prefix##skip_head_##decl(slist);                                                                                     \
-        if (node)                                                                                                                   \
-            __skip_dot_node_##decl(os, slist, node, nsg, fn);                                                                       \
-        fprintf(os, "\n");                                                                                                          \
-                                                                                                                                    \
-        /* The tail, sentinal node */                                                                                               \
-        tail = slist->slh_tail;                                                                                                     \
-        if (!SKIP_EMPTY(slist)) {                                                                                                   \
-            fprintf(os, "\"node%zu %p\" [label = \"", nsg, (void *)slist->slh_tail);                                                \
-            level = tail->field.sle.len - 1;                                                                                        \
-            do {                                                                                                                    \
-                fprintf(os, "<w%zu> %p", level, (void *)node->field.sle.prev);                                                      \
-                if (level && node->field.sle.prev != slist->slh_head)                                                               \
-                    fprintf(os, " | ");                                                                                             \
-            } while (level-- && node->field.sle.prev != slist->slh_head);                                                           \
-            fprintf(os, "\" shape = \"record\"];\n");                                                                               \
-        }                                                                                                                           \
-                                                                                                                                    \
-        /* End: "subgraph cluster0 {" */                                                                                            \
-        fprintf(os, "}\n\n");                                                                                                       \
-        nsg += 1;                                                                                                                   \
-                                                                                                                                    \
-        return nsg;                                                                                                                 \
-    }                                                                                                                               \
-                                                                                                                                    \
-    /* -- skip_dot_                                                                                                                 \
-     * Create a DOT file of the internal representation of the                                                                      \
-     * Skiplist on the provided file descriptor (default: STDOUT).                                                                  \
-     *                                                                                                                              \
-     * To view the output:                                                                                                          \
-     * $ dot -Tps filename.dot -o outfile.ps                                                                                        \
-     * You can change the output format by varying the value after -T and                                                           \
-     * choosing an appropriate filename extension after -o.                                                                         \
-     * See: https://graphviz.org/docs/outputs/ for the format options.                                                              \
-     *                                                                                                                              \
-     * https://en.wikipedia.org/wiki/DOT_(graph_description_language)                                                               \
-     */                                                                                                                             \
-    int prefix##skip_dot_##decl(FILE *os, decl##_t *slist, size_t nsg, skip_sprintf_node_##decl##_t fn)                             \
-    {                                                                                                                               \
-        if (__skip_integrity_check_##decl(slist) != 0) {                                                                            \
-            perror("Skiplist failed integrity checks, impossible to diagram.");                                                     \
-            return -1;                                                                                                              \
-        }                                                                                                                           \
-        if (os == NULL)                                                                                                             \
-            os = stdout;                                                                                                            \
-        if (!os) {                                                                                                                  \
-            perror("Failed to open output file, unable to write DOT file.");                                                        \
-            return -1;                                                                                                              \
-        }                                                                                                                           \
-        __skip_dot_start_##decl(os, slist, nsg, fn);                                                                                \
-        __skip_dot_finish_##decl(os, nsg);                                                                                          \
-        return 0;                                                                                                                   \
+#define SKIPLIST_DECL_DOT(decl, prefix, field)                                                                                                 \
+                                                                                                                                               \
+    /* A type for a function that writes into a char[2048] buffer                                                                              \
+     * a description of the value within the node. */                                                                                          \
+    typedef void (*skip_sprintf_node_##decl##_t)(decl##_node_t *, char *);                                                                     \
+                                                                                                                                               \
+    /* -- __skip_dot_node_                                                                                                                     \
+     * Writes out a fragment of a DOT file representing a node.                                                                                \
+     */                                                                                                                                        \
+    static size_t __skip_dot_width_##decl(decl##_t *slist, decl##_node_t *node, size_t level)                                                  \
+    {                                                                                                                                          \
+        size_t w = 0;                                                                                                                          \
+        decl##_node_t *n;                                                                                                                      \
+                                                                                                                                               \
+        if (node == slist->slh_tail)                                                                                                           \
+            return 0;                                                                                                                          \
+        n = node->field.sle.next[level];                                                                                                       \
+                                                                                                                                               \
+        do {                                                                                                                                   \
+            w++;                                                                                                                               \
+            n = prefix##skip_prev_node_##decl(slist, n);                                                                                       \
+        } while (n && n->field.sle.prev != node);                                                                                              \
+                                                                                                                                               \
+        return --w;                                                                                                                            \
+    }                                                                                                                                          \
+                                                                                                                                               \
+    /* -- __skip_dot_node_                                                                                                                     \
+     * Writes out a fragment of a DOT file representing a node.                                                                                \
+     */                                                                                                                                        \
+    static void __skip_dot_node_##decl(FILE *os, decl##_t *slist, decl##_node_t *node, size_t nsg, skip_sprintf_node_##decl##_t fn)            \
+    {                                                                                                                                          \
+        char buf[2048];                                                                                                                        \
+        size_t level, width, height = node->field.sle.len;               \
+        decl##_node_t *next;                                                                                                                   \
+                                                                                                                                               \
+        fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                                      \
+        fprintf(os, " [label = \"");                                                                                                           \
+        level = height;                                                                                                                        \
+        while (level--) {                                                                                                                      \
+            width = __skip_dot_width_##decl(slist, node, level);        \
+            fprintf(os, " { <w%zu> %zu | <f%zu> %p } |", level, width, level, (void *)node->field.sle.next[level]); \
+        }                                                                                                                                      \
+        if (fn) {                                                                                                                              \
+            fn(node, buf);                                                                                                                     \
+            fprintf(os, " <f0> %s\"\n", buf);                                                                                                  \
+        } else {                                                                                                                               \
+            fprintf(os, " <f0> ?\"\n");                                                                                                        \
+        }                                                                                                                                      \
+        fprintf(os, "shape = \"record\"\n");                                                                                                   \
+        fprintf(os, "];\n");                                                                                                                   \
+                                                                                                                                               \
+        /* Now edges */                                                                                                                        \
+        level = 0;                                                                                                                             \
+        for (level = 0; level < height; level++) {                                                                                             \
+            fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                                  \
+            fprintf(os, ":f%zu -> ", level);                                                                                                   \
+            fprintf(os, "\"node%zu %p\"", nsg, (void *)node->field.sle.next[level]);                                                           \
+            fprintf(os, ":w%zu [];\n", level);                                                                                                 \
+        }                                                                                                                                      \
+        next = prefix##skip_next_node_##decl(slist, node);                                                                                     \
+        if (next)                                                                                                                              \
+            __skip_dot_node_##decl(os, slist, next, nsg, fn);                                                                                  \
+    }                                                                                                                                          \
+                                                                                                                                               \
+    /* -- _skip_dot_finish_                                                                                                                    \
+     * Finalize the DOT file of the internal representation.                                                                                   \
+     */                                                                                                                                        \
+    void prefix##skip_dot_end_##decl(FILE *os, size_t nsg)                                                                                     \
+    {                                                                                                                                          \
+        size_t i;                                                                                                                              \
+        if (nsg > 0) {                                                                                                                         \
+            /* Link the nodes together with an invisible node.                                                                                 \
+             *    node0 [shape=record, label = "<f0> | <f1> | <f2> | <f3> |                                                                    \
+             * <f4> | <f5> | <f6> | <f7> | <f8> | ", style=invis, width=0.01];                                                                 \
+             */                                                                                                                                \
+            fprintf(os, "node0 [shape=record, label = \"");                                                                                    \
+            for (i = 0; i < nsg; ++i) {                                                                                                        \
+                fprintf(os, "<f%zu> | ", i);                                                                                                   \
+            }                                                                                                                                  \
+            fprintf(os, "\", style=invis, width=0.01];\n");                                                                                    \
+                                                                                                                                               \
+            /* Now connect nodes with invisible edges                                                                                          \
+             *                                                                                                                                 \
+             *    node0:f0 -> HeadNode [style=invis];                                                                                          \
+             *    node0:f1 -> HeadNode1 [style=invis];                                                                                         \
+             */                                                                                                                                \
+            for (i = 0; i < nsg; ++i) {                                                                                                        \
+                fprintf(os, "node0:f%zu -> HeadNode%zu [style=invis];\n", i, i);                                                               \
+            }                                                                                                                                  \
+            nsg = 0;                                                                                                                           \
+        }                                                                                                                                      \
+        fprintf(os, "}\n");                                                                                                                    \
+    }                                                                                                                                          \
+                                                                                                                                               \
+    /* -- skip_dot_                                                                                                                            \
+     * Create a DOT file of the internal representation of the                                                                                 \
+     * Skiplist on the provided file descriptor (default: STDOUT).                                                                             \
+     *                                                                                                                                         \
+     * To view the output:                                                                                                                     \
+     * $ dot -Tps filename.dot -o outfile.ps                                                                                                   \
+     * You can change the output format by varying the value after -T and                                                                      \
+     * choosing an appropriate filename extension after -o.                                                                                    \
+     * See: https://graphviz.org/docs/outputs/ for the format options.                                                                         \
+     *                                                                                                                                         \
+     * https://en.wikipedia.org/wiki/DOT_(graph_description_language)                                                                          \
+     */                                                                                                                                        \
+    int prefix##skip_dot_##decl(FILE *os, decl##_t *slist, size_t nsg, skip_sprintf_node_##decl##_t fn)                                        \
+    {                                                                                                                                          \
+        size_t width, level;                                                                                                                   \
+        decl##_node_t *node, *next;                                           \
+                                                                                                                                               \
+        if (slist == NULL || fn == NULL)                                                                                                       \
+            return nsg;                                                                                                                        \
+        if (__skip_integrity_check_##decl(slist) != 0) {                                                                                       \
+            perror("Skiplist failed integrity checks, impossible to diagram.");                                                                \
+            return -1;                                                                                                                         \
+        }                                                                                                                                      \
+        if (nsg == 0) {                                                                                                                        \
+            fprintf(os, "digraph Skiplist {\n");                                                                                               \
+            fprintf(os, "label = \"Skiplist.\"\n");                                                                                            \
+            fprintf(os, "graph [rankdir = \"LR\"];\n");                                                                                        \
+            fprintf(os, "node [fontsize = \"12\" shape = \"ellipse\"];\n");                                                                    \
+            fprintf(os, "edge [];\n\n");                                                                                                       \
+        }                                                                                                                                      \
+        fprintf(os, "subgraph cluster%zu {\n", nsg);                                                                                           \
+        fprintf(os, "style=dashed\n");                                                                                                         \
+        fprintf(os, "label=\"Skip list iteration %zu\"\n\n", nsg);                                                                             \
+        fprintf(os, "\"HeadNode%zu\" [\n", nsg);                                                                                               \
+        fprintf(os, "label = \"");                                                                                                             \
+                                                                                                                                               \
+        /* Write out the fields */                                                                                                             \
+        if (prefix##skip_size_##decl(slist) == 0)                                                                                              \
+            fprintf(os, "Empty HeadNode");                                                                                                     \
+        else {                                                                                                                                 \
+            node = slist->slh_head->field.sle.next[0];                                                                                         \
+            level = slist->slh_head->field.sle.len;                                                                                            \
+            next = node->field.sle.next[level] == NULL ? slist->slh_tail : node->field.sle.next[level]; \
+            do {                                                                                                                               \
+                width = __skip_dot_width_##decl(slist, node, level);                                                                           \
+                fprintf(os, "{ %zu | <f%zu> %p }", width, level, (void *)next); \
+                if (level)                                                                   \
+                    fprintf(os, " | ");                                                                                                        \
+            } while (level--);                                                             \
+        }                                                                                                                                      \
+        fprintf(os, "\"\n");                                                                                                                   \
+        fprintf(os, "shape = \"record\"\n");                                                                                                   \
+        fprintf(os, "];\n");                                                                                                                   \
+                                                                                                                                               \
+        /* Edges for head node */                                                                                                              \
+        node = slist->slh_head;                                                                                                                \
+        for (level = 0; level < slist->slh_head->field.sle.len; level++) {                                                                     \
+            if (node->field.sle.next[level] == slist->slh_tail)                                                                                \
+                break;                                                                                                                         \
+            fprintf(os, "\"HeadNode%zu\":f%zu -> ", nsg, level);                                                                               \
+            fprintf(os, "\"node%zu %p\"", nsg, (void *)node->field.sle.next[level]);                                                           \
+            fprintf(os, ":w%zu [];\n", level);                                                                                                 \
+        }                                                                                                                                      \
+        fprintf(os, "\n");                                                                                                                     \
+                                                                                                                                               \
+        /* Now all nodes via level 0, if non-empty */                                                                                          \
+        node = prefix##skip_head_##decl(slist);                                                                                                \
+        if (node)                                                                                                                              \
+            __skip_dot_node_##decl(os, slist, node, nsg, fn);                                                                                  \
+        fprintf(os, "\n");                                                                                                                     \
+                                                                                                                                               \
+        /* The tail, sentinal node */                                                                                                          \
+        node = slist->slh_tail;                                                                                                                \
+        if (prefix##skip_size_##decl(slist) > 0) {                                                                                             \
+            fprintf(os, "\"node%zu %p\" [label = \"", nsg, (void *)slist->slh_tail);                                                           \
+            level = node->field.sle.len;                                                                                                       \
+            do {                                                                                                                               \
+                fprintf(os, "<w%zu> %p", level, (void *)node);                                                                                 \
+                if (level && node->field.sle.prev != slist->slh_head)                                                                          \
+                    fprintf(os, " | ");                                                                                                        \
+            } while (level--);                                                                        \
+            fprintf(os, "\" shape = \"record\"];\n");                                                                                          \
+        }                                                                                                                                      \
+                                                                                                                                               \
+        /* End: "subgraph cluster0 {" */                                                                                                       \
+        fprintf(os, "}\n\n");                                                                                                                  \
+        nsg += 1;                                                                                                                              \
+                                                                                                                                               \
+        return nsg;                                                                                                                            \
     }
 
 #endif /* _SKIPLIST_H_ */

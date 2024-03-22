@@ -169,12 +169,18 @@ shuffle(int *array, size_t n)
     }
 }
 
-#define TEST_ARRAY_SIZE 50
+#define TEST_ARRAY_SIZE 5
 
 int
 main()
 {
-    int rc = 0;
+    int gen = 0, rc = 0;
+
+    FILE *of = fopen("/tmp/slm.dot", "w");
+    if (!of) {
+        perror("Failed to open file /tmp/slm.dot");
+        return 1;
+    }
 
     /* Allocate and initialize a Skiplist. */
     slex_t *list = (slex_t *)malloc(sizeof(slex_t));
@@ -184,6 +190,7 @@ main()
     rc = api_skip_init_slex(list, 12, __slm_key_compare);
     if (rc)
         return rc;
+    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 
     /* Test creating a snapshot of an empty Skiplist */
     slex_snap_t *snap = api_skip_snapshot_slex(list);
@@ -200,13 +207,17 @@ main()
 
     for (int i = 0; i < asz; i++) {
         rc = api_skip_put_slex(list, array[i], to_lower(int_to_roman_numeral(array[i])));
+        api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
         char *v = api_skip_get_slex(list, array[i]);
         api_skip_set_slex(list, array[i], to_upper(v));
     }
     api_skip_dup_slex(list, -1, int_to_roman_numeral(-1));
+    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
     api_skip_dup_slex(list, 1, int_to_roman_numeral(1));
+    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 
     api_skip_del_slex(list, 0);
+    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 
 #if 0
     snap = api_skip_snapshot_slex(list);
@@ -239,15 +250,8 @@ main()
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    FILE *of = fopen("/tmp/slm.dot", "w");
-    if (!of) {
-        perror("Failed to open file /tmp/slm.dot");
-        return EXIT_FAILURE;
-    }
-    api_skip_dot_slex(of, list, 0, sprintf_slex_node);
-    fclose(of);
-
     api_skip_destroy_slex(list);
-
+    api_skip_dot_end_slex(of, gen);
+    fclose(of);
     return rc;
 }
