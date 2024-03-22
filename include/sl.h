@@ -398,6 +398,7 @@
                 }                                                                                                                                     \
             }                                                                                                                                         \
             n->field.sle.prev = path[1];                                                                                                              \
+            n->field.sle.next[0]->field.sle.prev = n;                                                                                                 \
             if (n->field.sle.next[0] == slist->slh_tail) {                                                                                            \
                 slist->slh_tail->field.sle.prev = n;                                                                                                  \
             }                                                                                                                                         \
@@ -661,6 +662,9 @@
                     level = path[i]->field.sle.len;                                                                                                   \
                     path[i]->field.sle.len = level - 1;                                                                                               \
                 }                                                                                                                                     \
+            }                                                                                                                                         \
+            if (node->field.sle.next[0] == slist->slh_tail) {                                                                                         \
+                slist->slh_tail->field.sle.prev = n->field.sle.prev;                                                                                  \
             }                                                                                                                                         \
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                             \
                 free(path);                                                                                                                           \
