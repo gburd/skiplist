@@ -1,14 +1,17 @@
-#include <sys/time.h>
 
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#define DEBUG 1
+#define SKIPLIST_DEBUG slex
 
 /* Setting this will do two things:
  * 1) limit our max height across all instances of this datastructure.
