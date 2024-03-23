@@ -242,8 +242,9 @@
 #define SKIPLIST_EACH_H2T(decl, prefix, list, elm, iter) \
     for (iter = 0, (elm) = prefix##skip_head_##decl(list); (elm) != NULL; iter++, (elm) = prefix##skip_next_node_##decl(list, elm))
 
-#define SKIPLIST_EACH_T2H(decl, prefix, list, elm, iter) \
-    for (iter = prefix##skip_size_##decl(list), (elm) = prefix##skip_tail_##decl(list); (elm) != NULL; iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
+#define SKIPLIST_EACH_T2H(decl, prefix, list, elm, iter)                                                \
+    for (iter = prefix##skip_size_##decl(list), (elm) = prefix##skip_tailf_##decl(list); (elm) != NULL; \
+         iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
 
 #define __SKIP_NEXT_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle.height; lvl != (size_t)-1; lvl--)
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
@@ -1335,7 +1336,7 @@
         return 0;                                                                                                                                      \
     }
 
-#define SKIPLIST_KV_ACCESS(decl, prefix, ktype, vtype, qblk, rblk)                           \
+#define SKIPLIST_KV_ACCESS(decl, prefix, key, ktype, value, vtype, qblk, rblk)               \
     vtype prefix##skip_get_##decl(decl##_t *slist, ktype key)                                \
     {                                                                                        \
         decl##_node_t *node, query;                                                          \
@@ -1431,6 +1432,8 @@
                                                                                                                                     \
         if (node == slist->slh_tail)                                                                                                \
             return 0;                                                                                                               \
+        if (node == NULL)                                                                                                           \
+            node = slist->slh_tail;                                                                                                 \
                                                                                                                                     \
         n = node->field.sle.next[level] == slist->slh_tail ? NULL : node->field.sle.next[level];                                    \
         while (n && n->field.sle.prev != node) {                                                                                    \
@@ -1443,7 +1446,10 @@
                                                                                                                                     \
     static inline void __skip_dot_write_node_##decl(FILE *os, size_t nsg, decl##_node_t *node)                                      \
     {                                                                                                                               \
-        fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                           \
+        if (node)                                                                                                                   \
+            fprintf(os, "\"node%zu %p\"", nsg, (void *)node);                                                                       \
+        else                                                                                                                        \
+            fprintf(os, "\"node%zu NULL\"", nsg);                                                                                   \
     }                                                                                                                               \
                                                                                                                                     \
     /* -- __skip_dot_node_                                                                                                          \
@@ -1453,35 +1459,39 @@
     {                                                                                                                               \
         char buf[2048];                                                                                                             \
         size_t width;                                                                                                               \
-        decl##_node_t *this;                                                                                                        \
+        decl##_node_t *next;                                                                                                        \
                                                                                                                                     \
         __skip_dot_write_node_##decl(os, nsg, node);                                                                                \
         fprintf(os, " [label = \"");                                                                                                \
         fflush(os);                                                                                                                 \
-        this = node;                                                                                                                \
-        __SKIP_NEXT_ENTRIES_T2B(field, this)                                                                                        \
+        __SKIP_NEXT_ENTRIES_T2B(field, node)                                                                                        \
         {                                                                                                                           \
-            width = __skip_dot_width_##decl(slist, this, lvl);                                                                      \
-            fprintf(os, " { <w%zu> %zu | <f%zu> %p } |", lvl, width, lvl, (void *)this->field.sle.next[lvl]);                       \
+            next = (node->field.sle.next[lvl] == slist->slh_tail) ? NULL : node->field.sle.next[lvl];                               \
+            width = __skip_dot_width_##decl(slist, next, lvl);                                                                      \
+            fprintf(os, " { <w%zu> %zu | <f%zu> ", lvl, width, lvl);                                                                \
+            if (next)                                                                                                               \
+                fprintf(os, "%p } |", (void *)next);                                                                                \
+            else                                                                                                                    \
+                fprintf(os, "NULL } |");                                                                                            \
             fflush(os);                                                                                                             \
         }                                                                                                                           \
         if (fn) {                                                                                                                   \
             fn(node, buf);                                                                                                          \
-            fprintf(os, " <f0> h:%zu - %s\"\n", node->field.sle.height, buf);                                                       \
+            fprintf(os, " <f0> \u219F %zu // %s \"\n", node->field.sle.height, buf);                                                \
         } else {                                                                                                                    \
-            fprintf(os, " <f0> h:%zu \"\n", node->field.sle.height);                                                                \
+            fprintf(os, " <f0> \u219F %zu \"\n", node->field.sle.height);                                                           \
         }                                                                                                                           \
         fprintf(os, "shape = \"record\"\n");                                                                                        \
         fprintf(os, "];\n");                                                                                                        \
         fflush(os);                                                                                                                 \
                                                                                                                                     \
         /* Now edges */                                                                                                             \
-        this = node;                                                                                                                \
-        __SKIP_NEXT_ENTRIES_B2T(field, this)                                                                                        \
+        __SKIP_NEXT_ENTRIES_B2T(field, node)                                                                                        \
         {                                                                                                                           \
-            __skip_dot_write_node_##decl(os, nsg, this);                                                                            \
+            next = (node->field.sle.next[lvl] == slist->slh_tail) ? NULL : node->field.sle.next[lvl];                               \
+            __skip_dot_write_node_##decl(os, nsg, node);                                                                            \
             fprintf(os, ":f%zu -> ", lvl);                                                                                          \
-            __skip_dot_write_node_##decl(os, nsg, this->field.sle.next[lvl]);                                                       \
+            __skip_dot_write_node_##decl(os, nsg, next);                                                                            \
             fprintf(os, ":w%zu [];\n", lvl);                                                                                        \
             fflush(os);                                                                                                             \
         }                                                                                                                           \
@@ -1562,8 +1572,13 @@
         if (letitgo) {                                                                                                              \
             __SKIP_NEXT_ENTRIES_T2B(field, node)                                                                                    \
             {                                                                                                                       \
-                width = __skip_dot_width_##decl(slist, node, lvl);                                                                  \
-                fprintf(os, "{ %zu | <f%zu> %p }", width, lvl, (void *)node);                                                       \
+                next = (node->field.sle.next[lvl] == slist->slh_tail) ? NULL : node->field.sle.next[lvl];                           \
+                width = __skip_dot_width_##decl(slist, next, lvl);                                                                  \
+                fprintf(os, "{ %zu | <f%zu> ", width, lvl);                                                                         \
+                if (next)                                                                                                           \
+                    fprintf(os, "%p }", (void *)next);                                                                              \
+                else                                                                                                                \
+                    fprintf(os, "NULL }");                                                                                          \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
@@ -1581,8 +1596,9 @@
             node = slist->slh_head;                                                                                                 \
             __SKIP_NEXT_ENTRIES_B2T(field, node)                                                                                    \
             {                                                                                                                       \
+                next = (node->field.sle.next[lvl] == slist->slh_tail) ? NULL : node->field.sle.next[lvl];                           \
                 fprintf(os, "\"HeadNode%zu\":f%zu -> ", nsg, lvl);                                                                  \
-                __skip_dot_write_node_##decl(os, nsg, node->field.sle.next[lvl]);                                                   \
+                __skip_dot_write_node_##decl(os, nsg, next);                                                                        \
                 fprintf(os, ":w%zu [];\n", lvl);                                                                                    \
             }                                                                                                                       \
             fprintf(os, "\n");                                                                                                      \
@@ -1605,12 +1621,13 @@
         /* The tail, sentinal node */                                                                                               \
         node = slist->slh_head;                                                                                                     \
         if (letitgo) {                                                                                                              \
-            __skip_dot_write_node_##decl(os, nsg, slist->slh_tail);                                                                 \
-            fprintf(os, "[label = \"");                                                                                             \
+            __skip_dot_write_node_##decl(os, nsg, NULL);                                                                            \
+            fprintf(os, " [label = \"");                                                                                            \
             node = slist->slh_tail;                                                                                                 \
-            __SKIP_NEXT_ENTRIES_T2B(field, node)                                                                                    \
-            {                                                                                                                       \
-                fprintf(os, "<w%zu> %p", lvl, (void *)node);                                                                        \
+            /* __SKIP_NEXT_ENTRIES_T2B(field, node) */                                                                              \
+            for (size_t lvl = slist->level; lvl != (size_t)-1; lvl--) {                                                             \
+                next = (node->field.sle.next[lvl] == slist->slh_tail) ? NULL : node->field.sle.next[lvl];                           \
+                fprintf(os, "<w%zu> NULL", lvl);                                                                                    \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
