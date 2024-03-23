@@ -53,7 +53,7 @@ SKIPLIST_DECL(
         new->key = node->key;
         char *nv = calloc(strlen(node->value) + 1, sizeof(char));
         if (nv == NULL)
-            return NULL; // leaks some memory... TODO
+            rc = ENOMEM; // leaks some memory... TODO
         new->value = strncpy(nv, node->value, strlen(node->value));
     },
     /* size in bytes of the content stored in an entry by you */

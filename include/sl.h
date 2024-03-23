@@ -776,21 +776,48 @@
      * Locates a node in the list that equals the `new` node and then                                                                                 \
      * uses the `update_node_blk` to update the contents.                                                                                             \
      *                                                                                                                                                \
-     *                                                                                                                                                \
      * WARNING: Do not update the portion of the node used for ordering                                                                               \
      * (e.g. `key`) unless you really know what you're doing.                                                                                         \
      */                                                                                                                                               \
-    int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *new)                                                                               \
+    int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *n)                                                                                 \
     {                                                                                                                                                 \
-        decl##_node_t *node;                                                                                                                          \
+        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
+        int np, rc = 0;                                                                                                                               \
+        size_t len;                                                                                                                                   \
+        decl##_node_t *node, *new, **path = (decl##_node_t **)&apath;                                                                                 \
                                                                                                                                                       \
-        if (slist == NULL || new == NULL)                                                                                                             \
+        if (slist == NULL || n == NULL)                                                                                                               \
             return -1;                                                                                                                                \
                                                                                                                                                       \
-        node = prefix##skip_position_eq_##decl(slist, new);                                                                                           \
+        /* Allocate a buffer */                                                                                                                       \
+        if (SKIPLIST_MAX_HEIGHT == 1) {                                                                                                               \
+            path = malloc(sizeof(decl##_node_t *) * slist->max + 1);                                                                                  \
+            if (path == NULL)                                                                                                                         \
+                return ENOMEM;                                                                                                                        \
+        }                                                                                                                                             \
+                                                                                                                                                      \
+        len = __skip_locate_##decl(slist, n, path);                                                                                                   \
+        node = path[0];                                                                                                                               \
+                                                                                                                                                      \
+        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                                 \
+            free(path);                                                                                                                               \
+                                                                                                                                                      \
         if (node) {                                                                                                                                   \
+            np = __skip_preserve_##decl(slist, path, len);                                                                                            \
+            if (np > 0)                                                                                                                               \
+                return np;                                                                                                                            \
+            if (np < 0 && node->field.sle.gen < slist->gen) {                                                                                         \
+                /* find the new node which was path[0], so the np'th in the                                                                           \
+                   slh_pres linked list */                                                                                                            \
+                new = slist->slh_pres;                                                                                                                \
+                while (np++ < 0)                                                                                                                      \
+                    new = new->field.sle.next[0];                                                                                                     \
+                new->field.sle.prev = (decl##_node_t *)0x1;                                                                                           \
+                archive_node_blk;                                                                                                                     \
+            }                                                                                                                                         \
+            new = n;                                                                                                                                  \
             update_node_blk;                                                                                                                          \
-            return 0;                                                                                                                                 \
+            return rc;                                                                                                                                \
         }                                                                                                                                             \
         return -1;                                                                                                                                    \
     }                                                                                                                                                 \
@@ -892,7 +919,9 @@
         node = slist->slh_pres;                                                                                                                       \
         while (node) {                                                                                                                                \
             next = node->field.sle.next[0];                                                                                                           \
-            prefix##skip_free_node_##decl(node);                                                                                                      \
+            if (next->field.sle.prev)                                                                                                                 \
+                free_node_blk;                                                                                                                        \
+            free(node);                                                                                                                               \
         }                                                                                                                                             \
                                                                                                                                                       \
         free(slist->slh_head);                                                                                                                        \
@@ -964,6 +993,7 @@
                 prefix##skip_free_node_##decl(node);                                                                                                  \
             }                                                                                                                                         \
             if (node->field.sle.gen == gen) {                                                                                                         \
+                node->field.sle.prev = NULL;                                                                                                          \
                 if (node->field.sle.next[1] != 0) {                                                                                                   \
                     node->field.sle.next[1] = NULL;                                                                                                   \
                     prefix##skip_insert_dup_##decl(slist, node);                                                                                      \
@@ -1022,12 +1052,13 @@
      */                                                                                                                                               \
     decl##_archive_t *prefix##skip_to_bytes_##decl(decl##_t *slist)                                                                                   \
     {                                                                                                                                                 \
+        int rc = 0;                                                                                                                                   \
         size_t size, bytes, i;                                                                                                                        \
         decl##_archive_t *archive;                                                                                                                    \
         decl##_node_t *node, *new;                                                                                                                    \
                                                                                                                                                       \
         if (slist == NULL)                                                                                                                            \
-            return 0;                                                                                                                                 \
+            return NULL;                                                                                                                              \
                                                                                                                                                       \
         bytes = sizeof(decl##_archive_t) + (slist->length * sizeof(decl##_node_t));                                                                   \
         node = prefix##skip_head_##decl(slist);                                                                                                       \
@@ -1052,6 +1083,8 @@
             decl##_node_t *n = (decl##_node_t *)archive->nodes + (i++ * sizeof(decl##_node_t));                                                       \
             new = (decl##_node_t *)&n;                                                                                                                \
             archive_node_blk;                                                                                                                         \
+            if (rc)                                                                                                                                   \
+                return NULL;                                                                                                                          \
             node = prefix##skip_next_node_##decl(slist, node);                                                                                        \
         }                                                                                                                                             \
         return archive;                                                                                                                               \
