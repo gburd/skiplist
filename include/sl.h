@@ -461,10 +461,16 @@
     static int __skip_preserve_##decl(decl##_t *slist, decl##_node_t **path, size_t len)                                                              \
     {                                                                                                                                                 \
         int rc = 0, n = 0;                                                                                                                            \
-        size_t i;                                                                                                                                     \
-        decl##_node_t *node = path[0];                                                                                                                \
+        size_t i = 0;                                                                                                                                 \
+        decl##_node_t *node;                                                                                                                          \
+                                                                                                                                                      \
+        if (path == NULL)                                                                                                                             \
+            return 0;                                                                                                                                 \
                                                                                                                                                       \
         for (i = 0; i < len; i++) {                                                                                                                   \
+            node = path[i];                                                                                                                           \
+            if (node == NULL)                                                                                                                         \
+                continue;                                                                                                                             \
             if (path[i]->field.sle.gen < slist->gen) {                                                                                                \
                 if (path[i] == slist->slh_head || path[i] == slist->slh_tail)                                                                         \
                     continue;                                                                                                                         \
