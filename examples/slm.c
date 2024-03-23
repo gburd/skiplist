@@ -48,7 +48,7 @@ SKIPLIST_DECL(
     slex, api_, entries,
     /* free node */ { free(node->value); },
     /* update node */ { node->value = new->value; },
-    /* snapshot node */
+    /* archive a node */
     {
         new->key = node->key;
         char *nv = calloc(strlen(node->value) + 1, sizeof(char));
@@ -202,11 +202,13 @@ main()
         return rc;
     api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 
+#if 0 //TODO
     /* Test creating a snapshot of an empty Skiplist */
-    slex_snap_t *snap = api_skip_snapshot_slex(list);
+    slex_t *snap = api_skip_snapshot_slex(list);
     slex_t *restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
     api_skip_dispose_snapshot_slex(snap);
     api_skip_destroy_slex(restored);
+#endif
 
     /* Insert 7 key/value pairs into the list. */
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
@@ -229,7 +231,7 @@ main()
     api_skip_del_slex(list, 0);
     api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 
-#if 0
+#if 0 //TODO
     snap = api_skip_snapshot_slex(list);
     restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
     api_skip_dispose_snapshot_slex(snap);
