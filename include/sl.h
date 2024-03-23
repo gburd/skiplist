@@ -261,7 +261,7 @@
                                                                                                                                                       \
     /* Skip List structure and type */                                                                                                                \
     typedef struct decl {                                                                                                                             \
-        size_t level, length, max, gen;                                                                                                               \
+        size_t level, length, max, gen, max_gen;                                                                                                      \
         int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                          \
         void *aux;                                                                                                                                    \
         decl##_node_t *slh_head;                                                                                                                      \
@@ -461,7 +461,14 @@
                 return -1;                                                                                                                            \
             }                                                                                                                                         \
             level = __skip_toss_##decl(slist->max - 1);                                                                                               \
+            n->field.sle.gen = slist->gen;                                                                                                            \
             n->field.sle.height = level;                                                                                                              \
+            /* preserve nodes for snapshots if necessary */                                                                                           \
+            for (i = 0; i < len; i++) {                                                                                                               \
+                if (path[i]->field.sle.gen >= slist->max_gen) {                                                                                       \
+                }                                                                                                                                     \
+            }                                                                                                                                         \
+                                                                                                                                                      \
             for (i = slist->slh_head->field.sle.height + 1; i < n->field.sle.height + 1; i++) {                                                       \
                 path[i + 1] = slist->slh_tail;                                                                                                        \
             }                                                                                                                                         \
@@ -827,7 +834,10 @@
         if (slist == NULL)                                                                                                                            \
             return 0;                                                                                                                                 \
                                                                                                                                                       \
-        return ++slist->gen;                                                                                                                          \
+        slist->gen++;                                                                                                                                 \
+        if (slist->gen > slist->max_gen)                                                                                                              \
+            slist->max_gen = slist->gen;                                                                                                              \
+        return slist->gen;                                                                                                                            \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* -- skip_restore_snapshot_                                                                                                                      \
@@ -889,7 +899,7 @@
             prev = node;                                                                                                                              \
             node = next;                                                                                                                              \
         }                                                                                                                                             \
-        slist->gen = gen;                                                                                                                             \
+        slist->max_gen = gen;                                                                                                                         \
         return slist;                                                                                                                                 \
     }                                                                                                                                                 \
                                                                                                                                                       \
@@ -921,7 +931,7 @@
             prev = node;                                                                                                                              \
             node = next;                                                                                                                              \
         }                                                                                                                                             \
-        slist->gen = gen - 1;                                                                                                                         \
+        slist->max_gen = (gen == 0 ? 0 : gen - 1);                                                                                                    \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* Archive of a Skip List */                                                                                                                      \
