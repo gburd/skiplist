@@ -478,7 +478,10 @@
              *   c) determine if this is a duplicate, if so we set the                                                                                \
              *      sle.next[1] field to 0x1 as a reminder to re-insert                                                                               \
              *      this element as a duplicate in the restore function.                                                                              \
-             *   d) ignore the head and the tail nodes in path[]                                                                                      \
+             *   d) insert the node's copy into the slh_pres singly-linked                                                                            \
+             *      list.                                                                                                                             \
+             * Meanwhile, don't duplicate head and the tail nodes if they                                                                             \
+             * are in the path[].                                                                                                                     \
              */                                                                                                                                       \
             for (i = 0; i < len; i++) {                                                                                                               \
                 if (path[i]->field.sle.gen < slist->gen) {                                                                                            \
@@ -506,6 +509,13 @@
                     if (__skip_key_compare_##decl(slist, dest, dest->field.sle.next[0], slist->aux) == 0 ||                                           \
                         __skip_key_compare_##decl(slist, dest, dest->field.sle.prev, slist->aux) == 0)                                                \
                         dest->field.sle.next[0] = (decl##_node_t *)0x1;                                                                               \
+                                                                                                                                                      \
+                    if (slist->slh_pres == NULL)                                                                                                      \
+                        slist->slh_pres = dest;                                                                                                       \
+                    else {                                                                                                                            \
+                        dest->field.sle.next[0] = slist->slh_pres;                                                                                    \
+                        slist->slh_pres = dest;                                                                                                       \
+                    }                                                                                                                                 \
                 }                                                                                                                                     \
             }                                                                                                                                         \
                                                                                                                                                       \
@@ -906,8 +916,7 @@
          *  d) set slist's gen to `gen`                                                                                                               \
          *                                                                                                                                            \
          * NOTES:                                                                                                                                     \
-         * - the `node->field.sle.prev` in this context is actually the "next"                                                                        \
-         *   node in the `slh_pres` singly-linked list                                                                                                \
+         * - the `node->field.sle.next[0]` forms a singly-linked list.                                                                                \
          */                                                                                                                                           \
                                                                                                                                                       \
         SKIPLIST_EACH_H2T(decl, prefix, slist, node, i)                                                                                               \
@@ -920,12 +929,12 @@
         prev = NULL;                                                                                                                                  \
         node = slist->slh_pres;                                                                                                                       \
         while (node) {                                                                                                                                \
-            next = node->field.sle.prev;                                                                                                              \
+            next = node->field.sle.next[0];                                                                                                           \
             if (node->field.sle.gen > gen) {                                                                                                          \
                 if (prev == NULL)                                                                                                                     \
                     slist->slh_pres = next;                                                                                                           \
                 else                                                                                                                                  \
-                    prev->field.sle.prev = next;                                                                                                      \
+                    prev->field.sle.next[0] = next;                                                                                                   \
                 prefix##skip_free_node_##decl(node);                                                                                                  \
             }                                                                                                                                         \
             if (node->field.sle.gen == gen) {                                                                                                         \
@@ -960,12 +969,12 @@
         prev = NULL;                                                                                                                                  \
         node = slist->slh_pres;                                                                                                                       \
         while (node) {                                                                                                                                \
-            next = node->field.sle.prev;                                                                                                              \
+            next = node->field.sle.next[0];                                                                                                           \
             if (node->field.sle.gen >= gen) {                                                                                                         \
                 if (prev == NULL)                                                                                                                     \
                     slist->slh_pres = next;                                                                                                           \
                 else                                                                                                                                  \
-                    prev->field.sle.prev = next;                                                                                                      \
+                    prev->field.sle.next[0] = next;                                                                                                   \
                 prefix##skip_free_node_##decl(node);                                                                                                  \
             }                                                                                                                                         \
             prev = node;                                                                                                                              \
