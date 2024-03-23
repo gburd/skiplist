@@ -239,18 +239,18 @@
         fn_blk                                                                          \
     }
 
-#define SKIPLIST_EACH_H2T(decl, prefix, list, node, iter) \
-    for (iter = 0, (node) = prefix##skip_head_##decl(list); (node) != NULL; iter++, (node) = prefix##skip_next_node_##decl(list, node))
+#define SKIPLIST_EACH_H2T(decl, prefix, list, elm, iter) \
+    for (iter = 0, (elm) = prefix##skip_head_##decl(list); (elm) != NULL; iter++, (elm) = prefix##skip_next_node_##decl(list, elm))
 
-#define SKIPLIST_EACH_T2H(decl, prefix, list, node, iter)                                                \
-    for (iter = prefix##skip_size_##decl(list), (node) = prefix##skip_tail_##decl(list); (node) != NULL; \
-         iter--, (node) = prefix##skip_prev_node_##decl(list, node))
+#define SKIPLIST_EACH_T2H(decl, prefix, list, elm, iter)                                                \
+    for (iter = prefix##skip_size_##decl(list), (elm) = prefix##skip_tail_##decl(list); (elm) != NULL; \
+         iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
 
-#define __SKIP_NEXT_ENTRIES_T2B(field, _node_) for (size_t lvl = _node_->field.sle.height; lvl != (size_t)-1; lvl--)
+#define __SKIP_NEXT_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle.height; lvl != (size_t)-1; lvl--)
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
-#define __SKIP_NEXT_ENTRIES_B2T(field, _node_) for (size_t lvl = 0; lvl <= _node_->field.sle.height; lvl++)
-#define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == _node_->field.sle.height)
+#define __SKIP_NEXT_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl <= elm->field.sle.height; lvl++)
+#define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == elm->field.sle.height)
 
 /*
  * Skip List declarations and access methods.
