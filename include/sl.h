@@ -436,9 +436,76 @@
         return len;                                                                                                                                   \
     }                                                                                                                                                 \
                                                                                                                                                       \
+    /* -- __skip_preserve_                                                                                                                            \
+     * Preserve nodes for snapshots if necessary. Returns > 0 are                                                                                     \
+     * errors, 0 means nothing preserved, negative number represents                                                                                  \
+     * the number of nodes preserved.                                                                                                                 \
+     *                                                                                                                                                \
+     * ALGORITHM:                                                                                                                                     \
+     * Foreach node in `path`, if the generation in that element                                                                                      \
+     * is less than the current generation for the list then                                                                                          \
+     * that node must be preserved before being mutated for this                                                                                      \
+     * insert. So we:                                                                                                                                 \
+     *   a) allocate a new node and copy this node into it without                                                                                    \
+     *      copying the user-supplied additional memory (that will                                                                                    \
+     *      happen iff an _update() is called on the node).                                                                                           \
+     *   b) zero out the next sle.prev/next[] pointers                                                                                                \
+     *   c) determine if this is a duplicate, if so we set the                                                                                        \
+     *      sle.next[1] field to 0x1 as a reminder to re-insert                                                                                       \
+     *      this element as a duplicate in the restore function.                                                                                      \
+     *   d) insert the node's copy into the slh_pres singly-linked                                                                                    \
+     *      list.                                                                                                                                     \
+     * Meanwhile, don't duplicate head and the tail nodes if they                                                                                     \
+     * are in the path[].                                                                                                                             \
+     */                                                                                                                                               \
+    static int __skip_preserve_##decl(decl##_t *slist, decl##_node_t **path, size_t len)                                                              \
+    {                                                                                                                                                 \
+        int rc = 0, n = 0;                                                                                                                            \
+        size_t i;                                                                                                                                     \
+        decl##_node_t *node = path[0];                                                                                                                \
+                                                                                                                                                      \
+        for (i = 0; i < len; i++) {                                                                                                                   \
+            if (path[i]->field.sle.gen < slist->gen) {                                                                                                \
+                if (path[i] == slist->slh_head || path[i] == slist->slh_tail)                                                                         \
+                    continue;                                                                                                                         \
+                decl##_node_t *src = node, *dest, *this;                                                                                              \
+                size_t amt = sizeof(src);                                                                                                             \
+                char *d = NULL;                                                                                                                       \
+                const char *s = (const char *)src;                                                                                                    \
+                rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                    \
+                if (rc)                                                                                                                               \
+                    return rc;                                                                                                                        \
+                d = (char *)dest;                                                                                                                     \
+                for (size_t i = 0; i < amt; i++)                                                                                                      \
+                    d[i] = s[i];                                                                                                                      \
+                                                                                                                                                      \
+                this = dest;                                                                                                                          \
+                this->field.sle.prev = NULL;                                                                                                          \
+                __SKIP_NEXT_ENTRIES_B2T(field, this)                                                                                                  \
+                {                                                                                                                                     \
+                    this->field.sle.next[lvl] = NULL;                                                                                                 \
+                }                                                                                                                                     \
+                                                                                                                                                      \
+                if (__skip_key_compare_##decl(slist, dest, dest->field.sle.next[0], slist->aux) == 0 ||                                               \
+                    __skip_key_compare_##decl(slist, dest, dest->field.sle.prev, slist->aux) == 0)                                                    \
+                    dest->field.sle.next[0] = (decl##_node_t *)0x1;                                                                                   \
+                                                                                                                                                      \
+                if (slist->slh_pres == NULL)                                                                                                          \
+                    slist->slh_pres = dest;                                                                                                           \
+                else {                                                                                                                                \
+                    dest->field.sle.next[0] = slist->slh_pres;                                                                                        \
+                    slist->slh_pres = dest;                                                                                                           \
+                }                                                                                                                                     \
+                n++;                                                                                                                                  \
+            }                                                                                                                                         \
+        }                                                                                                                                             \
+        return -n;                                                                                                                                    \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
     /* -- __skip_insert_ */                                                                                                                           \
     static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *n, int flags)                                                                     \
     {                                                                                                                                                 \
+        int rc = 0;                                                                                                                                   \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
         size_t i, len, level;                                                                                                                         \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                       \
@@ -463,62 +530,9 @@
             level = __skip_toss_##decl(slist->max - 1);                                                                                               \
             n->field.sle.gen = slist->gen;                                                                                                            \
             n->field.sle.height = level;                                                                                                              \
-                                                                                                                                                      \
-            /* preserve nodes for snapshots if necessary                                                                                              \
-             *                                                                                                                                        \
-             * ALGORITHM:                                                                                                                             \
-             * Foreach node in `path`, if the generation in that element                                                                              \
-             * is less than the current generation for the list then                                                                                  \
-             * that node must be preserved before being mutated for this                                                                              \
-             * insert. So we:                                                                                                                         \
-             *   a) allocate a new node and copy this node into it without                                                                            \
-             *      copying the user-supplied additional memory (that will                                                                            \
-             *      happen iff an _update() is called on the node).                                                                                   \
-             *   b) zero out the next sle.prev/next[] pointers                                                                                        \
-             *   c) determine if this is a duplicate, if so we set the                                                                                \
-             *      sle.next[1] field to 0x1 as a reminder to re-insert                                                                               \
-             *      this element as a duplicate in the restore function.                                                                              \
-             *   d) insert the node's copy into the slh_pres singly-linked                                                                            \
-             *      list.                                                                                                                             \
-             * Meanwhile, don't duplicate head and the tail nodes if they                                                                             \
-             * are in the path[].                                                                                                                     \
-             */                                                                                                                                       \
-            for (i = 0; i < len; i++) {                                                                                                               \
-                if (path[i]->field.sle.gen < slist->gen) {                                                                                            \
-                    if (path[i] == slist->slh_head || path[i] == slist->slh_tail)                                                                     \
-                        continue;                                                                                                                     \
-                    int rc;                                                                                                                           \
-                    decl##_node_t *src = node, *dest, *this;                                                                                          \
-                    size_t amt = sizeof(src);                                                                                                         \
-                    char *d = NULL;                                                                                                                   \
-                    const char *s = (const char *)src;                                                                                                \
-                    rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                \
-                    if (rc)                                                                                                                           \
-                        return rc;                                                                                                                    \
-                    d = (char *)dest;                                                                                                                 \
-                    for (size_t i = 0; i < amt; i++)                                                                                                  \
-                        d[i] = s[i];                                                                                                                  \
-                                                                                                                                                      \
-                    this = dest;                                                                                                                      \
-                    this->field.sle.prev = NULL;                                                                                                      \
-                    __SKIP_NEXT_ENTRIES_B2T(field, this)                                                                                              \
-                    {                                                                                                                                 \
-                        this->field.sle.next[lvl] = NULL;                                                                                             \
-                    }                                                                                                                                 \
-                                                                                                                                                      \
-                    if (__skip_key_compare_##decl(slist, dest, dest->field.sle.next[0], slist->aux) == 0 ||                                           \
-                        __skip_key_compare_##decl(slist, dest, dest->field.sle.prev, slist->aux) == 0)                                                \
-                        dest->field.sle.next[0] = (decl##_node_t *)0x1;                                                                               \
-                                                                                                                                                      \
-                    if (slist->slh_pres == NULL)                                                                                                      \
-                        slist->slh_pres = dest;                                                                                                       \
-                    else {                                                                                                                            \
-                        dest->field.sle.next[0] = slist->slh_pres;                                                                                    \
-                        slist->slh_pres = dest;                                                                                                       \
-                    }                                                                                                                                 \
-                }                                                                                                                                     \
-            }                                                                                                                                         \
-                                                                                                                                                      \
+            rc = __skip_preserve_##decl(slist, path, len);                                                                                            \
+            if (rc > 0)                                                                                                                               \
+                return rc;                                                                                                                            \
             for (i = slist->slh_head->field.sle.height + 1; i < n->field.sle.height + 1; i++) {                                                       \
                 path[i + 1] = slist->slh_tail;                                                                                                        \
             }                                                                                                                                         \
@@ -540,7 +554,7 @@
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                             \
                 free(path);                                                                                                                           \
         }                                                                                                                                             \
-        return 0;                                                                                                                                     \
+        return rc;                                                                                                                                    \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* -- skip_insert_ */                                                                                                                             \
@@ -784,8 +798,9 @@
     /* -- skip_remove_node_ */                                                                                                                        \
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                            \
     {                                                                                                                                                 \
-        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
+        int np = 0;                                                                                                                                   \
         size_t i, len, level;                                                                                                                         \
+        static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                       \
                                                                                                                                                       \
         if (slist == NULL || n == NULL)                                                                                                               \
@@ -803,6 +818,9 @@
         len = __skip_locate_##decl(slist, n, path);                                                                                                   \
         node = path[0];                                                                                                                               \
         if (node) {                                                                                                                                   \
+            np = __skip_preserve_##decl(slist, path, len);                                                                                            \
+            if (np > 0)                                                                                                                               \
+                return np;                                                                                                                            \
             node->field.sle.next[0]->field.sle.prev = node->field.sle.prev;                                                                           \
             for (i = 1; i <= len; i++) {                                                                                                              \
                 if (path[i]->field.sle.next[i - 1] != node)                                                                                           \
@@ -818,7 +836,8 @@
             }                                                                                                                                         \
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                             \
                 free(path);                                                                                                                           \
-            free_node_blk;                                                                                                                            \
+            if (np == 0)                                                                                                                              \
+                free_node_blk;                                                                                                                        \
                                                                                                                                                       \
             /* Find all levels in the first element in the list that point                                                                            \
                at the tail and shrink the level. */                                                                                                   \
