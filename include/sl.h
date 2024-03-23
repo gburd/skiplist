@@ -836,6 +836,7 @@
             }                                                                                                                                         \
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                             \
                 free(path);                                                                                                                           \
+            /* if we didn't preserve any nodes we can free this one */                                                                                \
             if (np == 0)                                                                                                                              \
                 free_node_blk;                                                                                                                        \
                                                                                                                                                       \
@@ -887,6 +888,12 @@
             prefix##skip_free_node_##decl(node);                                                                                                      \
             node = next;                                                                                                                              \
         } while (node != NULL);                                                                                                                       \
+                                                                                                                                                      \
+        node = slist->slh_pres;                                                                                                                       \
+        while (node) {                                                                                                                                \
+            next = node->field.sle.next[0];                                                                                                           \
+            prefix##skip_free_node_##decl(node);                                                                                                      \
+        }                                                                                                                                             \
                                                                                                                                                       \
         free(slist->slh_head);                                                                                                                        \
         free(slist->slh_tail);                                                                                                                        \
