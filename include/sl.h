@@ -166,7 +166,7 @@
     struct __skiplist_##decl_entry {   \
         struct __skiplist_##decl_idx { \
             struct type *prev, **next; \
-            size_t height;             \
+            size_t height, gen;        \
         } sle;                         \
     }
 
@@ -261,11 +261,12 @@
                                                                                                                                                       \
     /* Skip List structure and type */                                                                                                                \
     typedef struct decl {                                                                                                                             \
-        size_t level, length, max;                                                                                                                    \
+        size_t level, length, max, gen;                                                                                                               \
         int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                          \
         void *aux;                                                                                                                                    \
         decl##_node_t *slh_head;                                                                                                                      \
         decl##_node_t *slh_tail;                                                                                                                      \
+        decl##_node_t *slh_pres;                                                                                                                      \
     } decl##_t;                                                                                                                                       \
                                                                                                                                                       \
     /* Skip List comparison function type */                                                                                                          \
@@ -324,6 +325,7 @@
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                                           \
         if (n == NULL)                                                                                                                                \
             return ENOMEM;                                                                                                                            \
+        n->field.sle.gen = slist->gen;                                                                                                                \
         n->field.sle.height = 0;                                                                                                                      \
         n->field.sle.next = (decl##_node_t **)((uintptr_t)n + sizeof(decl##_node_t));                                                                 \
         *node = n;                                                                                                                                    \
@@ -338,6 +340,7 @@
         int rc = 0;                                                                                                                                   \
         size_t i;                                                                                                                                     \
                                                                                                                                                       \
+        slist->gen = 1;                                                                                                                               \
         slist->length = 0;                                                                                                                            \
         slist->max = (size_t)(max < 0 ? -max : max);                                                                                                  \
         slist->max = SKIPLIST_MAX_HEIGHT == 1 ? slist->max : SKIPLIST_MAX_HEIGHT;                                                                     \
@@ -721,8 +724,8 @@
         return -1;                                                                                                                                    \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_remove_ */                                                                                                                             \
-    int prefix##skip_remove_##decl(decl##_t *slist, decl##_node_t *n)                                                                                 \
+    /* -- skip_remove_node_ */                                                                                                                        \
+    int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                            \
     {                                                                                                                                                 \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
         size_t i, len, level;                                                                                                                         \
@@ -814,35 +817,111 @@
         return 0;                                                                                                                                     \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_snapshot_ TODO/WIP                                                                                                                     \
+    /* -- skip_snapshot_                                                                                                                              \
      * A snapshot is a read-only view of a Skip List at a point in time.  Once                                                                        \
      * taken, a snapshot must be restored or disposed. Any number of snapshots                                                                        \
      * can be created.                                                                                                                                \
      */                                                                                                                                               \
-    decl##_t *prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                           \
+    size_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                              \
     {                                                                                                                                                 \
-        decl##_t *snap;                                                                                                                               \
-                                                                                                                                                      \
         if (slist == NULL)                                                                                                                            \
             return 0;                                                                                                                                 \
                                                                                                                                                       \
-        return snap;                                                                                                                                  \
+        return ++slist->gen;                                                                                                                          \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_restore_snapshot_ TODO/WIP */                                                                                                          \
+    /* -- skip_restore_snapshot_                                                                                                                      \
+     * Restores the Skiplist to generation `gen`.  Once you restore `gen` you                                                                         \
+     * can no longer access any generations > `gen`.                                                                                                  \
+     */                                                                                                                                               \
     decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, unsigned gen)                                                                     \
     {                                                                                                                                                 \
-        ((void)gen);                                                                                                                                  \
+        size_t i;                                                                                                                                     \
+        decl##_node_t *node, *next, *prev;                                                                                                            \
+                                                                                                                                                      \
         if (slist == NULL)                                                                                                                            \
-            return 0;                                                                                                                                 \
+            return NULL;                                                                                                                              \
+                                                                                                                                                      \
+        if (gen >= slist->gen || slist->slh_pres == NULL)                                                                                             \
+            return slist;                                                                                                                             \
+                                                                                                                                                      \
+        /* ALGORITHM:                                                                                                                                 \
+         * iterate over the preserved nodes (slist->slh_pres)                                                                                         \
+         *  a) remove nodes with node->gen > gen from slist                                                                                           \
+         *  b) remove nodes > gen from slh_pres and _free_node()                                                                                      \
+         *  c) restore nodes == gen by...                                                                                                             \
+         *     i) remove node from slh_pres list                                                                                                      \
+         *     ii) _insert(node) or                                                                                                                   \
+         *         _insert_dup() if node->field.sle_next[1] != 0 (clear that)                                                                         \
+         *  d) set slist's gen to `gen`                                                                                                               \
+         *                                                                                                                                            \
+         * NOTES:                                                                                                                                     \
+         * - the `node->field.sle.prev` in this context is actually the "next"                                                                        \
+         *   node in the `slh_pres` singly-linked list                                                                                                \
+         */                                                                                                                                           \
+                                                                                                                                                      \
+        SKIPLIST_EACH_H2T(decl, prefix, slist, node, i)                                                                                               \
+        {                                                                                                                                             \
+            ((void)i);                                                                                                                                \
+            if (node->field.sle.gen > gen)                                                                                                            \
+                prefix##skip_remove_node_##decl(slist, node);                                                                                         \
+        }                                                                                                                                             \
+                                                                                                                                                      \
+        prev = NULL;                                                                                                                                  \
+        node = slist->slh_pres;                                                                                                                       \
+        while (node) {                                                                                                                                \
+            next = node->field.sle.prev;                                                                                                              \
+            if (node->field.sle.gen > gen) {                                                                                                          \
+                if (prev == NULL)                                                                                                                     \
+                    slist->slh_pres = next;                                                                                                           \
+                else                                                                                                                                  \
+                    prev->field.sle.prev = next;                                                                                                      \
+                prefix##skip_free_node_##decl(node);                                                                                                  \
+            }                                                                                                                                         \
+            if (node->field.sle.gen == gen) {                                                                                                         \
+                if (node->field.sle.next[1] != 0) {                                                                                                   \
+                    node->field.sle.next[1] = NULL;                                                                                                   \
+                    prefix##skip_insert_dup_##decl(slist, node);                                                                                      \
+                } else {                                                                                                                              \
+                    prefix##skip_insert_##decl(slist, node);                                                                                          \
+                }                                                                                                                                     \
+            }                                                                                                                                         \
+            prev = node;                                                                                                                              \
+            node = next;                                                                                                                              \
+        }                                                                                                                                             \
+        slist->gen = gen;                                                                                                                             \
         return slist;                                                                                                                                 \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /* -- skip_dispose_snapshot_ TODO/WIP */                                                                                                          \
+    /* -- skip_dispose_snapshot_                                                                                                                      \
+     * Removes from history all snapshots equal to or newer than (>=)                                                                                 \
+     * `gen`.                                                                                                                                         \
+     */                                                                                                                                               \
     void prefix##skip_dispose_snapshot_##decl(decl##_t *slist, unsigned gen)                                                                          \
     {                                                                                                                                                 \
-        ((void)slist);                                                                                                                                \
-        ((void)gen);                                                                                                                                  \
+        decl##_node_t *node, *next, *prev;                                                                                                            \
+                                                                                                                                                      \
+        if (slist == NULL)                                                                                                                            \
+            return;                                                                                                                                   \
+                                                                                                                                                      \
+        if (slist->slh_pres == NULL)                                                                                                                  \
+            return;                                                                                                                                   \
+                                                                                                                                                      \
+        prev = NULL;                                                                                                                                  \
+        node = slist->slh_pres;                                                                                                                       \
+        while (node) {                                                                                                                                \
+            next = node->field.sle.prev;                                                                                                              \
+            if (node->field.sle.gen >= gen) {                                                                                                         \
+                if (prev == NULL)                                                                                                                     \
+                    slist->slh_pres = next;                                                                                                           \
+                else                                                                                                                                  \
+                    prev->field.sle.prev = next;                                                                                                      \
+                prefix##skip_free_node_##decl(node);                                                                                                  \
+            }                                                                                                                                         \
+            prev = node;                                                                                                                              \
+            node = next;                                                                                                                              \
+        }                                                                                                                                             \
+        slist->gen = gen - 1;                                                                                                                         \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /* Archive of a Skip List */                                                                                                                      \
@@ -1209,7 +1288,7 @@
     {                                                                                        \
         decl##_node_t node;                                                                  \
         node.key = key;                                                                      \
-        return prefix##skip_remove_##decl(slist, &node);                                     \
+        return prefix##skip_remove_node_##decl(slist, &node);                                \
     }
 
 #define SKIPLIST_DECL_DOT(decl, prefix, field)                                                                                      \
