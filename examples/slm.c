@@ -38,6 +38,7 @@
 struct slex_node {
     int key;
     char *value;
+    /* NOTE: This _must_ be last element in node for snapshots to work!!! */
     SKIPLIST_ENTRY(slex_node) entries;
 };
 
@@ -53,8 +54,11 @@ SKIPLIST_DECL(
         new->key = node->key;
         char *nv = calloc(strlen(node->value) + 1, sizeof(char));
         if (nv == NULL)
-            rc = ENOMEM; // leaks some memory... TODO
-        new->value = strncpy(nv, node->value, strlen(node->value));
+            rc = ENOMEM;
+        else {
+            strncpy(nv, node->value, strlen(node->value));
+            new->value = nv;
+        }
     },
     /* size in bytes of the content stored in an entry by you */
     { size = strlen(node->value) + 1; })
@@ -179,18 +183,21 @@ shuffle(int *array, size_t n)
     }
 }
 
+//define DOT
 #define TEST_ARRAY_SIZE 8
 
 int
 main()
 {
-    int gen = 0, rc = 0;
+    int rc = 0;
 
+#ifdef DOT
     FILE *of = fopen("/tmp/slm.dot", "w");
     if (!of) {
         perror("Failed to open file /tmp/slm.dot");
         return 1;
     }
+#endif
 
     /* Allocate and initialize a Skiplist. */
     slex_t *list = (slex_t *)malloc(sizeof(slex_t));
@@ -200,43 +207,52 @@ main()
     rc = api_skip_init_slex(list, 12, __slm_key_compare);
     if (rc)
         return rc;
+#ifdef DOT
     api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
-
-#if 0 //TODO
-    /* Test creating a snapshot of an empty Skiplist */
-    slex_t *snap = api_skip_snapshot_slex(list);
-    slex_t *restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
-    api_skip_dispose_snapshot_slex(snap);
-    api_skip_destroy_slex(restored);
 #endif
 
+    /* Test creating a snapshot of an empty Skiplist */
+    size_t snp[TEST_ARRAY_SIZE * 2 + 10];
+    snp[0] = api_skip_snapshot_slex(list);
+
     /* Insert 7 key/value pairs into the list. */
+    int i;
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
     int array[(TEST_ARRAY_SIZE * 2) + 1];
     for (int j = 0, i = -amt; i <= amt; i++, j++)
         array[j] = i;
     shuffle(array, asz);
 
-    for (int i = 0; i < asz; i++) {
+    for (i = 0; i < asz; i++) {
         rc = api_skip_put_slex(list, array[i], to_lower(int_to_roman_numeral(array[i])));
+        snp[i + 1] = api_skip_snapshot_slex(list);
+#ifdef DOT
         api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+#endif
         char *v = api_skip_get_slex(list, array[i]);
         api_skip_set_slex(list, array[i], to_upper(v));
     }
+    int r = i;
     api_skip_dup_slex(list, -1, int_to_roman_numeral(-1));
+#ifdef DOT
     api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+#endif
     api_skip_dup_slex(list, 1, int_to_roman_numeral(1));
+#ifdef DOT
     api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+#endif
+    snp[++i] = api_skip_snapshot_slex(list);
 
     api_skip_del_slex(list, 0);
-    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+    snp[++i] = api_skip_snapshot_slex(list);
 
-#if 0 //TODO
-    snap = api_skip_snapshot_slex(list);
-    restored = api_skip_restore_snapshot_slex(snap, __skip_key_compare_slex);
-    api_skip_dispose_snapshot_slex(snap);
-    api_skip_destroy_slex(restored);
+#ifdef DOT
+    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
 #endif
+
+    slex_t *restored = api_skip_restore_snapshot_slex(list, snp[r]);
+    api_skip_dispose_snapshot_slex(list, r+1);
+    api_skip_destroy_slex(restored);
 
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
@@ -263,7 +279,9 @@ main()
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
     api_skip_destroy_slex(list);
+#ifdef DOT
     api_skip_dot_end_slex(of, gen);
     fclose(of);
+#endif
     return rc;
 }
