@@ -1027,9 +1027,22 @@
                     slist->slh_pres = next;                                                                                                           \
                 else                                                                                                                                  \
                     prev->field.sle.next[0] = next;                                                                                                   \
+                if (node->field.sle.next[0] == NULL)                                                                                                  \
+                    prev->field.sle.next[0] = NULL;                                                                                                   \
+                else                                                                                                                                  \
+                    prev->field.sle.next[0] = next;                                                                                                   \
                 prefix##skip_free_node_##decl(node);                                                                                                  \
             }                                                                                                                                         \
+            prev = NULL;                                                                                                                              \
             if (node->field.sle.gen == gen) {                                                                                                         \
+                if (prev == NULL)                                                                                                                     \
+                    slist->slh_pres = next;                                                                                                           \
+                else                                                                                                                                  \
+                    prev->field.sle.next[0] = next;                                                                                                   \
+                if (node->field.sle.next[0] == NULL)                                                                                                  \
+                    prev->field.sle.next[0] = NULL;                                                                                                   \
+                else                                                                                                                                  \
+                    prev->field.sle.next[0] = next;                                                                                                   \
                 node->field.sle.prev = NULL;                                                                                                          \
                 if (node->field.sle.next[1] != 0) {                                                                                                   \
                     node->field.sle.next[1] = NULL;                                                                                                   \
@@ -1275,6 +1288,15 @@
             }                                                                                                                                          \
         }                                                                                                                                              \
                                                                                                                                                        \
+        if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                                 \
+            __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node");                                       \
+            n_err++;                                                                                                                                   \
+            if (flags)                                                                                                                                 \
+                return n_err;                                                                                                                          \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        /* TODO: ensure that the entries structure is the first or last element                                                                        \
+           in a node so that snapshots work. */                                                                                                        \
         if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                                 \
             __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node");                                       \
             n_err++;                                                                                                                                   \
