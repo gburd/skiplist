@@ -1474,7 +1474,7 @@
         }                                                                                                                           \
         if (fn) {                                                                                                                   \
             fn(node, buf);                                                                                                          \
-            fprintf(os, " <f0> \u219F %zu \u226B %s \"\n", node->field.sle.height, buf);                                            \
+            fprintf(os, " <f0> \u219F %zu \u226B %s \"\n", node->field.sle.height + 1, buf);                                        \
         } else {                                                                                                                    \
             fprintf(os, " <f0> \u219F %zu \"\n", node->field.sle.height);                                                           \
         }                                                                                                                           \

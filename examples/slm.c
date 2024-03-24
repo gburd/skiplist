@@ -82,7 +82,7 @@ sprintf_slex_node(slex_node_t *node, char *buf)
  * extract data from within your nodes.
  */
 SKIPLIST_KV_ACCESS(
-    slex, api_, int, char *,
+    slex, api_, key, int, value, char *,
     /* query blk */ { query.key = key; },
     /* return blk */ { return node->value; })
 
@@ -179,7 +179,7 @@ shuffle(int *array, size_t n)
     }
 }
 
-#define TEST_ARRAY_SIZE 5
+#define TEST_ARRAY_SIZE 8
 
 int
 main()
