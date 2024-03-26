@@ -58,6 +58,8 @@ examples/%.o: examples/%.c
 examples/mls.c: examples/slm.c
 	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
 
+#	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e 's/^#\( [0-9]* ".*$$\)/\/\* \1 \*\//' | clang-format > examples/mls.c
+
 examples/mls: examples/mls.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
 
