@@ -134,7 +134,7 @@ to_lower(char *str)
 {
     char *p = str;
     for (; *p; ++p)
-        *p = *p >= 'A' && *p <= 'Z' ? *p | 0x60 : *p;
+        *p = (char)(*p >= 'A' && *p <= 'Z' ? *p | 0x60 : *p);
     return str;
 }
 
@@ -143,7 +143,7 @@ to_upper(char *str)
 {
     char *p = str;
     for (; *p; ++p)
-        *p = *p >= 'a' && *p <= 'z' ? *p & ~0x20 : *p;
+        *p = (char)(*p >= 'a' && *p <= 'z' ? *p & ~0x20 : *p);
     return str;
 }
 
@@ -196,14 +196,14 @@ shuffle(int *array, size_t n)
 #define INTEGRITY_CKH ((void)0)
 #endif
 
-//define SNAPSHOTS
+#define SNAPSHOTS
 #define DOT
 #define TEST_ARRAY_SIZE 5
 
 int
 main()
 {
-    int rc = 0;
+    int rc;
 
 #ifdef DOT
     size_t gen = 0;
@@ -223,7 +223,7 @@ main()
     if (rc)
         return rc;
 #ifdef DOT
-    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+    api_skip_dot_slex(of, list, gen++, "init", sprintf_slex_node);
 #endif
 
 #ifdef SNAPSHOTS
@@ -233,22 +233,26 @@ main()
 #endif
 
     /* Insert 7 key/value pairs into the list. */
-    int i;
+    int i, j;
+    char *numeral, msg[1024];
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
     int array[(TEST_ARRAY_SIZE * 2) + 1];
-    for (int j = 0, i = -amt; i <= amt; i++, j++)
+    for (j = 0, i = -amt; i <= amt; i++, j++)
         array[j] = i;
     shuffle(array, asz);
 
     for (i = 0; i < asz; i++) {
-        rc = api_skip_put_slex(list, array[i], to_lower(int_to_roman_numeral(array[i])));
+        numeral = int_to_roman_numeral(array[i]);
+        rc = api_skip_put_slex(list, array[i], to_lower(numeral));
+        //rc = api_skip_put_slex(list, array[i], numeral);
         INTEGRITY_CHK;
 #ifdef SNAPSHOTS
         snp[i + 1] = api_skip_snapshot_slex(list);
 #endif
         INTEGRITY_CHK;
 #ifdef DOT
-        api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+        sprintf(msg, "put key: %d value: %s", i, numeral);
+        api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
         INTEGRITY_CHK;
 #endif
         char *v = api_skip_get_slex(list, array[i]);
@@ -259,16 +263,20 @@ main()
 #ifdef SNAPSHOTS
     int r = i;
 #endif
-    api_skip_dup_slex(list, -1, int_to_roman_numeral(-1));
+    numeral = int_to_roman_numeral(-1);
+    api_skip_dup_slex(list, -1, numeral);
     INTEGRITY_CHK;
 #ifdef DOT
-    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
     INTEGRITY_CHK;
 #endif
-    api_skip_dup_slex(list, 1, int_to_roman_numeral(1));
+    numeral = int_to_roman_numeral(1);
+    api_skip_dup_slex(list, 1, numeral);
     INTEGRITY_CHK;
 #ifdef DOT
-    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
     INTEGRITY_CHK;
 #endif
 #ifdef SNAPSHOTS
@@ -284,7 +292,8 @@ main()
 #endif
 
 #ifdef DOT
-    api_skip_dot_slex(of, list, gen++, sprintf_slex_node);
+    sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
+    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
     INTEGRITY_CHK;
 #endif
 
