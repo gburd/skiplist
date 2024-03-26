@@ -314,7 +314,7 @@
         size_t level = 0;                                                                                                                             \
         double probability = 0.5;                                                                                                                     \
                                                                                                                                                       \
-        double random_value = (double)rand() / RAND_MAX; /* NOLINT(*-msc50-cpp) */                                                                    \
+        double random_value = (double)(rand() / RAND_MAX); /* NOLINT(*-msc50-cpp) */                                                                  \
         while (random_value < probability && level < max) {                                                                                           \
             level++;                                                                                                                                  \
             probability *= 0.5;                                                                                                                       \
@@ -529,7 +529,7 @@
         }                                                                                                                                             \
                                                                                                                                                       \
         /* (d) set duplicate flag */                                                                                                                  \
-        dest->field.sle.next[0] = (decl##_node_t *)is_dup;                                                                                            \
+        dest->field.sle.next[1] = (decl##_node_t *)is_dup;                                                                                            \
                                                                                                                                                       \
         /* (e) insert node into slh_pres list at head */                                                                                              \
         if (slist->slh_pres == NULL)                                                                                                                  \
@@ -564,6 +564,7 @@
     {                                                                                                                                                 \
         int rc = 0, n;                                                                                                                                \
         size_t i;                                                                                                                                     \
+        decl##_node_t *prev = NULL;                                                                                                                   \
                                                                                                                                                       \
         if (path == NULL)                                                                                                                             \
             return 0;                                                                                                                                 \
@@ -575,6 +576,10 @@
             /* No need to preserve the head or tail sentry nodes. */                                                                                  \
             if (path[i] == slist->slh_head || path[i] == slist->slh_tail)                                                                             \
                 continue;                                                                                                                             \
+            /* No need to preserve a node more than once. */                                                                                          \
+            if (path[i] == prev)                                                                                                                      \
+                continue;                                                                                                                             \
+            prev = path[i];                                                                                                                           \
                                                                                                                                                       \
             /* When the generation of the node in the path is < the list's                                                                            \
                current generation, we must preserve it. */                                                                                            \
@@ -1131,6 +1136,20 @@
      *                                                                                                                                                \
      * Restores the Skiplist to generation `gen`.  Once you restore `gen` you                                                                         \
      * can no longer access any generations > `gen`.                                                                                                  \
+     *                                                                                                                                                \
+     * ALGORITHM:                                                                                                                                     \
+     * iterate over the preserved nodes (slist->slh_pres)                                                                                             \
+     *  a) remove/free nodes with node->gen > gen from slist                                                                                          \
+     *  b) remove/free nodes > gen from slh_pres                                                                                                      \
+     *  c) restore nodes == gen by...                                                                                                                 \
+     *     i) remove node from slh_pres list                                                                                                          \
+     *     ii) _insert(node) or                                                                                                                       \
+     *         _insert_dup() if node->field.sle_next[1] != 0 (clear that)                                                                             \
+     *  d) set slist's gen to `gen`                                                                                                                   \
+     *                                                                                                                                                \
+     * NOTES:                                                                                                                                         \
+     * - Starting with slh_pres, the `node->field.sle.next[0]` form a                                                                                 \
+     *   singly-linked list.                                                                                                                          \
      */                                                                                                                                               \
     decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, unsigned gen)                                                                     \
     {                                                                                                                                                 \
@@ -1142,20 +1161,6 @@
                                                                                                                                                       \
         if (gen >= slist->gen || slist->slh_pres == NULL)                                                                                             \
             return slist;                                                                                                                             \
-                                                                                                                                                      \
-        /* ALGORITHM:                                                                                                                                 \
-         * iterate over the preserved nodes (slist->slh_pres)                                                                                         \
-         *  a) remove nodes with node->gen > gen from slist                                                                                           \
-         *  b) remove nodes > gen from slh_pres and _free_node()                                                                                      \
-         *  c) restore nodes == gen by...                                                                                                             \
-         *     i) remove node from slh_pres list                                                                                                      \
-         *     ii) _insert(node) or                                                                                                                   \
-         *         _insert_dup() if node->field.sle_next[1] != 0 (clear that)                                                                         \
-         *  d) set slist's gen to `gen`                                                                                                               \
-         *                                                                                                                                            \
-         * NOTES:                                                                                                                                     \
-         * - the `node->field.sle.next[0]` forms a singly-linked list.                                                                                \
-         */                                                                                                                                           \
                                                                                                                                                       \
         /* (a) */                                                                                                                                     \
         SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, i)                                                                                            \
