@@ -12,14 +12,25 @@
 
 #define DEBUG 1
 #define SKIPLIST_DEBUG slex
-
+//define SKIPLIST_MAX_HEIGHT 12
 /* Setting this will do two things:
  * 1) limit our max height across all instances of this datastructure.
  * 2) remove a heap allocation on frequently used paths, insert/remove/etc.
  * so, use it when you need it.
  */
-#define SKIPLIST_MAX_HEIGHT 12
 #include "../include/sl.h"
+
+//define INTEGRITY
+#ifdef INTEGRITY
+#define INTEGRITY_CHK __skip_integrity_check_slex(list, 0)
+#else
+#define INTEGRITY_CHK ((void)0)
+#endif
+
+//define SNAPSHOTS
+//define DOT
+#define TEST_ARRAY_SIZE 2000
+
 
 /*
  * SKIPLIST EXAMPLE:
@@ -189,17 +200,6 @@ shuffle(int *array, size_t n)
     }
 }
 
-#define INTEGRITY
-#ifdef INTEGRITY
-#define INTEGRITY_CHK __skip_integrity_check_slex(list, 0)
-#else
-#define INTEGRITY_CKH ((void)0)
-#endif
-
-#define SNAPSHOTS
-#define DOT
-#define TEST_ARRAY_SIZE 5
-
 int
 main()
 {
@@ -219,12 +219,16 @@ main()
     if (list == NULL)
         return ENOMEM;
 
-    rc = api_skip_init_slex(list, 12, __slm_key_compare);
+    rc = api_skip_init_slex(list, -12, __slm_key_compare);
     if (rc)
         return rc;
 #ifdef DOT
     api_skip_dot_slex(of, list, gen++, "init", sprintf_slex_node);
 #endif
+    if (api_skip_get_slex(list, 0) != NULL)
+        perror("found a non-existent item!");
+    api_skip_del_slex(list, 0);
+    INTEGRITY_CHK;
 
 #ifdef SNAPSHOTS
     /* Test creating a snapshot of an empty Skiplist */
@@ -234,7 +238,10 @@ main()
 
     /* Insert 7 key/value pairs into the list. */
     int i, j;
-    char *numeral, msg[1024];
+    char *numeral;
+#ifdef DOT
+    char msg[1024];
+#endif
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
     int array[(TEST_ARRAY_SIZE * 2) + 1];
     for (j = 0, i = -amt; i <= amt; i++, j++)
@@ -248,8 +255,8 @@ main()
         INTEGRITY_CHK;
 #ifdef SNAPSHOTS
         snp[i + 1] = api_skip_snapshot_slex(list);
-#endif
         INTEGRITY_CHK;
+#endif
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
         api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
@@ -285,6 +292,20 @@ main()
 #endif
 
     api_skip_del_slex(list, 0);
+    INTEGRITY_CHK;
+    if (api_skip_get_slex(list, 0) != NULL)
+        perror("found a deleted item!");
+    api_skip_del_slex(list, 0);
+    INTEGRITY_CHK;
+    if (api_skip_get_slex(list, 0) != NULL)
+        perror("found a deleted item!");
+    int key = TEST_ARRAY_SIZE + 1;
+    numeral = int_to_roman_numeral(key);
+    api_skip_del_slex(list, key);
+    INTEGRITY_CHK;
+    key = -(TEST_ARRAY_SIZE) - 1;
+    numeral = int_to_roman_numeral(key);
+    api_skip_del_slex(list, key);
     INTEGRITY_CHK;
 #ifdef SNAPSHOTS
     snp[++i] = api_skip_snapshot_slex(list);

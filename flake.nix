@@ -23,11 +23,12 @@
           packages = with pkgs; [
             autoconf
             bashInteractive
-            graphviz-nox
+            clang-tools
             ed
             gdb
-            clang-tools
+            graphviz-nox
             meson
+            python311Packages.rbtools
           ];
         };
         buildInputs = with pkgs; [

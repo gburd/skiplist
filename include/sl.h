@@ -161,14 +161,12 @@
  * forward pointers to nodes and has a height (a zero-based count of levels, so
  * a height of `0` means one (1) level and a height of `4` means five (5)
  * levels).
- *
- * NOTE: This _must_ be last element in your node for snapshots to work!!!
  */
 #define SKIPLIST_ENTRY(type)           \
     struct __skiplist_##decl_entry {   \
         struct __skiplist_##decl_idx { \
             struct type *prev, **next; \
-            size_t height, gen;        \
+            size_t height;             \
         } sle;                         \
     }
 
@@ -250,9 +248,11 @@
          iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
 
 #define __SKIP_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle.height; lvl != (size_t)-1; lvl--)
+#define __SKIP_ENTRIES_T2B_FROM(field, elm, off) for (size_t lvl = off; lvl != (size_t)-1; lvl--)
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
 #define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < elm->field.sle.height + 1; lvl++)
+#define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl < elm->field.sle.height + 1; lvl++)
 #define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == elm->field.sle.height)
 
 /*
@@ -265,12 +265,11 @@
                                                                                                                                                       \
     /* Skip List structure and type */                                                                                                                \
     typedef struct decl {                                                                                                                             \
-        size_t level, length, max, gen, max_gen;                                                                                                      \
+        size_t level, length, max;                                                                                                                    \
         int (*cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                          \
         void *aux;                                                                                                                                    \
         decl##_node_t *slh_head;                                                                                                                      \
         decl##_node_t *slh_tail;                                                                                                                      \
-        decl##_node_t *slh_pres;                                                                                                                      \
     } decl##_t;                                                                                                                                       \
                                                                                                                                                       \
     /* Skip List comparison function type */                                                                                                          \
@@ -295,6 +294,10 @@
     {                                                                                                                                                 \
         if (a == b)                                                                                                                                   \
             return 0;                                                                                                                                 \
+        if (a == NULL) \
+            return -1; \
+        if (b == NULL) \
+            return 1; \
         if (a == slist->slh_head || b == slist->slh_tail)                                                                                             \
             return -1;                                                                                                                                \
         if (a == slist->slh_tail || b == slist->slh_head)                                                                                             \
@@ -314,7 +317,7 @@
         size_t level = 0;                                                                                                                             \
         double probability = 0.5;                                                                                                                     \
                                                                                                                                                       \
-        double random_value = (double)(rand() / RAND_MAX); /* NOLINT(*-msc50-cpp) */                                                                  \
+        double random_value = (double)rand() / RAND_MAX; /* NOLINT(*-msc50-cpp) */                                                                  \
         while (random_value < probability && level < max) {                                                                                           \
             level++;                                                                                                                                  \
             probability *= 0.5;                                                                                                                       \
@@ -336,7 +339,6 @@
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                                           \
         if (n == NULL)                                                                                                                                \
             return ENOMEM;                                                                                                                            \
-        n->field.sle.gen = slist->gen;                                                                                                                \
         n->field.sle.height = 0;                                                                                                                      \
         n->field.sle.next = (decl##_node_t **)((uintptr_t)n + sizeof(decl##_node_t));                                                                 \
         *node = n;                                                                                                                                    \
@@ -354,7 +356,6 @@
         int rc = 0;                                                                                                                                   \
         size_t i;                                                                                                                                     \
                                                                                                                                                       \
-        slist->gen = 1;                                                                                                                               \
         slist->length = 0;                                                                                                                            \
         slist->max = (size_t)(max < 0 ? -max : max);                                                                                                  \
         slist->max = SKIPLIST_MAX_HEIGHT == 1 ? slist->max : SKIPLIST_MAX_HEIGHT;                                                                     \
@@ -373,7 +374,7 @@
             slist->slh_head->field.sle.next[i] = slist->slh_tail;                                                                                     \
         slist->slh_head->field.sle.prev = NULL;                                                                                                       \
                                                                                                                                                       \
-        slist->slh_tail->field.sle.height = slist->max;                                                                                               \
+        slist->slh_tail->field.sle.height = slist->max - 1;                                                                                           \
         for (i = 0; i < slist->max; i++)                                                                                                              \
             slist->slh_tail->field.sle.next[i] = NULL;                                                                                                \
         slist->slh_tail->field.sle.prev = slist->slh_head;                                                                                            \
@@ -446,6 +447,91 @@
     }                                                                                                                                                 \
                                                                                                                                                       \
     /**                                                                                                                                               \
+     * -- skip_next_node_                                                                                                                             \
+     *                                                                                                                                                \
+     * A node reference can be thought of as a cursor.  This moves the cursor                                                                         \
+     * to the next node in the list or returns NULL if the next is the tail.                                                                          \
+     */                                                                                                                                               \
+    decl##_node_t *prefix##skip_next_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                   \
+    {                                                                                                                                                 \
+        if (slist == NULL || n == NULL)                                                                                                               \
+            return NULL;                                                                                                                              \
+        if (n->field.sle.next[0] == slist->slh_tail)                                                                                                  \
+            return NULL;                                                                                                                              \
+        return n->field.sle.next[0];                                                                                                                  \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /**                                                                                                                                               \
+     * -- skip_prev_node_                                                                                                                             \
+     *                                                                                                                                                \
+     * A node reference can be thought of as a cursor.  This moves the cursor                                                                         \
+     * to the previous node in the list or returns NULL if the previous node                                                                          \
+     * is the head.                                                                                                                                   \
+     */                                                                                                                                               \
+    decl##_node_t *prefix##skip_prev_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                   \
+    {                                                                                                                                                 \
+        if (slist == NULL || n == NULL)                                                                                                               \
+            return NULL;                                                                                                                              \
+        if (n->field.sle.prev == slist->slh_head)                                                                                                     \
+            return NULL;                                                                                                                              \
+        return n->field.sle.prev;                                                                                                                     \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /**                                                                                                                                               \
+     * -- skip_empty_                                                                                                                                 \
+     *                                                                                                                                                \
+     * Release all nodes and their associated heap objects, but not the list                                                                          \
+     * itself. The list is still valid, only empty.                                                                                                   \
+     */                                                                                                                                               \
+    void prefix##skip_empty_##decl(decl##_t *slist)                                                                                                   \
+    {                                                                                                                                                 \
+        decl##_node_t *node, *next;                                                                                                                   \
+                                                                                                                                                      \
+        if (slist == NULL)                                                                                                                            \
+            return;                                                                                                                                   \
+        if (prefix##skip_is_empty_##decl(slist))                                                                                                      \
+            return;                                                                                                                                   \
+        node = prefix##skip_head_##decl(slist);                                                                                                       \
+        do {                                                                                                                                          \
+            next = prefix##skip_next_node_##decl(slist, node);                                                                                        \
+            prefix##skip_free_node_##decl(node);                                                                                                      \
+            node = next;                                                                                                                              \
+        } while (node != NULL);                                                                                                                       \
+                                                                                                                                                      \
+        while (node) {                                                                                                                                \
+            next = node->field.sle.next[0];                                                                                                           \
+            if (next->field.sle.prev)                                                                                                                 \
+                free_node_blk;                                                                                                                        \
+            free(node);                                                                                                                               \
+        }                                                                                                                                             \
+        return;                                                                                                                                       \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /**                                                                                                                                               \
+     * -- skip_to_array_                                                                                                                              \
+     *                                                                                                                                                \
+     * Returns a heap allocated array of nodes in the order they exist.                                                                               \
+     * This isn't maintained by the list, if you add/remove nodes it is                                                                               \
+     * no longer accurate. At [-1] is the length of the array.                                                                                        \
+     * NOTE: Caller must deallocate.                                                                                                                  \
+     */                                                                                                                                               \
+    decl##_node_t **prefix##skip_to_array_##decl(decl##_t *slist)                                                                                     \
+    {                                                                                                                                                 \
+        size_t nth, len = prefix##skip_size_##decl(slist);                                                                                            \
+        decl##_node_t *node, **nodes = NULL;                                                                                                          \
+        nodes = (decl##_node_t **)calloc(sizeof(decl##_node_t *), len + 1);                                                                           \
+        if (nodes != NULL) {                                                                                                                          \
+            nodes[0] = (decl##_node_t *)(uintptr_t)len;                                                                                               \
+            nodes++;                                                                                                                                  \
+            SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, nth)                                                                                      \
+            {                                                                                                                                         \
+                nodes[nth] = node;                                                                                                                    \
+            }                                                                                                                                         \
+        }                                                                                                                                             \
+        return nodes;                                                                                                                                 \
+    }                                                                                                                                                 \
+                                                                                                                                                      \
+    /**                                                                                                                                               \
      * -- __skip_locate_                                                                                                                              \
      *                                                                                                                                                \
      * Locates a node that matches another node updating `path` and then                                                                              \
@@ -465,7 +551,7 @@
         /* Find the node that matches `node` or NULL. */                                                                                              \
         i = slist->slh_head->field.sle.height;                                                                                                        \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                             \
                 elm = elm->field.sle.next[i];                                                                                                         \
             path[i + 1] = elm;                                                                                                                        \
             len++;                                                                                                                                    \
@@ -478,136 +564,20 @@
     }                                                                                                                                                 \
                                                                                                                                                       \
     /**                                                                                                                                               \
-     * -- __skip_preserve_node_                                                                                                                       \
-     *                                                                                                                                                \
-     * Preserve given node in the slh_pres list.                                                                                                      \
-     *                                                                                                                                                \
-     * ALGORITHM:                                                                                                                                     \
-     *   a) allocate a new node and copy this node into it without                                                                                    \
-     *      copying the user-supplied additional memory (that will                                                                                    \
-     *      happen iff an _update() is called on the node).                                                                                           \
-     *   b) determine if this is a duplicate, if so in (d) we set                                                                                     \
-     *      the sle.next[1] field to 0x1 as a reminder to re-insert                                                                                   \
-     *      this element as a duplicate in the restore function.                                                                                      \
-     *   c) zero out the next sle.prev/next[] pointers                                                                                                \
-     *   d) mark as duplicate, set sle.next[1] = 0x1                                                                                                  \
-     *   e) insert the node's copy into the slh_pres singly-linked                                                                                    \
-     *      list.                                                                                                                                     \
-     */                                                                                                                                               \
-    static int __skip_preserve_node_##decl(decl##_t *slist, decl##_node_t *node)                                                                      \
-    {                                                                                                                                                 \
-        int rc = 0;                                                                                                                                   \
-        size_t amt, i;                                                                                                                                \
-        char *d;                                                                                                                                      \
-        const char *s;                                                                                                                                \
-        decl##_node_t *dest, *is_dup;                                                                                                                 \
-                                                                                                                                                      \
-        if (slist == NULL || node == NULL)                                                                                                            \
-            return 0;                                                                                                                                 \
-                                                                                                                                                      \
-        /* (a) alloc and copy */                                                                                                                      \
-        rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                            \
-        if (rc)                                                                                                                                       \
-            return rc;                                                                                                                                \
-        is_dup = 0;                                                                                                                                   \
-        amt = sizeof(decl##_node_t);                                                                                                                  \
-        s = (const char *)node;                                                                                                                       \
-        d = (char *)dest;                                                                                                                             \
-        for (i = 0; i < amt; i++)                                                                                                                     \
-            d[i] = s[i];                                                                                                                              \
-                                                                                                                                                      \
-        /* (b) is this a duplicate? */                                                                                                                \
-        if (__skip_key_compare_##decl(slist, dest, dest->field.sle.next[0], slist->aux) == 0 ||                                                       \
-            __skip_key_compare_##decl(slist, dest, dest->field.sle.prev, slist->aux) == 0)                                                            \
-            is_dup = (decl##_node_t *)0x1;                                                                                                            \
-                                                                                                                                                      \
-        /* (c) zero out the next pointers */                                                                                                          \
-        dest->field.sle.prev = NULL;                                                                                                                  \
-        __SKIP_ENTRIES_B2T(field, dest)                                                                                                               \
-        {                                                                                                                                             \
-            dest->field.sle.next[lvl] = NULL;                                                                                                         \
-        }                                                                                                                                             \
-                                                                                                                                                      \
-        /* (d) set duplicate flag */                                                                                                                  \
-        dest->field.sle.next[1] = (decl##_node_t *)is_dup;                                                                                            \
-                                                                                                                                                      \
-        /* (e) insert node into slh_pres list at head */                                                                                              \
-        if (slist->slh_pres == NULL)                                                                                                                  \
-            slist->slh_pres = dest;                                                                                                                   \
-        else {                                                                                                                                        \
-            /* The next[0] pointer forms the singly-linked list when                                                                                  \
-               preserved. */                                                                                                                          \
-            dest->field.sle.next[0] = slist->slh_pres;                                                                                                \
-            slist->slh_pres = dest;                                                                                                                   \
-        }                                                                                                                                             \
-        rc++;                                                                                                                                         \
-                                                                                                                                                      \
-        return -rc;                                                                                                                                   \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- __skip_preserve_                                                                                                                            \
-     *                                                                                                                                                \
-     * Preserve nodes for snapshots if necessary. Returns > 0 are                                                                                     \
-     * errors, 0 means nothing preserved, negative number represents                                                                                  \
-     * the number of nodes preserved.                                                                                                                 \
-     *                                                                                                                                                \
-     * ALGORITHM:                                                                                                                                     \
-     * Foreach node in `path`, if the generation in that element                                                                                      \
-     * is less than the current generation for the list then                                                                                          \
-     * that node must be preserved before being mutated for this                                                                                      \
-     * insert. So we preserve that node, see _preserve_node().                                                                                        \
-     * Meanwhile, don't duplicate head and the tail nodes if they                                                                                     \
-     * are in the path[].                                                                                                                             \
-     */                                                                                                                                               \
-    static int __skip_preserve_##decl(decl##_t *slist, decl##_node_t **path, size_t len)                                                              \
-    {                                                                                                                                                 \
-        int rc = 0, n;                                                                                                                                \
-        size_t i;                                                                                                                                     \
-        decl##_node_t *prev = NULL;                                                                                                                   \
-                                                                                                                                                      \
-        if (path == NULL)                                                                                                                             \
-            return 0;                                                                                                                                 \
-                                                                                                                                                      \
-        for (i = 0; i < len; i++) {                                                                                                                   \
-            /* This is the case when there was no match, path[0] will be NULL. */                                                                     \
-            if (path[i] == NULL)                                                                                                                      \
-                continue;                                                                                                                             \
-            /* No need to preserve the head or tail sentry nodes. */                                                                                  \
-            if (path[i] == slist->slh_head || path[i] == slist->slh_tail)                                                                             \
-                continue;                                                                                                                             \
-            /* No need to preserve a node more than once. */                                                                                          \
-            if (path[i] == prev)                                                                                                                      \
-                continue;                                                                                                                             \
-            prev = path[i];                                                                                                                           \
-                                                                                                                                                      \
-            /* When the generation of the node in the path is < the list's                                                                            \
-               current generation, we must preserve it. */                                                                                            \
-            if (path[i]->field.sle.gen < slist->gen) {                                                                                                \
-                n = __skip_preserve_node_##decl(slist, path[i]);                                                                                      \
-                if (n > 0)                                                                                                                            \
-                    return n;                                                                                                                         \
-                rc += n;                                                                                                                              \
-            }                                                                                                                                         \
-        }                                                                                                                                             \
-        return -rc;                                                                                                                                   \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
      * -- __skip_insert_                                                                                                                              \
      *                                                                                                                                                \
-     * Inserts the node `n` into the list `slist`, when `flags` is non-zero                                                                           \
+     * Inserts the node `new` into the list `slist`, when `flags` is non-zero                                                                         \
      * duplicate keys are allowed. Duplicates are grouped together by key but                                                                         \
      * are otherwise unordered.                                                                                                                       \
      */                                                                                                                                               \
-    static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *n, int flags)                                                                     \
+    static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *new, int flags)                                                                   \
     {                                                                                                                                                 \
         int rc = 0;                                                                                                                                   \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
-        size_t i, len, cur_height, new_height;                                                                                                        \
+        size_t i, len, loc = 0, cur_height, new_height;                                                                                               \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                       \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL || new == NULL)                                                                                                             \
             return ENOENT;                                                                                                                            \
                                                                                                                                                       \
         /* Allocate a buffer, or use a static one. */                                                                                                 \
@@ -616,45 +586,57 @@
             if (path == NULL)                                                                                                                         \
                 return ENOMEM;                                                                                                                        \
         }                                                                                                                                             \
+        memset(path, 0, sizeof(sizeof(decl##_node_t *) * slist->max + 1));                                                                            \
                                                                                                                                                       \
-        /* Find the node `n` and path to it of `n` steps, if matched it's in `path[0]` */                                                             \
-        len = __skip_locate_##decl(slist, n, path);                                                                                                   \
+        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                \
+        len = __skip_locate_##decl(slist, new, path);                                                                                                 \
         node = path[0];                                                                                                                               \
         if (len > 0) {                                                                                                                                \
             if ((node != NULL) && (flags == 0)) {                                                                                                     \
                 /* Don't insert, duplicate if flag not set. */                                                                                        \
                 return -1;                                                                                                                            \
             }                                                                                                                                         \
-            /* Generation for snapshots */                                                                                                            \
-            n->field.sle.gen = slist->gen;                                                                                                            \
             /* Coin toss to determine level of this new node [0, max) */                                                                              \
             cur_height = slist->slh_head->field.sle.height;                                                                                           \
-            new_height = __skip_toss_##decl(slist->max - 1);                                                                                          \
-            n->field.sle.height = new_height;                                                                                                         \
+            new_height = __skip_toss_##decl(slist->max);                                                                                              \
+            new->field.sle.height = new_height;                                                                                                       \
             /* Trim the path to at most the new height for the new node. */                                                                           \
             if (new_height > cur_height) {                                                                                                            \
                 for (i = cur_height + 1; i <= new_height; i++) {                                                                                      \
                     path[i + 1] = slist->slh_tail;                                                                                                    \
                 }                                                                                                                                     \
             }                                                                                                                                         \
-            /* Snapshots preserve those nodes in the `path` that are will be                                                                          \
-               modified on insert. */                                                                                                                 \
-            rc = __skip_preserve_##decl(slist, path, len);                                                                                            \
-            /* > 0 is an error, 0 is no nodes were preserved, < 0 is -(rc) nodes                                                                      \
-               preserved. */                                                                                                                          \
-            if (rc > 0)                                                                                                                               \
-                return rc;                                                                                                                            \
+            /* Ensure all next[] point to tail. */                                                                                                    \
+            __SKIP_ENTRIES_B2T(field, new)                                                                                                            \
+            {                                                                                                                                         \
+                new->field.sle.next[lvl] = slist->slh_tail;                                                                                           \
+            }                                                                                                                                         \
             /* Adjust all forward pointers for each element in the path. */                                                                           \
             for (i = 0; i <= new_height; i++) {                                                                                                       \
-                n->field.sle.next[i] = path[i + 1]->field.sle.next[i];                                                                                \
-                path[i + 1]->field.sle.next[i] = n;                                                                                                   \
+                /* The tail's next[i] is always NULL, we don't want that in the                                                                       \
+                   next[i] for our new node. Also, don't set the tail's next[i]                                                                       \
+                   because it is always NULL. */                                                                                                      \
+                if (path[i + 1] != slist->slh_tail) {                                                                                                 \
+                    new->field.sle.next[i] = path[i + 1]->field.sle.next[i];                                                                          \
+                    path[i + 1]->field.sle.next[i] = new;                                                                                             \
+                    loc = path[i + 1] == slist->slh_head ? i : loc;                                                                                   \
+                } else {                                                                                                                              \
+                    new->field.sle.next[i] = slist->slh_tail;                                                                                         \
+                }                                                                                                                                     \
+            }                                                                                                                                         \
+            /* Ensure all slh_head->next[] above loc point to tail. */                                                                                \
+            if (path[1] == slist->slh_head) {                                                                                                         \
+                __SKIP_ENTRIES_B2T_FROM(field, slist->slh_head, loc + 1)                                                                              \
+                {                                                                                                                                     \
+                    slist->slh_head->field.sle.next[lvl] = slist->slh_tail;                                                                           \
+                }                                                                                                                                     \
             }                                                                                                                                         \
             /* Adujust the previous pointers in the nodes. */                                                                                         \
-            n->field.sle.prev = path[1];                                                                                                              \
-            n->field.sle.next[0]->field.sle.prev = n;                                                                                                 \
+            new->field.sle.prev = path[1];                                                                                                            \
+            new->field.sle.next[0]->field.sle.prev = new;                                                                                             \
             /* Account for insert at tail. */                                                                                                         \
-            if (n->field.sle.next[0] == slist->slh_tail) {                                                                                            \
-                slist->slh_tail->field.sle.prev = n;                                                                                                  \
+            if (new->field.sle.next[0] == slist->slh_tail) {                                                                                          \
+                slist->slh_tail->field.sle.prev = new;                                                                                                \
             }                                                                                                                                         \
             /* Adjust the head/tail boundary node heights if necessary. */                                                                            \
             if (new_height > cur_height) {                                                                                                            \
@@ -711,7 +693,7 @@
         i = slist->slh_head->field.sle.height;                                                                                                        \
                                                                                                                                                       \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                             \
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         elm = elm->field.sle.next[0];                                                                                                                 \
@@ -731,24 +713,24 @@
      * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
      * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_position_gte_##decl(decl##_t *slist, decl##_node_t *n)                                                                \
+    decl##_node_t *prefix##skip_position_gte_##decl(decl##_t *slist, decl##_node_t *query)                                                            \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
         decl##_node_t *elm = slist->slh_head;                                                                                                         \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL || query == NULL)                                                                                                           \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
         i = slist->slh_head->field.sle.height;                                                                                                        \
                                                                                                                                                       \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], query, slist->aux) < 0)                         \
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         do {                                                                                                                                          \
             elm = elm->field.sle.next[0];                                                                                                             \
-            cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
+            cmp = __skip_key_compare_##decl(slist, elm, query, slist->aux);                                                                           \
         } while (cmp < 0);                                                                                                                            \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
@@ -763,24 +745,24 @@
      * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
      * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_position_gt_##decl(decl##_t *slist, decl##_node_t *n)                                                                 \
+    decl##_node_t *prefix##skip_position_gt_##decl(decl##_t *slist, decl##_node_t *query)                                                             \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
         decl##_node_t *elm = slist->slh_head;                                                                                                         \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL || query == NULL)                                                                                                           \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
         i = slist->slh_head->field.sle.height;                                                                                                        \
                                                                                                                                                       \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], query, slist->aux) < 0)                         \
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         do {                                                                                                                                          \
             elm = elm->field.sle.next[0];                                                                                                             \
-            cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
+            cmp = __skip_key_compare_##decl(slist, elm, query, slist->aux);                                                                           \
         } while (cmp <= 0);                                                                                                                           \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
@@ -795,28 +777,28 @@
      * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
      * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_position_lte_##decl(decl##_t *slist, decl##_node_t *n)                                                                \
+    decl##_node_t *prefix##skip_position_lte_##decl(decl##_t *slist, decl##_node_t *query)                                                            \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
         decl##_node_t *elm = slist->slh_head;                                                                                                         \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL || query == NULL)                                                                                                           \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
         i = slist->slh_head->field.sle.height;                                                                                                        \
                                                                                                                                                       \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], query, slist->aux) < 0)                         \
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         elm = elm->field.sle.next[0];                                                                                                                 \
-        if (__skip_key_compare_##decl(slist, elm, n, slist->aux) == 0) {                                                                              \
+        if (__skip_key_compare_##decl(slist, elm, query, slist->aux) == 0) {                                                                          \
             return elm;                                                                                                                               \
         } else {                                                                                                                                      \
             do {                                                                                                                                      \
                 elm = elm->field.sle.prev;                                                                                                            \
-                cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                           \
+                cmp = __skip_key_compare_##decl(slist, elm, query, slist->aux);                                                                       \
             } while (cmp >= 0);                                                                                                                       \
         }                                                                                                                                             \
         return elm;                                                                                                                                   \
@@ -831,25 +813,25 @@
      * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
      * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_position_lt_##decl(decl##_t *slist, decl##_node_t *n)                                                                 \
+    decl##_node_t *prefix##skip_position_lt_##decl(decl##_t *slist, decl##_node_t *query)                                                             \
     {                                                                                                                                                 \
         int cmp;                                                                                                                                      \
         unsigned int i;                                                                                                                               \
         decl##_node_t *elm = slist->slh_head;                                                                                                         \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL || query == NULL)                                                                                                           \
             return NULL;                                                                                                                              \
                                                                                                                                                       \
         i = slist->slh_head->field.sle.height;                                                                                                        \
                                                                                                                                                       \
         do {                                                                                                                                          \
-            while (elm && __skip_key_compare_##decl(slist, elm->field.sle.next[i], n, slist->aux) < 0)                                                \
+            while (elm != slist->slh_tail && elm->field.sle.next[i] && __skip_key_compare_##decl(slist, elm->field.sle.next[i], query, slist->aux) < 0)                         \
                 elm = elm->field.sle.next[i];                                                                                                         \
         } while (i--);                                                                                                                                \
         elm = elm->field.sle.next[0];                                                                                                                 \
         do {                                                                                                                                          \
             elm = elm->field.sle.prev;                                                                                                                \
-            cmp = __skip_key_compare_##decl(slist, elm, n, slist->aux);                                                                               \
+            cmp = __skip_key_compare_##decl(slist, elm, query, slist->aux);                                                                           \
         } while (cmp >= 0);                                                                                                                           \
         return elm;                                                                                                                                   \
     }                                                                                                                                                 \
@@ -862,26 +844,26 @@
      * NOTE: This differs from _locate() in that it avoids an alloc/free                                                                              \
      * for the path when SKIPLIST_MAX_HEIGHT == 1.                                                                                                    \
      */                                                                                                                                               \
-    decl##_node_t *prefix##skip_position_##decl(decl##_t *slist, skip_pos_##decl_t op, decl##_node_t *n)                                              \
+    decl##_node_t *prefix##skip_position_##decl(decl##_t *slist, skip_pos_##decl_t op, decl##_node_t *query)                                          \
     {                                                                                                                                                 \
         decl##_node_t *node;                                                                                                                          \
                                                                                                                                                       \
         switch (op) {                                                                                                                                 \
         case (SKIP_LT):                                                                                                                               \
-            node = prefix##skip_position_lt_##decl(slist, n);                                                                                         \
+            node = prefix##skip_position_lt_##decl(slist, query);                                                                                     \
             break;                                                                                                                                    \
         case (SKIP_LTE):                                                                                                                              \
-            node = prefix##skip_position_lte_##decl(slist, n);                                                                                        \
+            node = prefix##skip_position_lte_##decl(slist, query);                                                                                    \
             break;                                                                                                                                    \
         case (SKIP_GTE):                                                                                                                              \
-            node = prefix##skip_position_gte_##decl(slist, n);                                                                                        \
+            node = prefix##skip_position_gte_##decl(slist, query);                                                                                    \
             break;                                                                                                                                    \
         case (SKIP_GT):                                                                                                                               \
-            node = prefix##skip_position_gt_##decl(slist, n);                                                                                         \
+            node = prefix##skip_position_gt_##decl(slist, query);                                                                                     \
             break;                                                                                                                                    \
         default:                                                                                                                                      \
         case (SKIP_EQ):                                                                                                                               \
-            node = prefix##skip_position_eq_##decl(slist, n);                                                                                         \
+            node = prefix##skip_position_eq_##decl(slist, query);                                                                                     \
             break;                                                                                                                                    \
         }                                                                                                                                             \
         return node;                                                                                                                                  \
@@ -896,15 +878,13 @@
      * WARNING: Do not update the portion of the node used for ordering                                                                               \
      * (e.g. `key`) unless you really know what you're doing.                                                                                         \
      */                                                                                                                                               \
-    int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *n)                                                                                 \
+    int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *new)                                                                               \
     {                                                                                                                                                 \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
-        int cmp, np, rc = 0;                                                                                                                          \
-        size_t len, i;                                                                                                                                \
-        const unsigned char *p1, *p2;                                                                                                                 \
-        decl##_node_t *node, *new = NULL, **path = (decl##_node_t **)&apath;                                                                          \
+        int rc = 0;                                                                                                                                   \
+        decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                       \
                                                                                                                                                       \
-        if (slist == NULL || n == NULL)                                                                                                               \
+        if (slist == NULL)                                                                                                                            \
             return -1;                                                                                                                                \
                                                                                                                                                       \
         /* Allocate a buffer, or use a static one. */                                                                                                 \
@@ -913,57 +893,15 @@
             if (path == NULL)                                                                                                                         \
                 return ENOMEM;                                                                                                                        \
         }                                                                                                                                             \
+        memset(path, 0, sizeof(sizeof(decl##_node_t *) * slist->max + 1));                                                                            \
                                                                                                                                                       \
-        len = __skip_locate_##decl(slist, n, path);                                                                                                   \
+        __skip_locate_##decl(slist, new, path);                                                                                                       \
         node = path[0];                                                                                                                               \
                                                                                                                                                       \
         if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                                 \
             free(path);                                                                                                                               \
                                                                                                                                                       \
         if (node) {                                                                                                                                   \
-            np = __skip_preserve_##decl(slist, path, len);                                                                                            \
-            if (np > 0)                                                                                                                               \
-                /* > 0 is an error code like ENOMEM, return that */                                                                                   \
-                return np;                                                                                                                            \
-            if (np < 0 && node->field.sle.gen < slist->gen) {                                                                                         \
-                /* < 0 is the negated amount of nodes in path[] that were                                                                             \
-                 * preserved.                                                                                                                         \
-                 *                                                                                                                                    \
-                 * ALGORITHM:                                                                                                                         \
-                 * At this point we've preserved a node but not the data                                                                              \
-                 * that we don't control in the entry (i.e. the "value" if                                                                            \
-                 * it's a pointer to some heap memory, we have copied the                                                                             \
-                 * pointer in _preserve() but not anything else). We purposly                                                                         \
-                 * delayed that allocation/copy to this point in time.                                                                                \
-                 *                                                                                                                                    \
-                 * So, we need to find the new node in slist->slh_pres, and                                                                           \
-                 * copy the data and then mark it. The only way to find that                                                                          \
-                 * node is to first use the comparison function and second                                                                            \
-                 * compare the bytes in the node that are not part of the entry                                                                       \
-                 * structure.                                                                                                                         \
-                 */                                                                                                                                   \
-                do {                                                                                                                                  \
-                    new = (new == NULL ? slist->slh_pres : new->field.sle.next[0]);                                                                   \
-                    cmp = __skip_key_compare_##decl(slist, node, new, slist->aux);                                                                    \
-                    p1 = (unsigned char *)((uintptr_t) new);                                                                                          \
-                    p2 = (unsigned char *)((uintptr_t)node);                                                                                          \
-                    for (i = 0; i < (sizeof(decl##_node_t) - sizeof(struct __skiplist_##decl_entry)); i++) {                                          \
-                        if (p1[i] != p2[i]) {                                                                                                         \
-                            cmp = p1[i] < p2[i] ? -1 : 1;                                                                                             \
-                            break;                                                                                                                    \
-                        }                                                                                                                             \
-                    }                                                                                                                                 \
-                } while (cmp != 0);                                                                                                                   \
-                if (cmp != 0)                                                                                                                         \
-                    return ENOMEM; /* TODO we didn't find the node, why? */                                                                           \
-                if (new->field.sle.prev == NULL) {                                                                                                    \
-                    new->field.sle.prev = (decl##_node_t *)0x1;                                                                                       \
-                    archive_node_blk;                                                                                                                 \
-                    if (rc)                                                                                                                           \
-                        return rc;                                                                                                                    \
-                }                                                                                                                                     \
-            }                                                                                                                                         \
-            new = n;                                                                                                                                  \
             update_node_blk;                                                                                                                          \
             return rc;                                                                                                                                \
         }                                                                                                                                             \
@@ -977,8 +915,7 @@
      */                                                                                                                                               \
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                            \
     {                                                                                                                                                 \
-        int np = 0;                                                                                                                                   \
-        size_t i, len, level;                                                                                                                         \
+        size_t i, len, height;                                                                                                                        \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                          \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                       \
                                                                                                                                                       \
@@ -993,106 +930,49 @@
             if (path == NULL)                                                                                                                         \
                 return ENOMEM;                                                                                                                        \
         }                                                                                                                                             \
+        memset(path, 0, sizeof(sizeof(decl##_node_t *) * slist->max + 1));                                                                            \
                                                                                                                                                       \
+        /* Attempt to locate the node in the list. */                                                                                                 \
         len = __skip_locate_##decl(slist, n, path);                                                                                                   \
         node = path[0];                                                                                                                               \
         if (node) {                                                                                                                                   \
-            np = __skip_preserve_##decl(slist, path, len);                                                                                            \
-            if (np > 0)                                                                                                                               \
-                return np;                                                                                                                            \
+            /* We found it, set the next->prev to the node->prev keeping in mind                                                                      \
+               that the next node might be the tail). */                                                                                              \
             node->field.sle.next[0]->field.sle.prev = node->field.sle.prev;                                                                           \
-            for (i = 1; i <= len; i++) {                                                                                                              \
-                if (path[i]->field.sle.next[i - 1] != node)                                                                                           \
+            /* Walk the path, stop when the next node is not the one we're                                                                            \
+               removing. At each step along our walk... */                                                                                            \
+            for (i = 0; i < len; i++) {                                                                                                               \
+                if (path[i + 1]->field.sle.next[i] != node)                                                                                           \
                     break;                                                                                                                            \
-                path[i]->field.sle.next[i - 1] = node->field.sle.next[i - 1];                                                                         \
-                if (path[i]->field.sle.next[i - 1] == slist->slh_tail) {                                                                              \
-                    level = path[i]->field.sle.height;                                                                                                \
-                    path[i]->field.sle.height = level - 1;                                                                                            \
+                /* ... adjust the next pointer at that level. */                                                                                      \
+                path[i + 1]->field.sle.next[i] = node->field.sle.next[i];                                                                             \
+                /* Adjust the height so we're only pointing at the tail once at                                                                       \
+                   the top so we don't waste steps later when searching. */                                                                           \
+                if (path[i + 1]->field.sle.next[i] == slist->slh_tail) {                                                                              \
+                    height = path[i + 1]->field.sle.height;                                                                                           \
+                    path[i + 1]->field.sle.height = height - 1;                                                                                       \
                 }                                                                                                                                     \
             }                                                                                                                                         \
+            /* Account for delete at tail. */                                                                                                         \
             if (node->field.sle.next[0] == slist->slh_tail) {                                                                                         \
                 slist->slh_tail->field.sle.prev = n->field.sle.prev;                                                                                  \
             }                                                                                                                                         \
+                                                                                                                                                      \
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                             \
                 free(path);                                                                                                                           \
                                                                                                                                                       \
-            /* If we didn't preserve any nodes we can free this one. */                                                                               \
-            if (np == 0)                                                                                                                              \
-                free_node_blk;                                                                                                                        \
+            free_node_blk;                                                                                                                            \
                                                                                                                                                       \
-            /* Find all levels in the first element in the list that point                                                                            \
-               at the tail and shrink the level. */                                                                                                   \
+            /* Reduce the height of the header. */                                                                                                    \
             i = 0;                                                                                                                                    \
-            node = slist->slh_head;                                                                                                                   \
-            while (node->field.sle.next[i] != slist->slh_tail && i++ < slist->slh_head->field.sle.height)                                             \
-                ;                                                                                                                                     \
+            while (slist->slh_head->field.sle.next[i] != slist->slh_tail && i < slist->slh_head->field.sle.height)                                    \
+                i++;                                                                                                                                  \
             slist->slh_head->field.sle.height = i;                                                                                                    \
             slist->slh_tail->field.sle.height = i;                                                                                                    \
+                                                                                                                                                      \
             slist->length--;                                                                                                                          \
         }                                                                                                                                             \
         return 0;                                                                                                                                     \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- skip_next_node_                                                                                                                             \
-     *                                                                                                                                                \
-     * A node reference can be thought of as a cursor.  This moves the cursor                                                                         \
-     * to the next node in the list or returns NULL if the next is the tail.                                                                          \
-     */                                                                                                                                               \
-    decl##_node_t *prefix##skip_next_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                   \
-    {                                                                                                                                                 \
-        if (slist == NULL || n == NULL)                                                                                                               \
-            return NULL;                                                                                                                              \
-        if (n->field.sle.next[0] == slist->slh_tail)                                                                                                  \
-            return NULL;                                                                                                                              \
-        return n->field.sle.next[0];                                                                                                                  \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- skip_prev_node_                                                                                                                             \
-     *                                                                                                                                                \
-     * A node reference can be thought of as a cursor.  This moves the cursor                                                                         \
-     * to the previous node in the list or returns NULL if the previous node                                                                          \
-     * is the head.                                                                                                                                   \
-     */                                                                                                                                               \
-    decl##_node_t *prefix##skip_prev_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                   \
-    {                                                                                                                                                 \
-        if (slist == NULL || n == NULL)                                                                                                               \
-            return NULL;                                                                                                                              \
-        if (n->field.sle.prev == slist->slh_head)                                                                                                     \
-            return NULL;                                                                                                                              \
-        return n->field.sle.prev;                                                                                                                     \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- skip_empty_                                                                                                                                 \
-     *                                                                                                                                                \
-     * Release all nodes and their associated heap objects, but not the list                                                                          \
-     * itself. The list is still valid, only empty.                                                                                                   \
-     */                                                                                                                                               \
-    void prefix##skip_empty_##decl(decl##_t *slist)                                                                                                   \
-    {                                                                                                                                                 \
-        decl##_node_t *node, *next;                                                                                                                   \
-                                                                                                                                                      \
-        if (slist == NULL)                                                                                                                            \
-            return;                                                                                                                                   \
-        if (prefix##skip_is_empty_##decl(slist))                                                                                                      \
-            return;                                                                                                                                   \
-        node = prefix##skip_head_##decl(slist);                                                                                                       \
-        do {                                                                                                                                          \
-            next = prefix##skip_next_node_##decl(slist, node);                                                                                        \
-            prefix##skip_free_node_##decl(node);                                                                                                      \
-            node = next;                                                                                                                              \
-        } while (node != NULL);                                                                                                                       \
-                                                                                                                                                      \
-        node = slist->slh_pres;                                                                                                                       \
-        while (node) {                                                                                                                                \
-            next = node->field.sle.next[0];                                                                                                           \
-            if (next->field.sle.prev)                                                                                                                 \
-                free_node_blk;                                                                                                                        \
-            free(node);                                                                                                                               \
-        }                                                                                                                                             \
-        return;                                                                                                                                       \
     }                                                                                                                                                 \
                                                                                                                                                       \
     /**                                                                                                                                               \
@@ -1113,145 +993,6 @@
         return;                                                                                                                                       \
     }                                                                                                                                                 \
                                                                                                                                                       \
-    /**                                                                                                                                               \
-     * -- skip_snapshot_                                                                                                                              \
-     *                                                                                                                                                \
-     * A snapshot is a read-only view of a Skip List at a point in time.  Once                                                                        \
-     * taken, a snapshot must be restored or disposed. Any number of snapshots                                                                        \
-     * can be created.                                                                                                                                \
-     */                                                                                                                                               \
-    size_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                              \
-    {                                                                                                                                                 \
-        if (slist == NULL)                                                                                                                            \
-            return 0;                                                                                                                                 \
-                                                                                                                                                      \
-        slist->gen++;                                                                                                                                 \
-        if (slist->gen > slist->max_gen)                                                                                                              \
-            slist->max_gen = slist->gen;                                                                                                              \
-        return slist->gen;                                                                                                                            \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- skip_restore_snapshot_                                                                                                                      \
-     *                                                                                                                                                \
-     * Restores the Skiplist to generation `gen`.  Once you restore `gen` you                                                                         \
-     * can no longer access any generations > `gen`.                                                                                                  \
-     *                                                                                                                                                \
-     * ALGORITHM:                                                                                                                                     \
-     * iterate over the preserved nodes (slist->slh_pres)                                                                                             \
-     *  a) remove/free nodes with node->gen > gen from slist                                                                                          \
-     *  b) remove/free nodes > gen from slh_pres                                                                                                      \
-     *  c) restore nodes == gen by...                                                                                                                 \
-     *     i) remove node from slh_pres list                                                                                                          \
-     *     ii) _insert(node) or                                                                                                                       \
-     *         _insert_dup() if node->field.sle_next[1] != 0 (clear that)                                                                             \
-     *  d) set slist's gen to `gen`                                                                                                                   \
-     *                                                                                                                                                \
-     * NOTES:                                                                                                                                         \
-     * - Starting with slh_pres, the `node->field.sle.next[0]` form a                                                                                 \
-     *   singly-linked list.                                                                                                                          \
-     */                                                                                                                                               \
-    decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, unsigned gen)                                                                     \
-    {                                                                                                                                                 \
-        size_t i;                                                                                                                                     \
-        decl##_node_t *node, *prev;                                                                                                                   \
-                                                                                                                                                      \
-        if (slist == NULL)                                                                                                                            \
-            return NULL;                                                                                                                              \
-                                                                                                                                                      \
-        if (gen >= slist->gen || slist->slh_pres == NULL)                                                                                             \
-            return slist;                                                                                                                             \
-                                                                                                                                                      \
-        /* (a) */                                                                                                                                     \
-        SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, i)                                                                                            \
-        {                                                                                                                                             \
-            ((void)i);                                                                                                                                \
-            if (node->field.sle.gen > gen)                                                                                                            \
-                prefix##skip_remove_node_##decl(slist, node);                                                                                         \
-        }                                                                                                                                             \
-                                                                                                                                                      \
-        prev = NULL;                                                                                                                                  \
-        node = slist->slh_pres;                                                                                                                       \
-        while (node) {                                                                                                                                \
-            /* (b) */                                                                                                                                 \
-            if (node->field.sle.gen > gen) {                                                                                                          \
-                /* remove node from slh_pres list */                                                                                                  \
-                if (slist->slh_pres == node)                                                                                                          \
-                    slist->slh_pres = node->field.sle.next[0];                                                                                        \
-                else {                                                                                                                                \
-                    if (node->field.sle.next[0] == NULL)                                                                                              \
-                        prev->field.sle.next[0] = NULL;                                                                                               \
-                    else                                                                                                                              \
-                        prev->field.sle.next[0] = node->field.sle.next[0];                                                                            \
-                }                                                                                                                                     \
-                                                                                                                                                      \
-                prefix##skip_free_node_##decl(node);                                                                                                  \
-            }                                                                                                                                         \
-                                                                                                                                                      \
-            /* c */                                                                                                                                   \
-            prev = NULL;                                                                                                                              \
-            if (node->field.sle.gen == gen) {                                                                                                         \
-                /* remove node from slh_pres list */                                                                                                  \
-                if (slist->slh_pres == node)                                                                                                          \
-                    slist->slh_pres = node->field.sle.next[0];                                                                                        \
-                else {                                                                                                                                \
-                    if (node->field.sle.next[0] == NULL)                                                                                              \
-                        prev->field.sle.next[0] = NULL;                                                                                               \
-                    else                                                                                                                              \
-                        prev->field.sle.next[0] = node->field.sle.next[0];                                                                            \
-                }                                                                                                                                     \
-                                                                                                                                                      \
-                node->field.sle.prev = NULL;                                                                                                          \
-                if (node->field.sle.next[1] != 0) {                                                                                                   \
-                    node->field.sle.next[1] = NULL;                                                                                                   \
-                    prefix##skip_insert_dup_##decl(slist, node);                                                                                      \
-                } else {                                                                                                                              \
-                    prefix##skip_insert_##decl(slist, node);                                                                                          \
-                }                                                                                                                                     \
-            }                                                                                                                                         \
-            prev = node;                                                                                                                              \
-            node = node->field.sle.next[0];                                                                                                           \
-        }                                                                                                                                             \
-                                                                                                                                                      \
-        /* (d) */                                                                                                                                     \
-        slist->max_gen = gen;                                                                                                                         \
-                                                                                                                                                      \
-        return slist;                                                                                                                                 \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
-    /**                                                                                                                                               \
-     * -- skip_dispose_snapshot_                                                                                                                      \
-     *                                                                                                                                                \
-     * Removes from history all snapshots equal to or newer than (>=)                                                                                 \
-     * `gen`.                                                                                                                                         \
-     */                                                                                                                                               \
-    void prefix##skip_dispose_snapshot_##decl(decl##_t *slist, unsigned gen)                                                                          \
-    {                                                                                                                                                 \
-        decl##_node_t *node, *next, *prev;                                                                                                            \
-                                                                                                                                                      \
-        if (slist == NULL)                                                                                                                            \
-            return;                                                                                                                                   \
-                                                                                                                                                      \
-        if (slist->slh_pres == NULL)                                                                                                                  \
-            return;                                                                                                                                   \
-                                                                                                                                                      \
-        prev = NULL;                                                                                                                                  \
-        node = slist->slh_pres;                                                                                                                       \
-        while (node) {                                                                                                                                \
-            next = node->field.sle.next[0];                                                                                                           \
-            if (node->field.sle.gen >= gen) {                                                                                                         \
-                if (prev == NULL)                                                                                                                     \
-                    slist->slh_pres = next;                                                                                                           \
-                else                                                                                                                                  \
-                    prev->field.sle.next[0] = next;                                                                                                   \
-                prefix##skip_free_node_##decl(node);                                                                                                  \
-            }                                                                                                                                         \
-            prev = node;                                                                                                                              \
-            node = next;                                                                                                                              \
-        }                                                                                                                                             \
-        slist->max_gen = (gen == 0 ? 0 : gen - 1);                                                                                                    \
-    }                                                                                                                                                 \
-                                                                                                                                                      \
     /* Archive of a Skip List */                                                                                                                      \
     typedef struct decl##_archive {                                                                                                                   \
         decl##_t list;                                                                                                                                \
@@ -1262,8 +1003,8 @@
     /**                                                                                                                                               \
      * -- skip_to_bytes_ TODO/WIP                                                                                                                     \
      *                                                                                                                                                \
-     * Similar to snapshot, but includes the values and encodes them                                                                                  \
-     * in a portable manner.                                                                                                                          \
+     * Writes out list and node content to a portable array of bytes                                                                                  \
+     * suitable for archiving to disk.                                                                                                                \
      */                                                                                                                                               \
     decl##_archive_t *prefix##skip_to_bytes_##decl(decl##_t *slist)                                                                                   \
     {                                                                                                                                                 \
@@ -1405,7 +1146,7 @@
             return n_err;                                                                                                                                 \
         }                                                                                                                                                 \
                                                                                                                                                           \
-        if (slist->max < 2) {                                                                                                                             \
+        if (slist->max < 1) {                                                                                                                             \
             __skip_integrity_failure_##decl("skiplist max level must be 1 at minimum\n");                                                                 \
             n_err++;                                                                                                                                      \
             if (flags)                                                                                                                                    \
@@ -1414,7 +1155,7 @@
                                                                                                                                                           \
         if (slist->level >= slist->max) {                                                                                                                 \
             /* level is 0-based, max of 12 means level cannot be > 11 */                                                                                  \
-            __skip_integrity_failure_##decl("skiplist level in header was >= max\n");                                                                     \
+            __skip_integrity_failure_##decl("skiplist level %lu in header was >= max %lu\n", slist->level, slist->max);                                   \
             n_err++;                                                                                                                                      \
             if (flags)                                                                                                                                    \
                 return n_err;                                                                                                                             \
@@ -1427,48 +1168,44 @@
                 return n_err;                                                                                                                             \
         }                                                                                                                                                 \
                                                                                                                                                           \
-        if (SKIPLIST_MAX_HEIGHT > 0 && slist->max > SKIPLIST_MAX_HEIGHT) {                                                                                \
-            __skip_integrity_failure_##decl("slist->max cannot be greater than SKIPLIST_MAX_HEIGHT\n");                                                   \
+        if (SKIPLIST_MAX_HEIGHT > 1 && slist->max > SKIPLIST_MAX_HEIGHT) {                                                                                \
+            __skip_integrity_failure_##decl("slist->max %lu cannot be greater than SKIPLIST_MAX_HEIGHT %lu\n", slist->max, (size_t)SKIPLIST_MAX_HEIGHT);  \
             n_err++;                                                                                                                                      \
             if (flags)                                                                                                                                    \
                 return n_err;                                                                                                                             \
         }                                                                                                                                                 \
                                                                                                                                                           \
+        size_t n = 0;                                                                                                                                     \
         node = slist->slh_head;                                                                                                                           \
-        for (nth = 0; nth < node->field.sle.height; nth++) {                                                                                              \
-            if (node->field.sle.next[nth] == NULL) {                                                                                                      \
-                __skip_integrity_failure_##decl("the head's %lu next node should not be NULL", nth);                                                      \
+        __SKIP_ENTRIES_B2T(field, node)                                                                                                                   \
+        {                                                                                                                                                 \
+            if (node->field.sle.next[lvl] == NULL) {                                                                                                      \
+                __skip_integrity_failure_##decl("the head's %lu next node should not be NULL\n", lvl);                                                    \
                 n_err++;                                                                                                                                  \
                 if (flags)                                                                                                                                \
                     return n_err;                                                                                                                         \
             }                                                                                                                                             \
-            if (node->field.sle.next[nth] == slist->slh_tail)                                                                                             \
+            n = lvl;                                                                                                                                      \
+            if (node->field.sle.next[lvl] == slist->slh_tail)                                                                                             \
                 break;                                                                                                                                    \
         }                                                                                                                                                 \
-        for (; nth < node->field.sle.height; nth++) {                                                                                                     \
-            if (node->field.sle.next[nth] == NULL) {                                                                                                      \
-                __skip_integrity_failure_##decl("the head's %lu next node should not be NULL", nth);                                                      \
+        n++;                                                                                                                                              \
+        __SKIP_ENTRIES_B2T_FROM(field, node, n)                                                                                                           \
+        {                                                                                                                                                 \
+            if (node->field.sle.next[lvl] == NULL) {                                                                                                      \
+                __skip_integrity_failure_##decl("the head's %lu next node should not be NULL\n", lvl);                                                    \
                 n_err++;                                                                                                                                  \
                 if (flags)                                                                                                                                \
                     return n_err;                                                                                                                         \
             }                                                                                                                                             \
-            if (node->field.sle.next[nth] != slist->slh_tail) {                                                                                           \
-                __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail", nth);                         \
+            if (node->field.sle.next[lvl] != slist->slh_tail) {                                                                                           \
+                __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail\n", lvl);                       \
                 n_err++;                                                                                                                                  \
                 if (flags)                                                                                                                                \
                     return n_err;                                                                                                                         \
             }                                                                                                                                             \
         }                                                                                                                                                 \
                                                                                                                                                           \
-        if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                                    \
-            __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node\n");                                        \
-            n_err++;                                                                                                                                      \
-            if (flags)                                                                                                                                    \
-                return n_err;                                                                                                                             \
-        }                                                                                                                                                 \
-                                                                                                                                                          \
-        /* TODO: ensure that the entries structure is the last element                                                                                    \
-           in a node so that snapshots work. GSB */                                                                                                       \
         if (slist->length > 0 && slist->slh_tail->field.sle.prev == slist->slh_head) {                                                                    \
             __skip_integrity_failure_##decl("slist->length is 0, but tail->prev == head, not an internal node\n");                                        \
             n_err++;                                                                                                                                      \
@@ -1481,10 +1218,16 @@
         /* Validate the tail node */                                                                                                                      \
                                                                                                                                                           \
         /* Validate each node */                                                                                                                          \
-        nth = 0;                                                                                                                                          \
-        node = prefix##skip_head_##decl(slist);                                                                                                           \
-        while (node != slist->slh_tail && node != NULL) {                                                                                                 \
+        SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, nth)                                                                                              \
+        {                                                                                                                                                 \
             this = &node->field.sle;                                                                                                                      \
+                                                                                                                                                          \
+            if (this->height >= slist->max) {                                                                                                             \
+                __skip_integrity_failure_##decl("the %luth node's [%p] height %lu is >= max %lu\n", nth, (void *)node, this->height, slist->max);         \
+                n_err++;                                                                                                                                  \
+                if (flags)                                                                                                                                \
+                    return n_err;                                                                                                                         \
+            }                                                                                                                                             \
                                                                                                                                                           \
             if (this->next == NULL) {                                                                                                                     \
                 __skip_integrity_failure_##decl("the %luth node's [%p] next field should never NULL\n", nth, (void *)node);                               \
@@ -1500,32 +1243,34 @@
                     return n_err;                                                                                                                         \
             }                                                                                                                                             \
                                                                                                                                                           \
-            /* TODO                                                                                                                                       \
-            size_t n;                                                                                                                                     \
-            for (n = 0; n < (this->height + 1); n++) {                                                                                                    \
-                if (this->next[n] == NULL) {                                                                                                              \
-                    __skip_integrity_failure_##decl("the %luth node's next[%lu] should not be NULL\n", nth, n);                                           \
+            size_t n = 0;                                                                                                                                 \
+            __SKIP_ENTRIES_B2T(field, node)                                                                                                               \
+            {                                                                                                                                             \
+                if (this->next[lvl] == NULL) {                                                                                                            \
+                    __skip_integrity_failure_##decl("the %luth node's next[%lu] should not be NULL\n", nth, lvl);                                         \
                     n_err++;                                                                                                                              \
                     if (flags)                                                                                                                            \
                         return n_err;                                                                                                                     \
                 }                                                                                                                                         \
-                if (this->next[n] == slist->slh_tail)                                                                                                     \
+                n = lvl;                                                                                                                                  \
+                if (this->next[lvl] == slist->slh_tail)                                                                                                   \
                     break;                                                                                                                                \
             }                                                                                                                                             \
-            for (size_t m = n; n < (this->height + 1); n++) {                                                                                             \
-                if (this->next[n] == NULL) {                                                                                                              \
-                    __skip_integrity_failure_##decl("after the %lunth the %luth node's next[%lu] should not be NULL\n", m, nth, n);                       \
+            n++;                                                                                                                                          \
+            __SKIP_ENTRIES_B2T_FROM(field, node, n)                                                                                                       \
+            {                                                                                                                                             \
+                if (this->next[lvl] == NULL) {                                                                                                            \
+                    __skip_integrity_failure_##decl("after the %lunth the %luth node's next[%lu] should not be NULL\n", n, nth, lvl);                     \
                     n_err++;                                                                                                                              \
                     if (flags)                                                                                                                            \
                         return n_err;                                                                                                                     \
-                } else if (this->next[n] != slist->slh_tail) {                                                                                            \
-                    __skip_integrity_failure_##decl("after the %lunth the %luth node's next[%lu] should point to the tail\n", m, nth, n);                 \
+                } else if (this->next[lvl] != slist->slh_tail) {                                                                                          \
+                    __skip_integrity_failure_##decl("after the %lunth the %luth node's next[%lu] should point to the tail\n", n, nth, lvl);               \
                     n_err++;                                                                                                                              \
                     if (flags)                                                                                                                            \
                         return n_err;                                                                                                                     \
                 }                                                                                                                                         \
             }                                                                                                                                             \
-            */                                                                                                                                            \
                                                                                                                                                           \
             decl##_node_t *a = (decl##_node_t *)(uintptr_t)this->next;                                                                                    \
             decl##_node_t *b = (decl##_node_t *)(intptr_t)((uintptr_t)node + sizeof(decl##_node_t));                                                      \
@@ -1572,13 +1317,10 @@
                 if (flags)                                                                                                                                \
                     return n_err;                                                                                                                         \
             }                                                                                                                                             \
-                                                                                                                                                          \
-            node = prefix##skip_next_node_##decl(slist, node);                                                                                            \
-            nth++;                                                                                                                                        \
         }                                                                                                                                                 \
                                                                                                                                                           \
         if (slist->length != nth) {                                                                                                                       \
-            __skip_integrity_failure_##decl("slist->length doesn't match the count of nodes between the head and tail\n");                                \
+            __skip_integrity_failure_slex("slist->length (%lu) doesn't match the count (%lu) of nodes between the head and tail\n", slist->length, nth);  \
             n_err++;                                                                                                                                      \
             if (flags)                                                                                                                                    \
                 return n_err;                                                                                                                             \
