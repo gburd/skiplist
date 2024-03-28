@@ -27,7 +27,7 @@
 #define INTEGRITY_CHK ((void)0)
 #endif
 
-//define SNAPSHOTS
+#define SNAPSHOTS
 #define DOT
 #define TEST_ARRAY_SIZE 10
 

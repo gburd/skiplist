@@ -1139,10 +1139,14 @@
             return rc;                                                                                                                                      \
                                                                                                                                                             \
         /* (b) shallow copy */                                                                                                                              \
-        memcpy(dest, src, sizeof(decl##_node_t));                                                                                                           \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
+        memcpy(dest, src, sizeof(decl##_node_t) + sle_arr_sz);                                                                                              \
+                                                                                                                                                            \
+        /* (d) adjust pointer to sle_next for this node */                                                                                                  \
+        dest->field.sle_next = (decl##_node_t **)((uintptr_t)dest + sizeof(decl##_node_t));                                                                 \
                                                                                                                                                             \
         if (!(src == slist->slh_head || src == slist->slh_tail)) {                                                                                          \
-            /* (d) deep copy */                                                                                                                             \
+            /* (e) deep copy */                                                                                                                             \
             archive_node_blk;                                                                                                                               \
             if (rc) {                                                                                                                                       \
                 prefix##skip_free_node_##decl(dest);                                                                                                        \
@@ -1619,7 +1623,7 @@
             if (next)                                                                                                               \
                 fprintf(os, "%p } |", (void *)next);                                                                                \
             else                                                                                                                    \
-                fprintf(os, "0x0 } |");                                                                                            \
+                fprintf(os, "0x0 } |");                                                                                             \
             fflush(os);                                                                                                             \
         }                                                                                                                           \
         if (fn) {                                                                                                                   \
@@ -1728,7 +1732,7 @@
                 if (next)                                                                                                           \
                     fprintf(os, "%p }", (void *)next);                                                                              \
                 else                                                                                                                \
-                    fprintf(os, "0x0 }");                                                                                          \
+                    fprintf(os, "0x0 }");                                                                                           \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
@@ -1776,7 +1780,7 @@
             size_t th = slist->slh_head->field.sle_height;                                                                          \
             for (size_t lvl = th; lvl != (size_t)-1; lvl--) {                                                                       \
                 next = (node->field.sle_next[lvl] == slist->slh_tail) ? NULL : node->field.sle_next[lvl];                           \
-                fprintf(os, "<w%lu> 0x0", lvl);                                                                                    \
+                fprintf(os, "<w%lu> 0x0", lvl);                                                                                     \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
