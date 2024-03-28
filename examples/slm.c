@@ -12,7 +12,7 @@
 
 #define DEBUG 1
 #define SKIPLIST_DEBUG slex
-//define SKIPLIST_MAX_HEIGHT 12
+#define SKIPLIST_MAX_HEIGHT 12
 /* Setting this will do two things:
  * 1) limit our max height across all instances of this datastructure.
  * 2) remove a heap allocation on frequently used paths, insert/remove/etc.
@@ -28,7 +28,7 @@
 #endif
 
 //define SNAPSHOTS
-//define DOT
+#define DOT
 #define TEST_ARRAY_SIZE 10
 
 
@@ -62,19 +62,19 @@ SKIPLIST_DECL(
     /* update node */
     {
         //char *old = node->value;
-        node->value = new->value;
+        dest->value = src->value;
         // In this case, don't free, we're just calling to_upper and using the same memory.
         // free(old);
     },
     /* archive a node */
     {
-        new->key = node->key;
-        char *nv = calloc(strlen(node->value) + 1, sizeof(char));
+        dest->key = src->key;
+        char *nv = calloc(strlen(src->value) + 1, sizeof(char));
         if (nv == NULL)
             rc = ENOMEM;
         else {
-            strncpy(nv, node->value, strlen(node->value));
-            new->value = nv;
+            strncpy(nv, src->value, strlen(src->value));
+            dest->value = nv;
         }
     },
     /* size in bytes of the content stored in an entry by you */
@@ -319,8 +319,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    slex_t *restored = api_skip_restore_snapshot_slex(list, snp[r]);
-    api_skip_dispose_snapshot_slex(list, r+1);
+    slex_t *restored = api_skip_restore_snapshot_slex(list);
+    api_skip_release_snapshot_slex(list);
     api_skip_destroy_slex(restored);
 #endif
 

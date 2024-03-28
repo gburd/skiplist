@@ -268,6 +268,7 @@
         void *slh_aux;                                                                                                                                      \
         decl##_node_t *slh_head;                                                                                                                            \
         decl##_node_t *slh_tail;                                                                                                                            \
+        decl##_node_t *slh_snap;                                                                                                                            \
     } decl##_t;                                                                                                                                             \
                                                                                                                                                             \
     /* Skip List comparison function type */                                                                                                                \
@@ -584,7 +585,7 @@
             if (path == NULL)                                                                                                                               \
                 return ENOMEM;                                                                                                                              \
         }                                                                                                                                                   \
-        memset(path, 0, sizeof(sizeof(decl##_node_t *) * slist->slh_max + 1));                                                                              \
+        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                              \
                                                                                                                                                             \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                      \
         len = __skip_locate_##decl(slist, new, path);                                                                                                       \
@@ -900,6 +901,7 @@
             free(path);                                                                                                                                     \
                                                                                                                                                             \
         if (node) {                                                                                                                                         \
+            decl##_node_t *src = node, *dest = new;                                                                                                         \
             update_node_blk;                                                                                                                                \
             return rc;                                                                                                                                      \
         }                                                                                                                                                   \
@@ -992,127 +994,87 @@
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
+     * -- skip_release_snapshot_                                                                                                                            \
+     *                                                                                                                                                      \
+     * Removes ... TODO                                                                                                                                     \
+     */                                                                                                                                                     \
+    void prefix##skip_release_snapshot_##decl(decl##_t *slist)                                                                                              \
+    {                                                                                                                                                       \
+        ((void)slist);                                                                                                                                      \
+    }                                                                                                                                                       \
+                                                                                                                                                            \
+    /**                                                                                                                                                     \
+     * -- __skip_preserve_node_                                                                                                                             \
+     *                                                                                                                                                      \
+     * Preserve given node in the slh_pres list.                                                                                                            \
+     */                                                                                                                                                     \
+    static int __skip_preserve_node_##decl(decl##_t *slist, decl##_node_t *node, decl##_node_t **preserved)                                                 \
+    {                                                                                                                                                       \
+        int rc = 0;                                                                                                                                         \
+        size_t amt, i;                                                                                                                                      \
+        char *d;                                                                                                                                            \
+        const char *s;                                                                                                                                      \
+        decl##_node_t *src, *dest;                                                                                                                          \
+                                                                                                                                                            \
+        if (slist == NULL || node == NULL)                                                                                                                  \
+            return 0;                                                                                                                                       \
+                                                                                                                                                            \
+        /* (a) alloc */                                                                                                                                     \
+        rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                                  \
+        if (rc)                                                                                                                                             \
+            return rc;                                                                                                                                      \
+        amt = sizeof(decl##_node_t);                                                                                                                        \
+                                                                                                                                                            \
+        /* (b) shallow copy */                                                                                                                              \
+        s = (const char *)node;                                                                                                                             \
+        d = (char *)dest;                                                                                                                                   \
+        for (i = 0; i < amt; i++)                                                                                                                           \
+            d[i] = s[i];                                                                                                                                    \
+                                                                                                                                                            \
+        /* (d) deep copy */                                                                                                                                 \
+        src = node;                                                                                                                                         \
+        archive_node_blk;                                                                                                                                   \
+        if (rc) {                                                                                                                                           \
+            prefix##skip_free_node_##decl(dest);                                                                                                            \
+            return rc;                                                                                                                                      \
+        }                                                                                                                                                   \
+                                                                                                                                                            \
+        *preserved = dest;                                                                                                                                  \
+                                                                                                                                                            \
+        return rc;                                                                                                                                          \
+    }                                                                                                                                                       \
+                                                                                                                                                            \
+    /**                                                                                                                                                     \
+     * -- skip_restore_snapshot_ TODO/WIP                                                                                                                   \
+     *                                                                                                                                                      \
+     * Restores the Skiplist to the snapshot.                                                                                                               \
+     */                                                                                                                                                     \
+    decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist)                                                                                         \
+    {                                                                                                                                                       \
+        ((void)slist);                                                                                                                                      \
+        return NULL;                                                                                                                                        \
+    }                                                                                                                                                       \
+                                                                                                                                                            \
+    /**                                                                                                                                                     \
      * -- skip_snapshot_                                                                                                                                    \
      *                                                                                                                                                      \
      * A snapshot is a read-only view of a Skip List at a point in time.  Once                                                                              \
-     * taken, a snapshot must be restored or disposed. Any number of snapshots                                                                              \
+     * taken, a snapshot must be restored or released. Any number of snapshots                                                                              \
      * can be created.                                                                                                                                      \
      */                                                                                                                                                     \
     size_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                                    \
     {                                                                                                                                                       \
+        int rc;                                                                                                                                             \
+                                                                                                                                                            \
         if (slist == NULL)                                                                                                                                  \
             return 0;                                                                                                                                       \
-                                                                                                                                                            \
+        if (slist->slh_snap != NULL)                                                                                                                        \
+            prefix##skip_release_snapshot_##decl(slist);                                                                                                    \
+        rc = __skip_preserve_node_##decl(slist, slist->slh_head, &slist->slh_snap);                                                                         \
+        if (rc > 0)                                                                                                                                         \
+            return rc;                                                                                                                                      \
         slist->slh_gen++;                                                                                                                                   \
         return slist->slh_gen;                                                                                                                              \
-    }                                                                                                                                                       \
-                                                                                                                                                            \
-    /* Archive of a Skip List */                                                                                                                            \
-    typedef struct decl##_archive {                                                                                                                         \
-        decl##_t list;                                                                                                                                      \
-        decl##_node_t *nodes;                                                                                                                               \
-        size_t bytes;                                                                                                                                       \
-    } decl##_archive_t;                                                                                                                                     \
-                                                                                                                                                            \
-    /**                                                                                                                                                     \
-     * -- skip_to_bytes_ TODO/WIP                                                                                                                           \
-     *                                                                                                                                                      \
-     * Writes out list and node content to a portable array of bytes                                                                                        \
-     * suitable for archiving to disk.                                                                                                                      \
-     */                                                                                                                                                     \
-    decl##_archive_t *prefix##skip_to_bytes_##decl(decl##_t *slist)                                                                                         \
-    {                                                                                                                                                       \
-        int rc = 0;                                                                                                                                         \
-        size_t size, bytes, i;                                                                                                                              \
-        decl##_archive_t *archive;                                                                                                                          \
-        decl##_node_t *node, *new;                                                                                                                          \
-                                                                                                                                                            \
-        if (slist == NULL)                                                                                                                                  \
-            return NULL;                                                                                                                                    \
-                                                                                                                                                            \
-        bytes = sizeof(decl##_archive_t) + (slist->slh_length * sizeof(decl##_node_t));                                                                     \
-        node = prefix##skip_head_##decl(slist);                                                                                                             \
-        while (node) {                                                                                                                                      \
-            sizeof_entry_blk;                                                                                                                               \
-            bytes += sizeof(size_t);                                                                                                                        \
-            bytes += size;                                                                                                                                  \
-            node = prefix##skip_next_node_##decl(slist, node);                                                                                              \
-        }                                                                                                                                                   \
-        archive = (decl##_archive_t *)calloc(1, bytes);                                                                                                     \
-        if (archive == NULL)                                                                                                                                \
-            return NULL;                                                                                                                                    \
-                                                                                                                                                            \
-        archive->bytes = bytes;                                                                                                                             \
-        archive->list.slh_length = slist->slh_length;                                                                                                       \
-        archive->list.slh_max = slist->slh_max;                                                                                                             \
-        archive->nodes = (decl##_node_t *)(archive + sizeof(decl##_archive_t));                                                                             \
-                                                                                                                                                            \
-        i = 0;                                                                                                                                              \
-        node = prefix##skip_head_##decl(slist);                                                                                                             \
-        while (node) {                                                                                                                                      \
-            decl##_node_t *n = (decl##_node_t *)archive->nodes + (i++ * sizeof(decl##_node_t));                                                             \
-            new = (decl##_node_t *)&n;                                                                                                                      \
-            archive_node_blk;                                                                                                                               \
-            if (rc)                                                                                                                                         \
-                return NULL;                                                                                                                                \
-            node = prefix##skip_next_node_##decl(slist, node);                                                                                              \
-        }                                                                                                                                                   \
-        return archive;                                                                                                                                     \
-    }                                                                                                                                                       \
-                                                                                                                                                            \
-    /**                                                                                                                                                     \
-     * -- skip_from_bytes_ TODO/WIP                                                                                                                         \
-     *                                                                                                                                                      \
-     */                                                                                                                                                     \
-    decl##_t *prefix##skip_from_bytes_##decl(decl##_archive_t *archive, int (*cmp)(decl##_t * head, decl##_node_t * a, decl##_node_t * b, void *aux))       \
-    {                                                                                                                                                       \
-        int rc;                                                                                                                                             \
-        size_t i;                                                                                                                                           \
-        decl##_t *slist;                                                                                                                                    \
-        decl##_node_t *node, *new;                                                                                                                          \
-                                                                                                                                                            \
-        if (archive == NULL || cmp == NULL)                                                                                                                 \
-            return 0;                                                                                                                                       \
-        slist = (decl##_t *)calloc(1, sizeof(decl##_t));                                                                                                    \
-        if (slist == NULL)                                                                                                                                  \
-            return NULL;                                                                                                                                    \
-                                                                                                                                                            \
-        slist->slh_cmp = cmp;                                                                                                                               \
-        slist->slh_max = archive->list.slh_max;                                                                                                             \
-                                                                                                                                                            \
-        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                       \
-        if (rc)                                                                                                                                             \
-            goto fail;                                                                                                                                      \
-        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);                                                                                       \
-        if (rc)                                                                                                                                             \
-            goto fail;                                                                                                                                      \
-                                                                                                                                                            \
-        slist->slh_head->field.sle_height = 0;                                                                                                              \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
-            slist->slh_head->field.sle_next[i] = slist->slh_tail;                                                                                           \
-        slist->slh_head->field.sle_prev = NULL;                                                                                                             \
-                                                                                                                                                            \
-        slist->slh_tail->field.sle_height = slist->slh_max;                                                                                                 \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
-            slist->slh_tail->field.sle_next[i] = NULL;                                                                                                      \
-        slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                  \
-                                                                                                                                                            \
-        i = 0;                                                                                                                                              \
-        while (archive->list.slh_length > 0) {                                                                                                              \
-            decl##_node_t *n = (decl##_node_t *)archive->nodes + (i++ * sizeof(decl##_node_t));                                                             \
-            node = (decl##_node_t *)&n;                                                                                                                     \
-            rc = prefix##skip_alloc_node_##decl(slist, &new);                                                                                               \
-            archive_node_blk;                                                                                                                               \
-            __skip_insert_##decl(slist, new, 1);                                                                                                            \
-            archive->list.slh_length--;                                                                                                                     \
-        }                                                                                                                                                   \
-        return slist;                                                                                                                                       \
-    fail:;                                                                                                                                                  \
-        if (slist->slh_head)                                                                                                                                \
-            free(slist->slh_head);                                                                                                                          \
-        if (slist->slh_tail)                                                                                                                                \
-            free(slist->slh_tail);                                                                                                                          \
-        return NULL;                                                                                                                                        \
     }
 
 #define SKIPLIST_INTEGRITY_CHECK(decl, prefix, field)                                                                                                      \
@@ -1526,7 +1488,7 @@
             if (next)                                                                                                               \
                 fprintf(os, "%p } |", (void *)next);                                                                                \
             else                                                                                                                    \
-                fprintf(os, "NULL } |");                                                                                            \
+                fprintf(os, "tail } |");                                                                                            \
             fflush(os);                                                                                                             \
         }                                                                                                                           \
         if (fn) {                                                                                                                   \
@@ -1547,7 +1509,7 @@
             fprintf(os, ":f%lu -> ", lvl);                                                                                          \
             __skip_dot_write_node_##decl(os, nsg, next);                                                                            \
             fprintf(os, ":w%lu [];\n", lvl);                                                                                        \
-            fflush(os);                                                                                                             \
+            fflush(os);                                                 \
         }                                                                                                                           \
     }                                                                                                                               \
                                                                                                                                     \
@@ -1635,7 +1597,7 @@
                 if (next)                                                                                                           \
                     fprintf(os, "%p }", (void *)next);                                                                              \
                 else                                                                                                                \
-                    fprintf(os, "NULL }");                                                                                          \
+                    fprintf(os, "tail }");                                                                                          \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
@@ -1683,7 +1645,7 @@
             size_t th = slist->slh_head->field.sle_height;                                                                          \
             for (size_t lvl = th; lvl != (size_t)-1; lvl--) {                                                                       \
                 next = (node->field.sle_next[lvl] == slist->slh_tail) ? NULL : node->field.sle_next[lvl];                           \
-                fprintf(os, "<w%lu> NULL", lvl);                                                                                    \
+                fprintf(os, "<w%lu> TAIL", lvl);                                                                                    \
                 __SKIP_IS_LAST_ENTRY_T2B() continue;                                                                                \
                 fprintf(os, " | ");                                                                                                 \
             }                                                                                                                       \
