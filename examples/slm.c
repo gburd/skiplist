@@ -29,7 +29,7 @@
 
 //define SNAPSHOTS
 //define DOT
-#define TEST_ARRAY_SIZE 2000
+#define TEST_ARRAY_SIZE 10
 
 
 /*
@@ -165,7 +165,7 @@ int_to_roman_numeral(int num)
     char *sym[] = { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" }; // Symbols for key values
     // The maximum length of the Roman numeral representation for the maximum signed 64-bit integer would be approximately 19 * 3 = 57 characters, assuming
     // every digit is represented by its Roman numeral equivalent up to 3 repetitions.  Therefore, 64 should be more than enough.
-    char *res = (char *)calloc(64, sizeof(char));
+    char *res = (char *)calloc(4096, sizeof(char));
     int i = 0;
     if (num < 0) {
         res[0] = '-';
