@@ -232,8 +232,7 @@ main()
 
 #ifdef SNAPSHOTS
     /* Test creating a snapshot of an empty Skiplist */
-    size_t snp[TEST_ARRAY_SIZE * 2 + 10];
-    snp[0] = api_skip_snapshot_slex(list);
+    api_skip_snapshot_slex(list);
 #endif
 
     /* Insert 7 key/value pairs into the list. */
@@ -254,7 +253,7 @@ main()
         //rc = api_skip_put_slex(list, array[i], numeral);
         INTEGRITY_CHK;
 #ifdef SNAPSHOTS
-        snp[i + 1] = api_skip_snapshot_slex(list);
+        api_skip_snapshot_slex(list);
         INTEGRITY_CHK;
 #endif
 #ifdef DOT
@@ -267,9 +266,6 @@ main()
         api_skip_set_slex(list, array[i], to_upper(v));
         INTEGRITY_CHK;
     }
-#ifdef SNAPSHOTS
-    int r = i;
-#endif
     numeral = int_to_roman_numeral(-1);
     api_skip_dup_slex(list, -1, numeral);
     INTEGRITY_CHK;
@@ -287,7 +283,7 @@ main()
     INTEGRITY_CHK;
 #endif
 #ifdef SNAPSHOTS
-    snp[++i] = api_skip_snapshot_slex(list);
+    api_skip_snapshot_slex(list);
     INTEGRITY_CHK;
 #endif
 
@@ -308,7 +304,7 @@ main()
     api_skip_del_slex(list, key);
     INTEGRITY_CHK;
 #ifdef SNAPSHOTS
-    snp[++i] = api_skip_snapshot_slex(list);
+    api_skip_snapshot_slex(list);
     INTEGRITY_CHK;
 #endif
 
