@@ -1017,7 +1017,6 @@
                                                                                                                                                             \
         free(slist->slh_head);                                                                                                                              \
         free(slist->slh_tail);                                                                                                                              \
-        return;                                                                                                                                             \
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
@@ -1065,13 +1064,19 @@
         if (slist == NULL)                                                                                                                                  \
             return;                                                                                                                                         \
                                                                                                                                                             \
+        if (slist->slh_snap.head == NULL)                                                                                                                   \
+            return;                                                                                                                                         \
+                                                                                                                                                            \
         sn = prefix##skip_snap_head_##decl(slist);                                                                                                          \
+        if (sn == NULL)                                                                                                                                     \
+            goto free_head_and_tail;                                                                                                                        \
+                                                                                                                                                            \
         SKIPLIST_FOREACH_H2T(decl, prefix, slist, ln, nth)                                                                                                  \
         {                                                                                                                                                   \
             goto top_of_loop;                                                                                                                               \
         sn_forward_only:;                                                                                                                                   \
             sn = sn->field.sle_next[0];                                                                                                                     \
-            if (sn == slist->slh_snap.tail)                                                                                                                 \
+            if (sn == slist->slh_tail)                                                                                                                      \
                 break;                                                                                                                                      \
         top_of_loop:;                                                                                                                                       \
             /* When a node is referenced by both, keep going. */                                                                                            \
@@ -1094,9 +1099,14 @@
                 /* ... we could have:                                                                                                                       \
                    a) a duplicate, or                                                                                                                       \
                    b) a copied a node, but not it's value, because it was                                                                                   \
-                      adjacent to some mutated node (it was in the `path[]`                                                                                 \
-                      during an insert, update, or delete), or                                                                                              \
+                   adjacent to some mutated node (it was in the `path[]`                                                                                    \
+                   during an insert, update, or delete), or                                                                                                 \
                    c) ...?                                                                                                                                  \
+                */                                                                                                                                          \
+                /* TODO                                                                                                                                     \
+                   free_node_blk;                                                                                                                           \
+                   free(sn->field.sle_next);                                                                                                                \
+                   free(sn);                                                                                                                                \
                 */                                                                                                                                          \
                 cnt++;                                                                                                                                      \
             }                                                                                                                                               \
@@ -1115,9 +1125,21 @@
             node = sn;                                                                                                                                      \
             free_node_blk;                                                                                                                                  \
             next = sn->field.sle_next[0];                                                                                                                   \
+            /* Nodes are a block of contigious memory that includes the `next[]`                                                                            \
+               pointers except when they are preserved nodes.  In this case the                                                                             \
+               `next[]` array is a separate heap object (unless you're the head                                                                             \
+               or tail nodes in a preserved snapshot). */                                                                                                   \
+            free(sn->field.sle_next);                                                                                                                       \
             free(sn);                                                                                                                                       \
             sn = next;                                                                                                                                      \
+            cnt++;                                                                                                                                          \
         }                                                                                                                                                   \
+                                                                                                                                                            \
+    free_head_and_tail:;                                                                                                                                    \
+        free(slist->slh_snap.head);                                                                                                                         \
+        free(slist->slh_snap.tail);                                                                                                                         \
+        slist->slh_snap.head = NULL;                                                                                                                        \
+        slist->slh_snap.tail = NULL;                                                                                                                        \
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
@@ -1129,22 +1151,44 @@
     {                                                                                                                                                       \
         int rc = 0;                                                                                                                                         \
         decl##_node_t *dest;                                                                                                                                \
+        struct __skiplist_##decl_entry *entry = NULL;                                                                                                       \
                                                                                                                                                             \
         if (slist == NULL || src == NULL)                                                                                                                   \
             return 0;                                                                                                                                       \
                                                                                                                                                             \
         /* (a) alloc */                                                                                                                                     \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
         rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                                  \
         if (rc)                                                                                                                                             \
             return rc;                                                                                                                                      \
+        if (!(src == slist->slh_head || src == slist->slh_tail)) {                                                                                          \
+            entry = (struct __skiplist_##decl_entry *)calloc(1, sle_arr_sz);                                                                                \
+            if (entry == NULL) {                                                                                                                            \
+                prefix##skip_free_node_##decl(dest);                                                                                                        \
+                return ENOMEM;                                                                                                                              \
+            }                                                                                                                                               \
+        }                                                                                                                                                   \
                                                                                                                                                             \
-        /* (b) shallow copy */                                                                                                                              \
-        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
+        /* (b) shallow copy, point to separate sle_next, and copy into it */                                                                                \
         memcpy(dest, src, sizeof(decl##_node_t) + sle_arr_sz);                                                                                              \
+        if (!(src == slist->slh_head || src == slist->slh_tail)) {                                                                                          \
+            dest->field.sle_next = (decl##_node_t **)entry;                                                                                                 \
+            memcpy(dest->field.sle_next, src->field.sle_next, sizeof(sle_arr_sz));                                                                          \
+        } else                                                                                                                                              \
+            dest->field.sle_next = (decl##_node_t **)((uintptr_t)dest + sizeof(decl##_node_t));                                                             \
                                                                                                                                                             \
-        /* (d) adjust pointer to sle_next for this node */                                                                                                  \
-        dest->field.sle_next = (decl##_node_t **)((uintptr_t)dest + sizeof(decl##_node_t));                                                                 \
+        /* (d) update any references in the new node's next[] array to point to                                                                             \
+           the snap tail; update the prev field in the new node to the snap head                                                                            \
+           for similar reasons. */                                                                                                                          \
+        __SKIP_ENTRIES_B2T(field, dest)                                                                                                                     \
+        {                                                                                                                                                   \
+            if (dest->field.sle_next[lvl] == slist->slh_tail)                                                                                               \
+                dest->field.sle_next[lvl] = slist->slh_snap.tail;                                                                                           \
+        }                                                                                                                                                   \
+        if (dest->field.sle_prev == slist->slh_head)                                                                                                        \
+            dest->field.sle_prev = slist->slh_snap.head;                                                                                                    \
                                                                                                                                                             \
+        /* If we're not preserving the head or the tail, ... */                                                                                             \
         if (!(src == slist->slh_head || src == slist->slh_tail)) {                                                                                          \
             /* (e) deep copy */                                                                                                                             \
             archive_node_blk;                                                                                                                               \
@@ -1184,29 +1228,18 @@
                                                                                                                                                             \
         if (slist == NULL)                                                                                                                                  \
             return 0;                                                                                                                                       \
-        /* (a) preserve the head node */                                                                                                                    \
+        /* (a) release previous snapshot, assign the new one */                                                                                             \
+        prefix##skip_release_snapshot_##decl(slist);                                                                                                        \
+        /* (b) preserve the head node */                                                                                                                    \
         rc = __skip_preserve_node_##decl(slist, slist->slh_head, &head);                                                                                    \
         if (rc > 0)                                                                                                                                         \
             return rc;                                                                                                                                      \
-        /* (b) preserve the tail node */                                                                                                                    \
+        /* (c) preserve the tail node */                                                                                                                    \
         rc = __skip_preserve_node_##decl(slist, slist->slh_tail, &tail);                                                                                    \
         if (rc > 0) {                                                                                                                                       \
             prefix##skip_free_node_##decl(head);                                                                                                            \
             return rc;                                                                                                                                      \
         }                                                                                                                                                   \
-        /* (c) update any references in the new head's next[] array to point to                                                                             \
-           the new tail; update the prev field in the new tail to the new head                                                                              \
-           for similar reasons. */                                                                                                                          \
-        __SKIP_ENTRIES_B2T(field, head)                                                                                                                     \
-        {                                                                                                                                                   \
-            if (head->field.sle_next[lvl] == slist->slh_tail)                                                                                               \
-                head->field.sle_next[lvl] = tail;                                                                                                           \
-        }                                                                                                                                                   \
-        if (tail->field.sle_prev == slist->slh_head)                                                                                                        \
-            tail->field.sle_prev = head;                                                                                                                    \
-        /* (d) release previous snapshot, assign the new one */                                                                                             \
-        if (slist->slh_snap.head != NULL)                                                                                                                   \
-            prefix##skip_release_snapshot_##decl(slist);                                                                                                    \
         slist->slh_snap.head = head;                                                                                                                        \
         slist->slh_snap.tail = tail;                                                                                                                        \
         slist->slh_snap.gen = __skip_incr_gen_##decl(slist);                                                                                                \
