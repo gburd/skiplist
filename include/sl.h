@@ -711,7 +711,8 @@ __skip_read_rdtsc(void)
         if (preserved)                                                                                                                                      \
             *preserved = dest;                                                                                                                              \
                                                                                                                                                             \
-        return rc;                                                                                                                                          \
+        rc = 1;                                                                                                                                             \
+        return -rc;                                                                                                                                         \
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
@@ -810,13 +811,13 @@ __skip_read_rdtsc(void)
                 /* Don't insert, duplicate if flag not set. */                                                                                              \
                 return -1;                                                                                                                                  \
             }                                                                                                                                               \
-            /* We must preserve nodes that will be mutated when we are                                                                                      \
-               maintaining a snapshot. */                                                                                                                   \
+            /* Snapshots preserve those nodes in the `path` that are will be                                                                                \
+               modified on insert. */                                                                                                                       \
             if (slist->slh_snap.pres != NULL) {                                                                                                             \
-                __skip_preserve_node_##decl(slist, node, NULL);                                                                                             \
+                __skip_preserve_##decl(slist, path, len);                                                                                                   \
             }                                                                                                                                               \
             /* Record the generation for this node to enable snapshots. */                                                                                  \
-            new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                                \
+            new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                              \
             /* Coin toss to determine level of this new node [0, max) */                                                                                    \
             cur_height = slist->slh_head->field.sle_height;                                                                                                 \
             new_height = __skip_toss_##decl(slist->slh_max);                                                                                                \
@@ -1105,7 +1106,6 @@ __skip_read_rdtsc(void)
     {                                                                                                                                                       \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                                \
         int rc = 0;                                                                                                                                         \
-        size_t len;                                                                                                                                         \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                             \
                                                                                                                                                             \
         if (slist == NULL)                                                                                                                                  \
@@ -1119,7 +1119,7 @@ __skip_read_rdtsc(void)
         }                                                                                                                                                   \
         memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                      \
                                                                                                                                                             \
-        len = __skip_locate_##decl(slist, new, path);                                                                                                       \
+        __skip_locate_##decl(slist, new, path);                                                                                                       \
         node = path[0];                                                                                                                                     \
                                                                                                                                                             \
         if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                                       \
@@ -1141,7 +1141,7 @@ __skip_read_rdtsc(void)
      */                                                                                                                                                     \
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *n)                                                                                  \
     {                                                                                                                                                       \
-        size_t i, len, height;                                                                                                                              \
+        size_t i, len, np = 0, height;                                                                                                                      \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                                \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                             \
                                                                                                                                                             \
@@ -1162,6 +1162,12 @@ __skip_read_rdtsc(void)
         len = __skip_locate_##decl(slist, n, path);                                                                                                         \
         node = path[0];                                                                                                                                     \
         if (node) {                                                                                                                                         \
+            /* Preserve this node about to be removed. */                                                                                                   \
+            if (slist->slh_snap.pres != NULL) {                                                                                                             \
+                np = __skip_preserve_node_##decl(slist, node, NULL);                                                                                        \
+                if (np > 0)                                                                                                                                 \
+                    return np;                                                                                                                              \
+            }                                                                                                                                               \
             /* We found it, set the next->prev to the node->prev keeping in mind                                                                            \
                that the next node might be the tail). */                                                                                                    \
             node->field.sle_next[0]->field.sle_prev = node->field.sle_prev;                                                                                 \
@@ -1187,7 +1193,9 @@ __skip_read_rdtsc(void)
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                                   \
                 free(path);                                                                                                                                 \
                                                                                                                                                             \
-            free_node_blk;                                                                                                                                  \
+            /* If we didn't preserve any nodes we can free this one. */                                                                                     \
+            if (np == 0)                                                                                                                                    \
+                free_node_blk;                                                                                                                              \
                                                                                                                                                             \
             /* Reduce the height of the header. */                                                                                                          \
             i = 0;                                                                                                                                          \
