@@ -296,12 +296,12 @@ __skip_read_rdtsc(void)
          iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
 
 /* Iterate over the next pointers in a node from bottom to top (B2T) or top to bottom (T2B). */
-#define __SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_max; lvl != (size_t)-1; lvl--)
+#define __SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_max_height; lvl != (size_t)-1; lvl--)
 #define __SKIP_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle_height; lvl != (size_t)-1; lvl--)
 #define __SKIP_ENTRIES_T2B_FROM(field, elm, off) for (size_t lvl = off; lvl != (size_t)-1; lvl--)
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
-#define __SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_max + 1; lvl++)
+#define __SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_max_height + 1; lvl++)
 #define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < elm->field.sle_height + 1; lvl++)
 #define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl < elm->field.sle_height + 1; lvl++)
 #define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == elm->field.sle_height)
@@ -316,7 +316,7 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
     /* Skip List structure and type */                                                                                                                      \
     typedef struct decl {                                                                                                                                   \
-        size_t slh_level, slh_length, slh_max, slh_gen;                                                                                                     \
+        size_t slh_length, slh_height, slh_max_height;                                  \
         int (*slh_cmp)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                            \
         void *slh_aux;                                                                                                                                      \
         decl##_node_t *slh_head;                                                                                                                            \
@@ -383,11 +383,22 @@ __skip_read_rdtsc(void)
     /**                                                                                                                                                     \
      * -- __skip_snapshot_gen                                                                                                                               \
      *                                                                                                                                                      \
-     * Returns the current generation for snapshot purposes.                                                                                                \
+     * Returns the current generation for snapshot purposes. \
+     * We use the TSC register on x86_64 for this which, on a 4 GHz processor, \
+     * would take over 146,000 years for the TSC to wrap around, starting from \
+     * zero.  In practice it won't generally be starting from zero, so if it \
+     * is within ~5 years of wrapping we'll adjust it a bit. \
      */                                                                                                                                                     \
     static inline uint64_t __skip_snapshot_gen_##decl()                                                                                                     \
     {                                                                                                                                                       \
-        return __skip_read_rdtsc();                                                                                                                         \
+        static uint64_t cycles_5yr_before_a_wrap = 18444725120000000000ULL; \
+        static uint64_t adjustment = 0;                                 \
+        uint64_t tsc = __skip_read_rdtsc();                             \
+        if (adjustment == 0) { \
+            if (tsc > cycles_5yr_before_a_wrap)                         \
+                adjustment = tsc - 1;                                   \
+        }\
+        return tsc - adjustment;                                        \
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
@@ -400,7 +411,7 @@ __skip_read_rdtsc(void)
         decl##_node_t *n;                                                                                                                                   \
         /* Calculate the size of the struct sle within decl##_node_t, multiply                                                                              \
            by array size. (16/24 bytes on 32/64 bit systems) */                                                                                             \
-        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max_height;                                                                        \
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                                                 \
         if (n == NULL)                                                                                                                                      \
             return ENOMEM;                                                                                                                                  \
@@ -422,9 +433,11 @@ __skip_read_rdtsc(void)
         size_t i;                                                                                                                                           \
                                                                                                                                                             \
         slist->slh_length = 0;                                                                                                                              \
-        slist->slh_max = (size_t)(max < 0 ? -max : max);                                                                                                    \
-        slist->slh_max = SKIPLIST_MAX_HEIGHT == 1 ? slist->slh_max : SKIPLIST_MAX_HEIGHT;                                                                   \
-        if (SKIPLIST_MAX_HEIGHT > 1 && slist->slh_max > SKIPLIST_MAX_HEIGHT)                                                                                \
+        slist->slh_height = 0;                                                                                                                              \
+        slist->slh_snap.gen = 0;                                                                                                                              \
+        slist->slh_max_height = (size_t)(max < 0 ? -max : max);                                                                                                    \
+        slist->slh_max_height = SKIPLIST_MAX_HEIGHT == 1 ? slist->slh_max_height : SKIPLIST_MAX_HEIGHT;                                                                   \
+        if (SKIPLIST_MAX_HEIGHT > 1 && slist->slh_max_height > SKIPLIST_MAX_HEIGHT)                                                                                \
             return -1;                                                                                                                                      \
         slist->slh_cmp = cmp;                                                                                                                               \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                       \
@@ -435,12 +448,12 @@ __skip_read_rdtsc(void)
             goto fail;                                                                                                                                      \
                                                                                                                                                             \
         slist->slh_head->field.sle_height = 0;                                                                                                              \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
+        for (i = 0; i < slist->slh_max_height; i++)                                                                                                                \
             slist->slh_head->field.sle_next[i] = slist->slh_tail;                                                                                           \
         slist->slh_head->field.sle_prev = NULL;                                                                                                             \
                                                                                                                                                             \
-        slist->slh_tail->field.sle_height = slist->slh_max - 1;                                                                                             \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
+        slist->slh_tail->field.sle_height = slist->slh_max_height - 1;                                                                                             \
+        for (i = 0; i < slist->slh_max_height; i++)                                                                                                                \
             slist->slh_tail->field.sle_next[i] = NULL;                                                                                                      \
         slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                  \
                                                                                                                                                             \
@@ -602,7 +615,7 @@ __skip_read_rdtsc(void)
      * Locates a node that matches another node updating `path` and then                                                                                    \
      * returning the length of that path + 1 to the node and the matching                                                                                   \
      * node in path[0], or NULL at path[0] where there wasn't a match.                                                                                      \
-     * sizeof(path) should be `slist->slh_max + 1`                                                                                                          \
+     * sizeof(path) should be `slist->slh_max_height + 1`                                                                                                          \
      */                                                                                                                                                     \
     static size_t __skip_locate_##decl(decl##_t *slist, decl##_node_t *n, decl##_node_t **path)                                                             \
     {                                                                                                                                                       \
@@ -664,7 +677,7 @@ __skip_read_rdtsc(void)
             return 0;                                                                                                                                       \
                                                                                                                                                             \
         /* (a) alloc, ... */                                                                                                                                \
-        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max_height;                                                                        \
         rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                                  \
         if (rc)                                                                                                                                             \
             return rc;                                                                                                                                      \
@@ -753,7 +766,7 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
             /* When the generation of the node in the path is < the list's                                                                                  \
                current generation, we must preserve it. */                                                                                                  \
-            if (path[i]->field.sle_gen < slist->slh_gen) {                                                                                                  \
+            if (path[i]->field.sle_gen < slist->slh_snap.gen) {                                                                                                  \
                 n = __skip_preserve_node_##decl(slist, path[i], NULL);                                                                                      \
                 if (n > 0)                                                                                                                                  \
                     return n;                                                                                                                               \
@@ -797,11 +810,11 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
         /* Allocate a buffer, or use a static one. */                                                                                                       \
         if (SKIPLIST_MAX_HEIGHT == 1) {                                                                                                                     \
-            path = malloc(sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                    \
+            path = malloc(sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                    \
             if (path == NULL)                                                                                                                               \
                 return ENOMEM;                                                                                                                              \
         }                                                                                                                                                   \
-        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                      \
+        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                      \
                                                                                                                                                             \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                      \
         len = __skip_locate_##decl(slist, new, path);                                                                                                       \
@@ -820,7 +833,7 @@ __skip_read_rdtsc(void)
             new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                              \
             /* Coin toss to determine level of this new node [0, max) */                                                                                    \
             cur_height = slist->slh_head->field.sle_height;                                                                                                 \
-            new_height = __skip_toss_##decl(slist->slh_max);                                                                                                \
+            new_height = __skip_toss_##decl(slist->slh_max_height);                                                                                                \
             new->field.sle_height = new_height;                                                                                                             \
             /* Trim the path to at most the new height for the new node. */                                                                                 \
             if (new_height > cur_height) {                                                                                                                  \
@@ -1113,11 +1126,11 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
         /* Allocate a buffer, or use a static one. */                                                                                                       \
         if (SKIPLIST_MAX_HEIGHT == 1) {                                                                                                                     \
-            path = malloc(sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                    \
+            path = malloc(sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                    \
             if (path == NULL)                                                                                                                               \
                 return ENOMEM;                                                                                                                              \
         }                                                                                                                                                   \
-        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                      \
+        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                      \
                                                                                                                                                             \
         __skip_locate_##decl(slist, new, path);                                                                                                             \
         node = path[0];                                                                                                                                     \
@@ -1152,11 +1165,11 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
         /* Allocate a buffer */                                                                                                                             \
         if (SKIPLIST_MAX_HEIGHT == 1) {                                                                                                                     \
-            path = malloc(sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                    \
+            path = malloc(sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                    \
             if (path == NULL)                                                                                                                               \
                 return ENOMEM;                                                                                                                              \
         }                                                                                                                                                   \
-        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max + 1);                                                                                      \
+        memset(path, 0, sizeof(decl##_node_t *) * slist->slh_max_height + 1);                                                                                      \
                                                                                                                                                             \
         /* Attempt to locate the node in the list. */                                                                                                       \
         len = __skip_locate_##decl(slist, n, path);                                                                                                         \
@@ -1238,7 +1251,7 @@ __skip_read_rdtsc(void)
         if (slist == NULL)                                                                                                                                  \
             return NULL;                                                                                                                                    \
                                                                                                                                                             \
-        if (gen >= slist->slh_gen || slist->slh_snap.pres == NULL)                                                                                          \
+        if (gen >= slist->slh_snap.gen || slist->slh_snap.pres == NULL)                                                                                          \
             return slist;                                                                                                                                   \
                                                                                                                                                             \
         cur_gen = __skip_snapshot_gen_##decl();                                                                                                             \
@@ -1295,7 +1308,7 @@ __skip_read_rdtsc(void)
         }                                                                                                                                                   \
                                                                                                                                                             \
         /* (d) */                                                                                                                                           \
-        slist->slh_gen = cur_gen;                                                                                                                           \
+        slist->slh_snap.gen = cur_gen;                                                                                                                           \
                                                                                                                                                             \
         return slist;                                                                                                                                       \
     }                                                                                                                                                       \
@@ -1355,7 +1368,7 @@ __skip_read_rdtsc(void)
                                                                                                                                                             \
         archive->bytes = bytes;                                                                                                                             \
         archive->list.slh_length = slist->slh_length;                                                                                                       \
-        archive->list.slh_max = slist->slh_max;                                                                                                             \
+        archive->list.slh_max_height = slist->slh_max_height;                                                                                                             \
         archive->nodes = (decl##_node_t *)(archive + sizeof(decl##_archive_t));                                                                             \
                                                                                                                                                             \
         i = 0;                                                                                                                                              \
@@ -1389,7 +1402,7 @@ __skip_read_rdtsc(void)
             return NULL;                                                                                                                                    \
                                                                                                                                                             \
         slist->slh_cmp = cmp;                                                                                                                               \
-        slist->slh_max = archive->list.slh_max;                                                                                                             \
+        slist->slh_max_height = archive->list.slh_max_height;                                                                                                             \
                                                                                                                                                             \
         rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                                                                                       \
         if (rc)                                                                                                                                             \
@@ -1399,12 +1412,12 @@ __skip_read_rdtsc(void)
             goto fail;                                                                                                                                      \
                                                                                                                                                             \
         slist->slh_head->field.sle_height = 0;                                                                                                              \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
+        for (i = 0; i < slist->slh_max_height; i++)                                                                                                                \
             slist->slh_head->field.sle_next[i] = slist->slh_tail;                                                                                           \
         slist->slh_head->field.sle_prev = NULL;                                                                                                             \
                                                                                                                                                             \
-        slist->slh_tail->field.sle_height = slist->slh_max;                                                                                                 \
-        for (i = 0; i < slist->slh_max; i++)                                                                                                                \
+        slist->slh_tail->field.sle_height = slist->slh_max_height;                                                                                                 \
+        for (i = 0; i < slist->slh_max_height; i++)                                                                                                                \
             slist->slh_tail->field.sle_next[i] = NULL;                                                                                                      \
         slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                  \
                                                                                                                                                             \
@@ -1488,16 +1501,16 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             return n_err;                                                                                                                                  \
         }                                                                                                                                                  \
                                                                                                                                                            \
-        if (slist->slh_max < 1) {                                                                                                                          \
+        if (slist->slh_max_height < 1) {                                                                                                                          \
             __skip_integrity_failure_##decl("skiplist max level must be 1 at minimum\n");                                                                  \
             n_err++;                                                                                                                                       \
             if (flags)                                                                                                                                     \
                 return n_err;                                                                                                                              \
         }                                                                                                                                                  \
                                                                                                                                                            \
-        if (slist->slh_level >= slist->slh_max) {                                                                                                          \
+        if (slist->slh_height >= slist->slh_max_height) {                                                                                                          \
             /* level is 0-based, max of 12 means level cannot be > 11 */                                                                                   \
-            __skip_integrity_failure_##decl("skiplist level %lu in header was >= max %lu\n", slist->slh_level, slist->slh_max);                            \
+            __skip_integrity_failure_##decl("skiplist level %lu in header was >= max %lu\n", slist->slh_height, slist->slh_max_height);                            \
             n_err++;                                                                                                                                       \
             if (flags)                                                                                                                                     \
                 return n_err;                                                                                                                              \
@@ -1510,8 +1523,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 return n_err;                                                                                                                              \
         }                                                                                                                                                  \
                                                                                                                                                            \
-        if (SKIPLIST_MAX_HEIGHT > 1 && slist->slh_max > SKIPLIST_MAX_HEIGHT) {                                                                             \
-            __skip_integrity_failure_##decl("slist->slh_max %lu cannot be greater than SKIPLIST_MAX_HEIGHT %lu\n", slist->slh_max,                         \
+        if (SKIPLIST_MAX_HEIGHT > 1 && slist->slh_max_height > SKIPLIST_MAX_HEIGHT) {                                                                             \
+            __skip_integrity_failure_##decl("slist->slh_max_height %lu cannot be greater than SKIPLIST_MAX_HEIGHT %lu\n", slist->slh_max_height,                         \
                 (size_t)SKIPLIST_MAX_HEIGHT);                                                                                                              \
             n_err++;                                                                                                                                       \
             if (flags)                                                                                                                                     \
@@ -1564,8 +1577,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         {                                                                                                                                                  \
             this = &node->field;                                                                                                                           \
                                                                                                                                                            \
-            if (this->sle_height >= slist->slh_max) {                                                                                                      \
-                __skip_integrity_failure_##decl("the %luth node's [%p] height %lu is >= max %lu\n", nth, (void *)node, this->sle_height, slist->slh_max);  \
+            if (this->sle_height >= slist->slh_max_height) {                                                                                                      \
+                __skip_integrity_failure_##decl("the %luth node's [%p] height %lu is >= max %lu\n", nth, (void *)node, this->sle_height, slist->slh_max_height);  \
                 n_err++;                                                                                                                                   \
                 if (flags)                                                                                                                                 \
                     return n_err;                                                                                                                          \
