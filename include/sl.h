@@ -322,6 +322,7 @@ __skip_read_rdtsc(void)
         decl##_node_t *slh_head;                                                                                                                            \
         decl##_node_t *slh_tail;                                                                                                                            \
         struct {                                                                                                                                            \
+            uint64_t gen;                                                                                                                                   \
             decl##_node_t *pres;                                                                                                                            \
         } slh_snap;                                                                                                                                         \
     } decl##_t;                                                                                                                                             \
@@ -384,7 +385,7 @@ __skip_read_rdtsc(void)
      *                                                                                                                                                      \
      * Returns the current generation for snapshot purposes.                                                                                                \
      */                                                                                                                                                     \
-    static inline uint64_t __skip_snapshot_gen##decl()                                                                                                      \
+    static inline uint64_t __skip_snapshot_gen_##decl()                                                                                                     \
     {                                                                                                                                                       \
         return __skip_read_rdtsc();                                                                                                                         \
     }                                                                                                                                                       \
@@ -728,13 +729,12 @@ __skip_read_rdtsc(void)
      * taken, a snapshot must be restored or released. Any number of snapshots                                                                              \
      * can be created.                                                                                                                                      \
      */                                                                                                                                                     \
-    size_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                                    \
+    uint64_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                                                                  \
     {                                                                                                                                                       \
-        int rc;                                                                                                                                             \
-                                                                                                                                                            \
         if (slist == NULL)                                                                                                                                  \
             return 0;                                                                                                                                       \
-        return 0;                                                                                                                                           \
+        slist->slh_snap.gen = __skip_snapshot_gen_##decl();                                                                                                 \
+        return slist->slh_snap.gen;                                                                                                                         \
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
@@ -823,7 +823,7 @@ __skip_read_rdtsc(void)
                 slist->slh_tail->field.sle_height = new_height;                                                                                             \
             }                                                                                                                                               \
             /* Record this node's generation for snapshots. */                                                                                              \
-            new->field.sle_gen = __skip_snapshot_gen##decl();                                                                                               \
+            new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                              \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                                                 \
             slist->slh_length++;                                                                                                                            \
                                                                                                                                                             \
@@ -1086,7 +1086,7 @@ __skip_read_rdtsc(void)
         if (node) {                                                                                                                                         \
             decl##_node_t *src = node, *dest = new;                                                                                                         \
             update_node_blk;                                                                                                                                \
-            node->field.sle_gen = __skip_snapshot_gen##decl();                                                                                              \
+            node->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                             \
             return rc;                                                                                                                                      \
         }                                                                                                                                                   \
         return -1;                                                                                                                                          \
