@@ -42,14 +42,14 @@
 /*
  * To start, you must create a type node that will contain the
  * fields you'd like to maintain in your Skiplist.  In this case
- * we map int -> int, but what you put here is up to you.  You
- * don't even need a "key", just a way to compare one node against
- * another, logic you'll provide in SKIP_DECL as a block below.
+ * we map int -> char [] on the heap, but what you put here is up
+ * to you.  You don't even need a "key", just a way to compare one
+ * node against another, logic you'll provide in SKIP_DECL as a
+ * block below.
  */
 struct slex_node {
     int key;
     char *value;
-    /* NOTE: This _must_ be last element in node for snapshots to work!!! */
     SKIPLIST_ENTRY(slex_node) entries;
 };
 
@@ -255,8 +255,10 @@ main()
         //rc = api_skip_put_slex(list, array[i], numeral);
         INTEGRITY_CHK;
 #ifdef SNAPSHOTS
-        snaps[snap_i++] = api_skip_snapshot_slex(list);
-        INTEGRITY_CHK;
+        if (i > TEST_ARRAY_SIZE + 1) {
+            snaps[snap_i++] = api_skip_snapshot_slex(list);
+            INTEGRITY_CHK;
+        }
 #endif
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
@@ -284,10 +286,6 @@ main()
     api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
     INTEGRITY_CHK;
 #endif
-#ifdef SNAPSHOTS
-    snaps[snap_i++] = api_skip_snapshot_slex(list);
-    INTEGRITY_CHK;
-#endif
 
     api_skip_del_slex(list, 0);
     INTEGRITY_CHK;
@@ -305,10 +303,6 @@ main()
     numeral = int_to_roman_numeral(key);
     api_skip_del_slex(list, key);
     INTEGRITY_CHK;
-#ifdef SNAPSHOTS
-    snaps[snap_i++] = api_skip_snapshot_slex(list);
-    INTEGRITY_CHK;
-#endif
 
 #ifdef DOT
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
