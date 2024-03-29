@@ -3,7 +3,7 @@ OBJS = skiplist.o
 STATIC_LIB = libskiplist.a
 SHARED_LIB = libskiplist.so
 
-CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
+CFLAGS = -DDEBUG -DSKIPLIST_DIAGNOSTIC -Wall -Wextra -Wpedantic -Og -g -std=c99 -fsanitize=address,undefined -Iinclude/ -fPIC
 TEST_FLAGS = -Itests/
  #-fsanitize=address,undefined
 

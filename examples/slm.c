@@ -317,7 +317,7 @@ main()
 #ifdef SNAPSHOTS
     slex_t *restored = api_skip_restore_snapshot_slex(list);
     api_skip_release_snapshot_slex(list);
-    api_skip_destroy_slex(restored);
+    api_skip_free_slex(restored);
 #endif
 
     assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
@@ -344,7 +344,7 @@ main()
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
     assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    api_skip_destroy_slex(list);
+    api_skip_free_slex(list);
 #ifdef DOT
     api_skip_dot_end_slex(of, gen);
     fclose(of);
