@@ -380,11 +380,11 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
-     * -- __skip_gen_                                                                                                                                       \
+     * -- __skip_snapshot_gen                                                                                                                               \
      *                                                                                                                                                      \
      * Returns the current generation for snapshot purposes.                                                                                                \
      */                                                                                                                                                     \
-    static inline uint64_t __skip_gen_##decl(decl##_t *slist)                                                                                               \
+    static inline uint64_t __skip_snapshot_gen##decl()                                                                                                      \
     {                                                                                                                                                       \
         return __skip_read_rdtsc();                                                                                                                         \
     }                                                                                                                                                       \
@@ -638,38 +638,74 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                       \
                                                                                                                                                             \
     /**                                                                                                                                                     \
-     * -- __skip_is_preserved_node_ TODO/WIP                                                                                                                \
+     * -- __skip_preserve_node_                                                                                                                             \
      *                                                                                                                                                      \
-     * Preserved nodes have a separate heap object for the `sle_next[]`                                                                                     \
-     * reference whereas the rest point to an offset relative to their                                                                                      \
-     * address.                                                                                                                                             \
-     */                                                                                                                                                     \
-    static int __skip_is_preserved_node_##decl(decl##_node_t *node)                                                                                         \
-    {                                                                                                                                                       \
-        return 0;                                                                                                                                           \
-    }                                                                                                                                                       \
-                                                                                                                                                            \
-    /**                                                                                                                                                     \
-     * -- __skip_preserve_entry_ TODO/WIP                                                                                                                   \
+     * Preserve given node in the slh_snap.pres list.                                                                                                       \
      *                                                                                                                                                      \
-     */                                                                                                                                                     \
-    static int __skip_preserve_entry_##decl(decl##_t *slist, decl##_node_t **path, size_t len)                                                              \
-    {                                                                                                                                                       \
-        return 0;                                                                                                                                           \
-    }                                                                                                                                                       \
-                                                                                                                                                            \
-    /**                                                                                                                                                     \
-     * -- __skip_preserve_node_ TODO/WIP                                                                                                                    \
-     *                                                                                                                                                      \
-     * Preserve given node, return > 0 is errno. Preserved node is in                                                                                       \
-     * `preserved`.                                                                                                                                         \
+     * ALGORITHM:                                                                                                                                           \
+     *   a) allocate a new node                                                                                                                             \
+     *   b) copy the node into the new node                                                                                                                 \
+     *   c) as necessary, allocate/copy any user-supplied items.                                                                                            \
+     *   d) determine if this is a duplicate, if so in (d) we set                                                                                           \
+     *      the sle.next[1] field to 0x1 as a reminder to re-insert                                                                                         \
+     *      this element as a duplicate in the restore function.                                                                                            \
+     *   e) zero out the next sle.prev/next[] pointers                                                                                                      \
+     *   f) mark as duplicate, set sle.next[1] = 0x1                                                                                                        \
+     *   g) insert the node's copy into the slh_pres singly-linked                                                                                          \
+     *      list.                                                                                                                                           \
      */                                                                                                                                                     \
     static int __skip_preserve_node_##decl(decl##_t *slist, const decl##_node_t *src)                                                                       \
     {                                                                                                                                                       \
         int rc = 0;                                                                                                                                         \
+        decl##_node_t *dest, *is_dup;                                                                                                                       \
                                                                                                                                                             \
         if (slist == NULL || src == NULL)                                                                                                                   \
             return 0;                                                                                                                                       \
+                                                                                                                                                            \
+        /* (a) alloc, ... */                                                                                                                                \
+        size_t sle_arr_sz = sizeof(struct __skiplist_##decl_entry) * slist->slh_max;                                                                        \
+        rc = prefix##skip_alloc_node_##decl(slist, &dest);                                                                                                  \
+        if (rc)                                                                                                                                             \
+            return rc;                                                                                                                                      \
+                                                                                                                                                            \
+        /* (b) shallow copy, fix sle_next pointer, ... */                                                                                                   \
+        memcpy(dest, src, sizeof(decl##_node_t) + sle_arr_sz);                                                                                              \
+        dest->field.sle_next = (decl##_node_t **)((uintptr_t)dest + sizeof(decl##_node_t));                                                                 \
+                                                                                                                                                            \
+        /* ... if we're not preserving the head or the tail, ... */                                                                                         \
+        if (!(src == slist->slh_head || src == slist->slh_tail)) {                                                                                          \
+            /* (c) then user-supplied copy */                                                                                                               \
+            archive_node_blk;                                                                                                                               \
+            if (rc) {                                                                                                                                       \
+                prefix##skip_free_node_##decl(dest);                                                                                                        \
+                return rc;                                                                                                                                  \
+            }                                                                                                                                               \
+        }                                                                                                                                                   \
+                                                                                                                                                            \
+        /* (d) is this a duplicate? */                                                                                                                      \
+        if (__skip_key_compare_##decl(slist, dest, dest->field.sle_next[0], slist->slh_aux) == 0 ||                                                         \
+            __skip_key_compare_##decl(slist, dest, dest->field.sle_prev, slist->slh_aux) == 0)                                                              \
+            is_dup = (decl##_node_t *)0x1;                                                                                                                  \
+                                                                                                                                                            \
+        /* (e) zero out the next pointers */                                                                                                                \
+        dest->field.sle_prev = NULL;                                                                                                                        \
+        __SKIP_ALL_ENTRIES_B2T(field, dest)                                                                                                                 \
+        {                                                                                                                                                   \
+            dest->field.sle_next[lvl] = NULL;                                                                                                               \
+        }                                                                                                                                                   \
+                                                                                                                                                            \
+        /* (f) set duplicate flag */                                                                                                                        \
+        dest->field.sle_next[1] = (decl##_node_t *)is_dup;                                                                                                  \
+                                                                                                                                                            \
+        /* (g) insert node into slh_pres list at head */                                                                                                    \
+        if (slist->slh_snap.pres == NULL)                                                                                                                   \
+            slist->slh_snap.pres = dest;                                                                                                                    \
+        else {                                                                                                                                              \
+            /* The next[0] pointer forms the singly-linked list when                                                                                        \
+               preserved. */                                                                                                                                \
+            dest->field.sle_next[0] = slist->slh_snap.pres;                                                                                                 \
+            slist->slh_snap.pres = dest;                                                                                                                    \
+        }                                                                                                                                                   \
                                                                                                                                                             \
         return rc;                                                                                                                                          \
     }                                                                                                                                                       \
@@ -787,7 +823,7 @@ __skip_read_rdtsc(void)
                 slist->slh_tail->field.sle_height = new_height;                                                                                             \
             }                                                                                                                                               \
             /* Record this node's generation for snapshots. */                                                                                              \
-            new->field.sle_gen = __skip_gen_##decl(slist);                                                                                                  \
+            new->field.sle_gen = __skip_snapshot_gen##decl();                                                                                               \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                                                 \
             slist->slh_length++;                                                                                                                            \
                                                                                                                                                             \
@@ -1050,7 +1086,7 @@ __skip_read_rdtsc(void)
         if (node) {                                                                                                                                         \
             decl##_node_t *src = node, *dest = new;                                                                                                         \
             update_node_blk;                                                                                                                                \
-            node->field.sle_gen = __skip_gen_##decl(slist);                                                                                                 \
+            node->field.sle_gen = __skip_snapshot_gen##decl();                                                                                              \
             return rc;                                                                                                                                      \
         }                                                                                                                                                   \
         return -1;                                                                                                                                          \
@@ -1181,9 +1217,6 @@ __skip_read_rdtsc(void)
             n_err++;                                                                                                                                       \
             return n_err;                                                                                                                                  \
         }                                                                                                                                                  \
-                                                                                                                                                           \
-        __skip_diag("hi\n");                                                                                                                               \
-        __skip_assert(1 == 1);                                                                                                                             \
                                                                                                                                                            \
         /* Check the Skiplist header (slh) */                                                                                                              \
                                                                                                                                                            \
