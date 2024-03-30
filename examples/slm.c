@@ -2,7 +2,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -10,33 +9,43 @@
 #include <time.h>
 #include <unistd.h>
 
-#define DEBUG 1
-#define SKIPLIST_DEBUG slex
-#define SKIPLIST_MAX_HEIGHT 12
-/* Setting this will do two things:
- * 1) limit our max height across all instances of this datastructure.
+// OPTIONS to set before including sl.h
+// ---------------------------------------------------------------------------
+#define DEBUG
+#define SKIPLIST_DIAGNOSTIC
+/* Setting SKIPLIST_MAX_HEIGHT will do two things:
+ * 1) limit our max height across all instances of this data structure.
  * 2) remove a heap allocation on frequently used paths, insert/remove/etc.
  * so, use it when you need it.
  */
+#define SKIPLIST_MAX_HEIGHT 12
+
+// Include our monolithic ADT, the Skiplist!
+// ---------------------------------------------------------------------------
 #include "../include/sl.h"
 
-//define INTEGRITY
-#ifdef INTEGRITY
-#define INTEGRITY_CHK __skip_integrity_check_slex(list, 0)
-#else
-#define INTEGRITY_CHK ((void)0)
-#endif
-
-#define SNAPSHOTS
+// Local demo application OPTIONS:
+// ---------------------------------------------------------------------------
+#define VALIDATE
+// TODO define SNAPSHOTS
 #define DOT
 #define TEST_ARRAY_SIZE 10
+
+// ---------------------------------------------------------------------------
+#ifdef VALIDATE
+#define CHECK __skip_integrity_check_sample(list, 0)
+#else
+#define CHECK ((void)0)
+#endif
 
 
 /*
  * SKIPLIST EXAMPLE:
  *
- * This example creates a Skiplist keys and values are integers.
- * 'slex' - meaning: SkipList EXample
+ * This example creates a "sample" Skiplist where keys are integers, values are
+ * strings allocated on the heap.
+ *
+ * 'sample' - meaning: EXample
  */
 
 /*
@@ -47,26 +56,44 @@
  * node against another, logic you'll provide in SKIP_DECL as a
  * block below.
  */
-struct slex_node {
+struct sample_node {
     int key;
     char *value;
-    SKIPLIST_ENTRY(slex_node) entries;
+    SKIPLIST_ENTRY(sample_node) entries;
+// TODO    SKIPLIST_SNAPS(sample_node) snaps;
 };
 
 /*
  * Generate all the access functions for our type of Skiplist.
  */
 SKIPLIST_DECL(
-    slex, api_, entries,
-    /* free node */ { free(node->value); },
-    /* update node */
+    sample, api_, entries,
+    /* compare entries: list, a, b, aux */
     {
-        //char *old = node->value;
-        dest->value = src->value;
-        // In this case, don't free, we're just calling to_upper and using the same memory.
-        // free(old);
+        (void)list;
+        (void)aux;
+        if (a->key < b->key)
+            return -1;
+        if (a->key > b->key)
+            return 1;
+        return 0;
     },
-    /* archive a node */
+    /* free entry: node */
+    {
+        free(node->value);
+    },
+    /* update entry: rc, src, dest */
+    {
+        char *new = calloc(strlen(src->value) + 1, sizeof(char));
+        if (new == NULL) {
+            rc = ENOMEM;
+        } else {
+            strncpy(new, src->value, strlen(src->value));
+            free(dest->value);
+            dest->value = new;
+        }
+    },
+    /* archive an entry: rc, src, dest */
     {
         dest->key = src->key;
         char *nv = calloc(strlen(src->value) + 1, sizeof(char));
@@ -77,38 +104,13 @@ SKIPLIST_DECL(
             dest->value = nv;
         }
     },
-    /* size in bytes of the content stored in an entry by you */
-    { size = strlen(node->value) + 1; })
+    /* size in bytes of the content stored in an entry: bytes */
+    {
+        bytes = strlen(node->value) + 1;
+    })
 
 /*
- * Optional: Create a function that validates as much as possible the
- * integrity of a Skiplist.  This is called by the DOT function to
- * ensure that it's possible to generate a graph.
- */
-SKIPLIST_INTEGRITY_CHECK(slex, api_, entries)
-
-/* Optional: Create the functions used to visualize a Skiplist (DOT/Graphviz) */
-SKIPLIST_DECL_DOT(slex, api_, entries)
-
-void
-sprintf_slex_node(slex_node_t *node, char *buf)
-{
-    sprintf(buf, "%d:%s", node->key, node->value);
-}
-
-/*
- * Getters and Setters
- * It can be useful to have simple get/put-style API, but to
- * do that you'll have to supply some blocks of code used to
- * extract data from within your nodes.
- */
-SKIPLIST_KV_ACCESS(
-    slex, api_, key, int, value, char *,
-    /* query blk */ { query.key = key; },
-    /* return blk */ { return node->value; })
-
-/*
- * Now we need a way to compare the nodes you defined above.
+ * Skiplists are ordered, we need a way to compare entries.
  * Let's create a function with four arguments:
  *   - a reference to the Skiplist, `slist`
  *   - the two nodes to compare, `a` and `b`
@@ -127,9 +129,8 @@ SKIPLIST_KV_ACCESS(
  * happen when `a` or `b` are references to the head or tail of the
  * list or when `a == b`.  In those cases the comparison function
  * returns before using the code in your block, don't panic. :)
- */
 int
-__slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
+__sample_key_compare(sample_t *list, sample_node_t *a, sample_node_t *b, void *aux)
 {
     (void)list;
     (void)aux;
@@ -139,7 +140,63 @@ __slm_key_compare(slex_t *list, slex_node_t *a, slex_node_t *b, void *aux)
         return 1;
     return 0;
 }
+*/
 
+/*
+ * Optional: Getters and Setters
+ *  - get, put, dup(put), del, etc. functions
+ *
+ * It can be useful to have simple get/put-style API, but to
+ * do that you'll have to supply some blocks of code used to
+ * extract data from within your nodes.
+ */
+SKIPLIST_DECL_ACCESS(
+    sample, api_, key, int, value, char *,
+    /* query blk */ { query.key = key; },
+    /* return blk */ { return node->value; })
+
+/*
+ * Optional: Snapshots
+ *
+ * TODO
+ */
+//SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries, snaps)
+
+/*
+ * Optional: Archive to/from bytes
+ *
+ * TODO
+ */
+SKIPLIST_DECL_ARCHIVE(sample, api_, entries)
+
+/*
+ * Optional: As Hashtable
+ *
+ * Turn your Skiplist into a hash table. TODO
+ */
+//SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
+
+/*
+ * Optional: Check Skiplists at runtime
+ *
+ * Create a functions that validate the integrity of a Skiplist.
+ */
+SKIPLIST_DECL_VALIDATE(sample, api_, entries)
+
+/* Optional: Visualize your Skiplist using DOT/Graphviz in PDF
+ *
+ * Create the functions used to annotate a visualization of a Skiplist.
+ */
+SKIPLIST_DECL_DOT(sample, api_, entries)
+
+void
+sprintf_sample_node(sample_node_t *node, char *buf)
+{
+    sprintf(buf, "%d:%s", node->key, node->value);
+}
+
+// Function for this demo application.
+// ---------------------------------------------------------------------------
 static char *
 to_lower(char *str)
 {
@@ -200,12 +257,15 @@ shuffle(int *array, size_t n)
     }
 }
 
+// ---------------------------------------------------------------------------
 int
 main()
 {
     int rc;
+#ifdef SNAPSHOTS
     size_t snap_i = 0;
     uint64_t snaps[2048];
+#endif
 
 #ifdef DOT
     size_t gen = 0;
@@ -217,24 +277,24 @@ main()
 #endif
 
     /* Allocate and initialize a Skiplist. */
-    slex_t *list = (slex_t *)malloc(sizeof(slex_t));
+    sample_t *list = (sample_t *)malloc(sizeof(sample_t));
     if (list == NULL)
         return ENOMEM;
 
-    rc = api_skip_init_slex(list, -12, __slm_key_compare);
+    rc = api_skip_init_sample(list, 12); //TODO -12
     if (rc)
         return rc;
 #ifdef DOT
-    api_skip_dot_slex(of, list, gen++, "init", sprintf_slex_node);
+    api_skip_dot_sample(of, list, gen++, "init", sprintf_sample_node);
 #endif
-    if (api_skip_get_slex(list, 0) != NULL)
+    if (api_skip_get_sample(list, 0) != NULL)
         perror("found a non-existent item!");
-    api_skip_del_slex(list, 0);
-    INTEGRITY_CHK;
+    api_skip_del_sample(list, 0);
+    CHECK;
 
 #ifdef SNAPSHOTS
     /* Test creating a snapshot of an empty Skiplist */
-    snaps[snap_i++] = api_skip_snapshot_slex(list);
+    snaps[snap_i++] = api_skip_snapshot_sample(list);
 #endif
 
     /* Insert 7 key/value pairs into the list. */
@@ -251,98 +311,97 @@ main()
 
     for (i = 0; i < asz; i++) {
         numeral = int_to_roman_numeral(array[i]);
-        rc = api_skip_put_slex(list, array[i], to_lower(numeral));
-        //rc = api_skip_put_slex(list, array[i], numeral);
-        INTEGRITY_CHK;
+        rc = api_skip_put_sample(list, array[i], to_lower(numeral));
+        //rc = api_skip_put_sample(list, array[i], numeral);
+        CHECK;
 #ifdef SNAPSHOTS
         if (i > TEST_ARRAY_SIZE + 1) {
-            snaps[snap_i++] = api_skip_snapshot_slex(list);
-            INTEGRITY_CHK;
+            snaps[snap_i++] = api_skip_snapshot_sample(list);
+            CHECK;
         }
 #endif
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
-        api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
-        INTEGRITY_CHK;
+        api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+        CHECK;
 #endif
-        char *v = api_skip_get_slex(list, array[i]);
-        INTEGRITY_CHK;
-        api_skip_set_slex(list, array[i], to_upper(v));
-        INTEGRITY_CHK;
+        char *v = api_skip_get_sample(list, array[i]);
+        CHECK;
+        api_skip_set_sample(list, array[i], to_upper(v));
+        CHECK;
     }
     numeral = int_to_roman_numeral(-1);
-    api_skip_dup_slex(list, -1, numeral);
-    INTEGRITY_CHK;
+    api_skip_dup_sample(list, -1, numeral);
+    CHECK;
 #ifdef DOT
     sprintf(msg, "put dup key: %d value: %s", i, numeral);
-    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
-    INTEGRITY_CHK;
+    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    CHECK;
 #endif
     numeral = int_to_roman_numeral(1);
-    api_skip_dup_slex(list, 1, numeral);
-    INTEGRITY_CHK;
+    api_skip_dup_sample(list, 1, numeral);
+    CHECK;
 #ifdef DOT
     sprintf(msg, "put dup key: %d value: %s", i, numeral);
-    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
-    INTEGRITY_CHK;
+    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    CHECK;
 #endif
 
-    api_skip_del_slex(list, 0);
-    INTEGRITY_CHK;
-    if (api_skip_get_slex(list, 0) != NULL)
+    api_skip_del_sample(list, 0);
+    CHECK;
+    if (api_skip_get_sample(list, 0) != NULL)
         perror("found a deleted item!");
-    api_skip_del_slex(list, 0);
-    INTEGRITY_CHK;
-    if (api_skip_get_slex(list, 0) != NULL)
+    api_skip_del_sample(list, 0);
+    CHECK;
+    if (api_skip_get_sample(list, 0) != NULL)
         perror("found a deleted item!");
     int key = TEST_ARRAY_SIZE + 1;
-    numeral = int_to_roman_numeral(key);
-    api_skip_del_slex(list, key);
-    INTEGRITY_CHK;
+    api_skip_del_sample(list, key);
+    CHECK;
     key = -(TEST_ARRAY_SIZE) - 1;
     numeral = int_to_roman_numeral(key);
-    api_skip_del_slex(list, key);
-    INTEGRITY_CHK;
+    api_skip_del_sample(list, key);
+    CHECK;
 
 #ifdef DOT
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
-    api_skip_dot_slex(of, list, gen++, msg, sprintf_slex_node);
-    INTEGRITY_CHK;
+    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    CHECK;
 #endif
 
 #ifdef SNAPSHOTS
-    slex_t *restored = api_skip_restore_snapshot_slex(list, snaps[snap_i - 1] );
-    api_skip_release_snapshot_slex(list);
-    api_skip_free_slex(restored);
+    sample_t *restored = api_skip_restore_snapshot_sample(list, snaps[snap_i - 1] );
+    api_skip_release_snapshot_sample(list);
+    api_skip_free_sample(restored);
 #endif
 
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
-    assert(api_skip_pos_slex(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_sample(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
 
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
-    assert(api_skip_pos_slex(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_sample(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
 
-    assert(api_skip_pos_slex(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    assert(api_skip_pos_sample(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    assert(api_skip_pos_slex(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
-    assert(strcmp(api_skip_pos_slex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    assert(api_skip_pos_sample(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    api_skip_free_slex(list);
+    api_skip_free_sample(list);
 #ifdef DOT
-    api_skip_dot_end_slex(of, gen);
+    api_skip_dot_end_sample(of, gen);
     fclose(of);
 #endif
     return rc;
