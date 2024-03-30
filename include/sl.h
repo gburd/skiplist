@@ -283,6 +283,7 @@ __skip_read_rdtsc(void)
             int (*archive_entry)(decl##_node_t *, const decl##_node_t *);                                                                                     \
             size_t (*sizeof_entry)(decl##_node_t *);                                                                                                          \
             int (*compare_entries)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                  \
+            int (*preserve_node)(struct decl * slist, const decl##_node_t *src, decl##_node_t **preserved);                                                   \
         } slh_fns;                                                                                                                                            \
         void *slh_aux;                                                                                                                                        \
         decl##_node_t *slh_head;                                                                                                                              \
@@ -294,7 +295,7 @@ __skip_read_rdtsc(void)
     } decl##_t;                                                                                                                                               \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- __skip_compare_entries_fn                                                                                                                           \
+     * -- __skip_compare_entries_fn_                                                                                                                          \
      *                                                                                                                                                        \
      * Wraps the `compare_entries_blk` code into `slh_fns.compare_entries`.                                                                                   \
      */                                                                                                                                                       \
@@ -314,7 +315,7 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- __skip_update_entry_fn                                                                                                                              \
+     * -- __skip_update_entry_fn_                                                                                                                             \
      *                                                                                                                                                        \
      * Wraps the `update_entry_blk` code into `slh_fns.update_entry`.                                                                                         \
      */                                                                                                                                                       \
@@ -326,7 +327,7 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- __skip_archive_entry_fn                                                                                                                             \
+     * -- __skip_archive_entry_fn_                                                                                                                            \
      *                                                                                                                                                        \
      * Wraps the `archive_entry_blk` code into `slh_fns.archive_entry`.                                                                                       \
      */                                                                                                                                                       \
@@ -338,7 +339,7 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- __skip_sizeof_entry_fn                                                                                                                              \
+     * -- __skip_sizeof_entry_fn_                                                                                                                             \
      *                                                                                                                                                        \
      * Wraps the `sizeof_entry_blk` code into `slh_fns.sizeof_entry`.                                                                                         \
      */                                                                                                                                                       \
@@ -347,6 +348,16 @@ __skip_read_rdtsc(void)
         size_t bytes = 0;                                                                                                                                     \
         sizeof_entry_blk;                                                                                                                                     \
         return bytes;                                                                                                                                         \
+    }                                                                                                                                                         \
+                                                                                                                                                              \
+    /**                                                                                                                                                       \
+     * -- __skip_preserve_node_fn_ TODO                                                                                                                       \
+     *                                                                                                                                                        \
+     * Optional: (Snapshot) calls `slh_fns.preserve_node`.                                                                                                    \
+     */                                                                                                                                                       \
+    static int __skip_preserve_node_fn_##decl(decl##_t *slist, const decl##_node_t *src, decl##_node_t **preserved)                                           \
+    {                                                                                                                                                         \
+        return slist->slh_fns.preserve_node(slist, src, preserved);                                                                                           \
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
@@ -694,6 +705,9 @@ __skip_read_rdtsc(void)
         decl##_node_t *dest, *is_dup = 0;                                                                                                                     \
                                                                                                                                                               \
         if (slist == NULL || src == NULL)                                                                                                                     \
+            return 0;                                                                                                                                         \
+                                                                                                                                                              \
+        if (src->field.sle_gen > slist->slh_snap.gen)                                                                                                         \
             return 0;                                                                                                                                         \
                                                                                                                                                               \
         /* (a) alloc, ... */                                                                                                                                  \
@@ -1110,10 +1124,11 @@ __skip_read_rdtsc(void)
         if (src == NULL)                                                                                                                                      \
             return -1;                                                                                                                                        \
                                                                                                                                                               \
-        /* Snapshots preserve the node if it is younger than our snapshot                                                                                     \
+        /* If the optional snapshots feature is configured, use it now.                                                                                       \
+           Snapshots preserve the node if it is younger than our snapshot                                                                                     \
            moment. */                                                                                                                                         \
-        if (src->field.sle_gen < slist->slh_snap.gen) {                                                                                                       \
-            np = __skip_preserve_node_##decl(slist, src, NULL);                                                                                               \
+        if (slist->slh_fns.preserve_node) {                                                                                                                   \
+            np = __skip_preserve_node_fn_##decl(slist, src, NULL);                                                                                            \
             if (np > 0)                                                                                                                                       \
                 return np;                                                                                                                                    \
         }                                                                                                                                                     \
@@ -1151,9 +1166,11 @@ __skip_read_rdtsc(void)
         len = __skip_locate_##decl(slist, query, path);                                                                                                       \
         node = path[0];                                                                                                                                       \
         if (node) {                                                                                                                                           \
-            /* Preserve this node about to be removed. */                                                                                                     \
-            if (node->field.sle_gen < slist->slh_snap.gen) {                                                                                                  \
-                __skip_preserve_node_##decl(slist, node, NULL);                                                                                               \
+            /* If the optional snapshots feature is configured, use it now.                                                                                   \
+               Snapshots preserve the node if it is younger than our snapshot                                                                                 \
+               moment, this node is about to be removed. */                                                                                                   \
+            if (slist->slh_fns.preserve_node) {                                                                                                               \
+                np = __skip_preserve_node_fn_##decl(slist, node, NULL);                                                                                       \
                 if (np > 0)                                                                                                                                   \
                     return np;                                                                                                                                \
             }                                                                                                                                                 \
@@ -1783,6 +1800,23 @@ __skip_read_rdtsc(void)
         node.key = key;                                                                      \
         node.value = value;                                                                  \
         return prefix##skip_update_##decl(slist, &node);                                     \
+    }                                                                                        \
+                                                                                             \
+    /**                                                                                      \
+     * skip_merge_ -- TODO                                                                   \
+     *                                                                                       \
+     * Merges an array of kvp into the list.                                                 \
+     */                                                                                      \
+    int prefix##skip_merge_##decl(decl##_t *slist, ktype *key, vtype *value, size_t len)     \
+    {                                                                                        \
+        decl##_node_t *nodes[len];                                                           \
+        ((void)slist);                                                                       \
+        ((void)key);                                                                         \
+        ((void)value);                                                                       \
+        ((void)len);                                                                         \
+        ((void)nodes);                                                                       \
+        int rc = 0;                                                                          \
+        return rc;                                                                           \
     }                                                                                        \
                                                                                              \
     /**                                                                                      \
