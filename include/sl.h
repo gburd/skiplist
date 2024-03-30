@@ -31,6 +31,17 @@
  *      Zhipeng Li <zhpeng.is@gmail.com>
  */
 
+#include <assert.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
 #ifndef _SKIPLIST_H_
 #define _SKIPLIST_H_
 
@@ -168,59 +179,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
 #endif
 #endif
 
-#ifndef SKIPLIST_READ_RDTSC
-#define SKIPLIST_READ_RDTSC
-#if defined(__linux__)
-#if defined(__x86_64__) || defined(__i386__)
-#include <stdint.h>
-#include <stdio.h>
-
-static inline uint64_t
-__skip_read_rdtsc(void)
-{
-    unsigned int hi, lo;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)lo) | (((uint64_t)hi) << 32);
-}
-#elif defined(__arm__) && defined(__aarch64__)
-uint64_t
-__skip_read_rdtsc()
-{
-    uint64_t value;
-    asm volatile("MRS %0, PMCCNTR_EL0" : "=r"(value));
-    return value;
-}
-#else
-#warning Unsupported arch, unable to read the TSC or MRS register on this platform.
-#endif
-#elif defined(__unix__) || defined(__APPLE__)
-#include <sys/time.h>
-
-#include <stdint.h>
-#include <stdio.h>
-
-static inline uint64_t
-__skip_read_rdtsc(void)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000 + tv.tv_usec;
-}
-#elif defined(_WIN32)
-#include <intrin.h>
-#include <stdint.h>
-#include <stdio.h>
-
-static inline uint64_t
-__skip_read_rdtsc(void)
-{
-    return __rdtsc();
-}
-#endif
-#else
-#warning Unable to read the Time Stamp Counter (TSC) register on this platform.
-#endif
-
 /*
  * Skip List declarations.
  */
@@ -232,7 +190,7 @@ __skip_read_rdtsc(void)
 /*
  * A Skip List contains elements, a portion of which is used to manage those
  * elements while the rest is defined by the use case for this declaration.  The
- * house keeping portion is the SKIPLIST_ENTRY below.  It maintains the array of
+ * housekeeping portion is the SKIPLIST_ENTRY below.  It maintains the array of
  * forward pointers to nodes and has a height (a zero-based count of levels, so
  * a height of `0` means one (1) level and a height of `4` means five (5)
  * levels).
@@ -241,7 +199,7 @@ __skip_read_rdtsc(void)
     struct __skiplist_##decl_entry {       \
         struct type *sle_prev, **sle_next; \
         size_t sle_height;                 \
-        uint64_t sle_gen;                  \
+        size_t sle_gen;                    \
     }
 
 #define SKIPLIST_FOREACH_H2T(decl, prefix, list, elm, iter) \
@@ -284,12 +242,15 @@ __skip_read_rdtsc(void)
             size_t (*sizeof_entry)(decl##_node_t *);                                                                                                          \
             int (*compare_entries)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                  \
             int (*preserve_node)(struct decl * slist, const decl##_node_t *src, decl##_node_t **preserved);                                                   \
+            void (*release_snapshots)(struct decl *);                                                                                                         \
+            size_t (*snapshot_current_era)(struct decl *);                                                                                                    \
+            size_t (*snapshot_incr_era)(struct decl *);                                                                                                       \
         } slh_fns;                                                                                                                                            \
         void *slh_aux;                                                                                                                                        \
         decl##_node_t *slh_head;                                                                                                                              \
         decl##_node_t *slh_tail;                                                                                                                              \
         struct {                                                                                                                                              \
-            uint64_t gen;                                                                                                                                     \
+            size_t gen;                                                                                                                                       \
             decl##_node_t *pres;                                                                                                                              \
         } slh_snap;                                                                                                                                           \
     } decl##_t;                                                                                                                                               \
@@ -351,16 +312,6 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- __skip_preserve_node_fn_ TODO                                                                                                                       \
-     *                                                                                                                                                        \
-     * Optional: (Snapshot) calls `slh_fns.preserve_node`.                                                                                                    \
-     */                                                                                                                                                       \
-    static int __skip_preserve_node_fn_##decl(decl##_t *slist, const decl##_node_t *src, decl##_node_t **preserved)                                           \
-    {                                                                                                                                                         \
-        return slist->slh_fns.preserve_node(slist, src, preserved);                                                                                           \
-    }                                                                                                                                                         \
-                                                                                                                                                              \
-    /**                                                                                                                                                       \
      * -- __skip_compare_nodes_                                                                                                                               \
      *                                                                                                                                                        \
      * This function takes four arguments:                                                                                                                    \
@@ -405,27 +356,6 @@ __skip_read_rdtsc(void)
             probability *= 0.5;                                                                                                                               \
         }                                                                                                                                                     \
         return level;                                                                                                                                         \
-    }                                                                                                                                                         \
-                                                                                                                                                              \
-    /**                                                                                                                                                       \
-     * -- __skip_snapshot_gen                                                                                                                                 \
-     *                                                                                                                                                        \
-     * Returns the current generation for snapshot purposes.                                                                                                  \
-     * We use the TSC register on x86_64 for this which, on a 4 GHz processor,                                                                                \
-     * would take over 146,000 years for the TSC to wrap around, starting from                                                                                \
-     * zero.  In practice it won't generally be starting from zero, so if it                                                                                  \
-     * is within ~5 years of wrapping we'll adjust it a bit.                                                                                                  \
-     */                                                                                                                                                       \
-    static inline uint64_t __skip_snapshot_gen_##decl()                                                                                                       \
-    {                                                                                                                                                         \
-        static uint64_t cycles_5yr_before_a_wrap = 18444725120000000000ULL;                                                                                   \
-        static uint64_t adjustment = 0;                                                                                                                       \
-        uint64_t tsc = __skip_read_rdtsc();                                                                                                                   \
-        if (adjustment == 0) {                                                                                                                                \
-            if (tsc > cycles_5yr_before_a_wrap)                                                                                                               \
-                adjustment = tsc - 1;                                                                                                                         \
-        }                                                                                                                                                     \
-        return tsc - adjustment;                                                                                                                              \
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
@@ -613,6 +543,8 @@ __skip_read_rdtsc(void)
                 slist->slh_fns.free_entry(node);                                                                                                              \
             free(node);                                                                                                                                       \
         }                                                                                                                                                     \
+        if (slist->slh_fns.snapshot_incr_era)                                                                                                                 \
+            slist->slh_fns.snapshot_incr_era(slist);                                                                                                          \
         return;                                                                                                                                               \
     }                                                                                                                                                         \
                                                                                                                                                               \
@@ -673,15 +605,6 @@ __skip_read_rdtsc(void)
     }                                                                                                                                                         \
                                                                                                                                                               \
     /**                                                                                                                                                       \
-     * -- skip_release_snapshot_ TODO/WIP                                                                                                                     \
-     *                                                                                                                                                        \
-     */                                                                                                                                                       \
-    void prefix##skip_release_snapshot_##decl(decl##_t *slist)                                                                                                \
-    {                                                                                                                                                         \
-        if (slist == NULL)                                                                                                                                    \
-            return;                                                                                                                                           \
-    }                                                                                                                                                         \
-    /**                                                                                                                                                       \
      * -- __skip_insert_                                                                                                                                      \
      *                                                                                                                                                        \
      * Inserts the node `new` into the list `slist`, when `flags` is non-zero                                                                                 \
@@ -715,7 +638,7 @@ __skip_read_rdtsc(void)
                 return -1;                                                                                                                                    \
             }                                                                                                                                                 \
             /* Record the generation for this node to enable snapshots. */                                                                                    \
-            new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                                \
+            new->field.sle_gen = slist->slh_fns.snapshot_current_era ? slist->slh_fns.snapshot_current_era(slist) : 0;                                        \
             /* Coin toss to determine level of this new node [0, max) */                                                                                      \
             cur_height = slist->slh_head->field.sle_height;                                                                                                   \
             new_height = __skip_toss_##decl(slist->slh_max_height);                                                                                           \
@@ -764,7 +687,7 @@ __skip_read_rdtsc(void)
                 slist->slh_tail->field.sle_height = new_height;                                                                                               \
             }                                                                                                                                                 \
             /* Record this node's generation for snapshots. */                                                                                                \
-            new->field.sle_gen = __skip_snapshot_gen_##decl();                                                                                                \
+            new->field.sle_gen = slist->slh_fns.snapshot_current_era ? slist->slh_fns.snapshot_current_era(slist) : 0;                                        \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                                                   \
             slist->slh_length++;                                                                                                                              \
                                                                                                                                                               \
@@ -1004,11 +927,13 @@ __skip_read_rdtsc(void)
     {                                                                                                                                                         \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                                  \
         int rc = 0, np;                                                                                                                                       \
-        uint64_t cur_gen = __skip_snapshot_gen_##decl();                                                                                                      \
+        size_t cur_gen;                                                                                                                                       \
         decl##_node_t *src, **path = (decl##_node_t **)&apath;                                                                                                \
                                                                                                                                                               \
         if (slist == NULL)                                                                                                                                    \
             return -1;                                                                                                                                        \
+                                                                                                                                                              \
+        cur_gen = slist->slh_fns.snapshot_current_era ? slist->slh_fns.snapshot_current_era(slist) : 0;                                                       \
                                                                                                                                                               \
         /* Allocate a buffer, or use a static one. */                                                                                                         \
         if (SKIPLIST_MAX_HEIGHT == 1) {                                                                                                                       \
@@ -1031,9 +956,11 @@ __skip_read_rdtsc(void)
            Snapshots preserve the node if it is younger than our snapshot                                                                                     \
            moment. */                                                                                                                                         \
         if (slist->slh_fns.preserve_node) {                                                                                                                   \
-            np = __skip_preserve_node_fn_##decl(slist, src, NULL);                                                                                            \
+            np = slist->slh_fns.preserve_node(slist, src, NULL);                                                                                              \
             if (np > 0)                                                                                                                                       \
                 return np;                                                                                                                                    \
+            if (slist->slh_fns.snapshot_incr_era)                                                                                                             \
+                slist->slh_fns.snapshot_incr_era(slist);                                                                                                      \
         }                                                                                                                                                     \
                                                                                                                                                               \
         slist->slh_fns.update_entry(src);                                                                                                                     \
@@ -1073,9 +1000,11 @@ __skip_read_rdtsc(void)
                Snapshots preserve the node if it is younger than our snapshot                                                                                 \
                moment, this node is about to be removed. */                                                                                                   \
             if (slist->slh_fns.preserve_node) {                                                                                                               \
-                np = __skip_preserve_node_fn_##decl(slist, node, NULL);                                                                                       \
+                np = slist->slh_fns.preserve_node(slist, node, NULL);                                                                                         \
                 if (np > 0)                                                                                                                                   \
                     return np;                                                                                                                                \
+                if (slist->slh_fns.snapshot_incr_era)                                                                                                         \
+                    slist->slh_fns.snapshot_incr_era(slist);                                                                                                  \
             }                                                                                                                                                 \
             /* We found it, set the next->prev to the node->prev keeping in mind                                                                              \
                that the next node might be the tail). */                                                                                                      \
@@ -1129,13 +1058,23 @@ __skip_read_rdtsc(void)
         if (slist == NULL)                                                                                                                                    \
             return;                                                                                                                                           \
                                                                                                                                                               \
-        prefix##skip_release_##decl(slist); /* TODO snaps free? */                                                                                            \
+        prefix##skip_release_##decl(slist);                                                                                                                   \
                                                                                                                                                               \
         free(slist->slh_head);                                                                                                                                \
         free(slist->slh_tail);                                                                                                                                \
     }
 
 #define SKIPLIST_DECL_SNAPSHOTS(decl, prefix, field)                                                             \
+    /**                                                                                                          \
+     * -- _skip_release_snapshots_ TODO                                                                          \
+     *                                                                                                           \
+     */                                                                                                          \
+    void prefix##skip_release_snapshots_##decl(decl##_t *slist)                                                  \
+    {                                                                                                            \
+        if (slist == NULL)                                                                                       \
+            return;                                                                                              \
+    }                                                                                                            \
+                                                                                                                 \
     /**                                                                                                          \
      * -- __skip_preserve_node_                                                                                  \
      *                                                                                                           \
@@ -1228,7 +1167,7 @@ __skip_read_rdtsc(void)
     {                                                                                                            \
         if (slist == NULL)                                                                                       \
             return 0;                                                                                            \
-        slist->slh_snap.gen = __skip_snapshot_gen_##decl();                                                      \
+        slist->slh_snap.gen = slist->slh_fns.snapshot_current_era(slist);                                        \
         return slist->slh_snap.gen;                                                                              \
     }                                                                                                            \
                                                                                                                  \
@@ -1252,10 +1191,9 @@ __skip_read_rdtsc(void)
      * - Starting with slh_pres, the `node->field.sle_next[0]` form a                                            \
      *   singly-linked list.                                                                                     \
      */                                                                                                          \
-    decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, uint64_t gen)                                \
+    decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, size_t gen)                                  \
     {                                                                                                            \
-        size_t i;                                                                                                \
-        uint64_t cur_gen;                                                                                        \
+        size_t i, cur_gen;                                                                                       \
         decl##_node_t *node, *prev;                                                                              \
                                                                                                                  \
         if (slist == NULL)                                                                                       \
@@ -1264,7 +1202,7 @@ __skip_read_rdtsc(void)
         if (gen >= slist->slh_snap.gen || slist->slh_snap.pres == NULL)                                          \
             return slist;                                                                                        \
                                                                                                                  \
-        cur_gen = __skip_snapshot_gen_##decl();                                                                  \
+        cur_gen = slist->slh_fns.snapshot_current_era(slist);                                                    \
                                                                                                                  \
         /* (a) */                                                                                                \
         SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, i)                                                       \
@@ -1324,14 +1262,38 @@ __skip_read_rdtsc(void)
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
+     * -- __skip_snapshot_current_era                                                                            \
+     *                                                                                                           \
+     * Returns the current generation for snapshot purposes.                                                     \
+     */                                                                                                          \
+    static size_t __skip_snapshot_current_era_##decl(decl##_t *slist)                                            \
+    {                                                                                                            \
+        return slist->slh_snap.gen;                                                                              \
+    }                                                                                                            \
+                                                                                                                 \
+    /**                                                                                                          \
+     * -- __skip_snapshot_incr_era                                                                               \
+     *                                                                                                           \
+     * Increments the snapshot generation.                                                                       \
+     */                                                                                                          \
+    static size_t __skip_snapshot_incr_era_##decl(decl##_t *slist)                                               \
+    {                                                                                                            \
+        return ++slist->slh_snap.gen;                                                                            \
+    }                                                                                                            \
+                                                                                                                 \
+    /**                                                                                                          \
      * -- skip_snapshots_init_                                                                                   \
      *                                                                                                           \
      * Adds the ability to take a single stable snapshot to the Skiplist API.                                    \
      */                                                                                                          \
     void prefix##skip_snapshots_init_##decl(decl##_t *slist)                                                     \
     {                                                                                                            \
-        if (slist != NULL)                                                                                       \
+        if (slist != NULL) {                                                                                     \
             slist->slh_fns.preserve_node = __skip_preserve_node_##decl;                                          \
+            slist->slh_fns.release_snapshots = prefix##skip_release_snapshots_##decl;                            \
+            slist->slh_fns.snapshot_current_era = __skip_snapshot_current_era_##decl;                            \
+            slist->slh_fns.snapshot_incr_era = __skip_snapshot_incr_era_##decl;                                  \
+        }                                                                                                        \
     }
 
 #define SKIPLIST_DECL_ARCHIVE(decl, prefix, field)                                              \

@@ -1,14 +1,4 @@
 
-#include <assert.h>
-#include <errno.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
-
 // OPTIONS to set before including sl.h
 // ---------------------------------------------------------------------------
 #define DEBUG
@@ -370,9 +360,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    sample_t *restored = api_skip_restore_snapshot_sample(list, snaps[snap_i - 1] );
-    api_skip_release_snapshot_sample(list);
-    api_skip_free_sample(restored);
+    api_skip_restore_snapshot_sample(list, snaps[snap_i - 1] );
+    api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
