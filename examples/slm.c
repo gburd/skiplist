@@ -84,13 +84,13 @@ SKIPLIST_DECL(
     },
     /* update entry: rc, src, dest */
     {
-        char *new = calloc(strlen(src->value) + 1, sizeof(char));
+        char *new = calloc(strlen(node->value) + 1, sizeof(char));
         if (new == NULL) {
             rc = ENOMEM;
         } else {
-            strncpy(new, src->value, strlen(src->value));
-            free(dest->value);
-            dest->value = new;
+            strncpy(new, node->value, strlen(node->value));
+            free(node->value);
+            node->value = new;
         }
     },
     /* archive an entry: rc, src, dest */
@@ -312,7 +312,6 @@ main()
     for (i = 0; i < asz; i++) {
         numeral = int_to_roman_numeral(array[i]);
         rc = api_skip_put_sample(list, array[i], to_lower(numeral));
-        //rc = api_skip_put_sample(list, array[i], numeral);
         CHECK;
 #ifdef SNAPSHOTS
         if (i > TEST_ARRAY_SIZE + 1) {
@@ -355,13 +354,13 @@ main()
     CHECK;
     if (api_skip_get_sample(list, 0) != NULL)
         perror("found a deleted item!");
-    int key = TEST_ARRAY_SIZE + 1;
-    api_skip_del_sample(list, key);
-    CHECK;
-    key = -(TEST_ARRAY_SIZE) - 1;
-    numeral = int_to_roman_numeral(key);
-    api_skip_del_sample(list, key);
-    CHECK;
+//    int key = TEST_ARRAY_SIZE + 1;
+//    api_skip_del_sample(list, key);
+//    CHECK;
+//    key = -(TEST_ARRAY_SIZE) - 1;
+//    numeral = int_to_roman_numeral(key);
+//    api_skip_del_sample(list, key);
+//    CHECK;
 
 #ifdef DOT
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);

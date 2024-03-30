@@ -279,7 +279,7 @@ __skip_read_rdtsc(void)
         size_t slh_length, slh_height, slh_max_height;                                                                                                        \
         struct {                                                                                                                                              \
             void (*free_entry)(decl##_node_t *);                                                                                                              \
-            int (*update_entry)(decl##_node_t *, decl##_node_t *);                                                                                            \
+            int (*update_entry)(decl##_node_t *);                                                                                                             \
             int (*archive_entry)(decl##_node_t *, const decl##_node_t *);                                                                                     \
             size_t (*sizeof_entry)(decl##_node_t *);                                                                                                          \
             int (*compare_entries)(struct decl *, decl##_node_t *, decl##_node_t *, void *);                                                                  \
@@ -318,9 +318,9 @@ __skip_read_rdtsc(void)
      *                                                                                                                                                        \
      * Wraps the `update_entry_blk` code into `slh_fns.update_entry`.                                                                                         \
      */                                                                                                                                                       \
-    static int __skip_update_entry_fn_##decl(decl##_node_t *dest, decl##_node_t *src)                                                                         \
+    static int __skip_update_entry_fn_##decl(decl##_node_t *node)                                                                                             \
     {                                                                                                                                                         \
-        int rc = 0;                                                                                                                                               \
+        int rc = 0;                                                                                                                                           \
         update_entry_blk;                                                                                                                                     \
         return rc;                                                                                                                                            \
     }                                                                                                                                                         \
@@ -1118,7 +1118,7 @@ __skip_read_rdtsc(void)
                 return np;                                                                                                                                    \
         }                                                                                                                                                     \
                                                                                                                                                               \
-        slist->slh_fns.update_entry(dest, src);                                                                                                               \
+        slist->slh_fns.update_entry(src);                                                                                                                     \
         src->field.sle_gen = cur_gen;                                                                                                                         \
         return rc;                                                                                                                                            \
     }                                                                                                                                                         \
