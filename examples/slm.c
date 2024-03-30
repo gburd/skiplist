@@ -48,8 +48,8 @@
 struct sample_node {
     int key;
     char *value;
-    SKIPLIST_ENTRY(sample_node) entries;
-    // TODO    SKIPLIST_SNAPS(sample_node) snaps;
+    SKIPLIST_ENTRY(sample) entries;
+    SKIPLIST_SNAPSHOT_ENTRY(sample) snaps;
 };
 
 /*
@@ -145,7 +145,7 @@ SKIPLIST_DECL_ACCESS(
  *
  * TODO
  */
-SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
+SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries, snaps)
 
 /*
  * Optional: Archive to/from bytes
@@ -355,8 +355,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    // TODO api_skip_restore_snapshot_sample(list, snaps[snap_i - 1]);
-    // TODO api_skip_release_snapshots_sample(list);
+    api_skip_restore_snapshot_sample(list, snaps[snap_i - 1]);
+    api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
