@@ -28,7 +28,6 @@
 #define CHECK ((void)0)
 #endif
 
-
 /*
  * SKIPLIST EXAMPLE:
  *
@@ -50,7 +49,7 @@ struct sample_node {
     int key;
     char *value;
     SKIPLIST_ENTRY(sample_node) entries;
-// TODO    SKIPLIST_SNAPS(sample_node) snaps;
+    // TODO    SKIPLIST_SNAPS(sample_node) snaps;
 };
 
 /*
@@ -69,9 +68,7 @@ SKIPLIST_DECL(
         return 0;
     },
     /* free entry: node */
-    {
-        free(node->value);
-    },
+    { free(node->value); },
     /* update entry: rc, src, dest */
     {
         char *new = calloc(strlen(node->value) + 1, sizeof(char));
@@ -95,9 +92,7 @@ SKIPLIST_DECL(
         }
     },
     /* size in bytes of the content stored in an entry: bytes */
-    {
-        bytes = strlen(node->value) + 1;
-    })
+    { bytes = strlen(node->value) + 1; })
 
 /*
  * Skiplists are ordered, we need a way to compare entries.
@@ -164,7 +159,7 @@ SKIPLIST_DECL_ARCHIVE(sample, api_, entries)
  *
  * Turn your Skiplist into a hash table. TODO
  */
-//SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
+// SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
 
 /*
  * Optional: Check Skiplists at runtime
@@ -271,7 +266,7 @@ main()
     if (list == NULL)
         return ENOMEM;
 
-    rc = api_skip_init_sample(list, 12); //TODO -12
+    rc = api_skip_init_sample(list, 12); // TODO -12
     if (rc)
         return rc;
     api_skip_snapshots_init_sample(list);
@@ -345,13 +340,13 @@ main()
     CHECK;
     if (api_skip_get_sample(list, 0) != NULL)
         perror("found a deleted item!");
-//    int key = TEST_ARRAY_SIZE + 1;
-//    api_skip_del_sample(list, key);
-//    CHECK;
-//    key = -(TEST_ARRAY_SIZE) - 1;
-//    numeral = int_to_roman_numeral(key);
-//    api_skip_del_sample(list, key);
-//    CHECK;
+    int key = TEST_ARRAY_SIZE + 1;
+    api_skip_del_sample(list, key);
+    CHECK;
+    key = -(TEST_ARRAY_SIZE)-1;
+    numeral = int_to_roman_numeral(key);
+    api_skip_del_sample(list, key);
+    CHECK;
 
 #ifdef DOT
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
@@ -360,8 +355,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    api_skip_restore_snapshot_sample(list, snaps[snap_i - 1] );
-    api_skip_release_snapshots_sample(list);
+    // TODO api_skip_restore_snapshot_sample(list, snaps[snap_i - 1]);
+    // TODO api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);

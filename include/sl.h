@@ -976,7 +976,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *query)                                                                                \
     {                                                                                                                                                         \
         static decl##_node_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                                  \
-        size_t i, len, np = 0, height;                                                                                                                        \
+        int np = 0; \
+        size_t i, len, height;                                                                                                                        \
         decl##_node_t *node, **path = (decl##_node_t **)&apath;                                                                                               \
                                                                                                                                                               \
         if (slist == NULL || query == NULL)                                                                                                                   \
@@ -1031,9 +1032,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                                     \
                 free(path);                                                                                                                                   \
                                                                                                                                                               \
-            /* If we didn't preserve any nodes we can free this one. */                                                                                       \
-            if (np == 0)                                                                                                                                      \
-                slist->slh_fns.free_entry(node);                                                                                                              \
+            slist->slh_fns.free_entry(node);                            \
                                                                                                                                                               \
             /* Reduce the height of the header. */                                                                                                            \
             i = 0;                                                                                                                                            \
