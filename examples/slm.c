@@ -27,7 +27,7 @@
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
 #define VALIDATE
-// TODO define SNAPSHOTS
+#define SNAPSHOTS
 #define DOT
 #define TEST_ARRAY_SIZE 10
 
@@ -160,7 +160,7 @@ SKIPLIST_DECL_ACCESS(
  *
  * TODO
  */
-//SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries, snaps)
+SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
 
 /*
  * Optional: Archive to/from bytes
@@ -284,6 +284,7 @@ main()
     rc = api_skip_init_sample(list, 12); //TODO -12
     if (rc)
         return rc;
+    api_skip_snapshots_init_sample(list);
 #ifdef DOT
     api_skip_dot_sample(of, list, gen++, "init", sprintf_sample_node);
 #endif
