@@ -49,7 +49,6 @@ struct sample_node {
     int key;
     char *value;
     SKIPLIST_ENTRY(sample) entries;
-    SKIPLIST_SNAPSHOT_ENTRY(sample) snaps;
 };
 
 /*
@@ -145,7 +144,7 @@ SKIPLIST_DECL_ACCESS(
  *
  * TODO
  */
-SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries, snaps)
+SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
 
 /*
  * Optional: Archive to/from bytes
@@ -249,7 +248,7 @@ main()
     int rc;
 #ifdef SNAPSHOTS
     size_t snap_i = 0;
-    uint64_t snaps[2048];
+    uint64_t snap_ids[2048];
 #endif
 
 #ifdef DOT
@@ -280,7 +279,7 @@ main()
 
 #ifdef SNAPSHOTS
     /* Test creating a snapshot of an empty Skiplist */
-    snaps[snap_i++] = api_skip_snapshot_sample(list);
+    snap_ids[snap_i++] = api_skip_snapshot_sample(list);
 #endif
 
     /* Insert 7 key/value pairs into the list. */
@@ -288,6 +287,7 @@ main()
     char *numeral;
 #ifdef DOT
     char msg[1024];
+    memset(msg, 0, 1024);
 #endif
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
     int array[(TEST_ARRAY_SIZE * 2) + 1];
@@ -301,7 +301,7 @@ main()
         CHECK;
 #ifdef SNAPSHOTS
         if (i > TEST_ARRAY_SIZE + 1) {
-            snaps[snap_i++] = api_skip_snapshot_sample(list);
+            snap_ids[snap_i++] = api_skip_snapshot_sample(list);
             CHECK;
         }
 #endif
@@ -355,8 +355,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    api_skip_restore_snapshot_sample(list, snaps[snap_i - 1]);
-    api_skip_release_snapshots_sample(list);
+    // TODO api_skip_restore_snapshot_sample(list, snap_ids[snap_i - 1]);
+    // TODO api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
