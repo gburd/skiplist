@@ -1081,13 +1081,22 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
-     * -- skip_release_snapshots_ TODO                                                                           \
+     * -- skip_release_snapshots_                                                                                \
      *                                                                                                           \
      */                                                                                                          \
     void prefix##skip_release_snapshots_##decl(decl##_t *slist)                                                  \
     {                                                                                                            \
+        decl##_node_t *node, *next;                                                                              \
         if (slist == NULL)                                                                                       \
             return;                                                                                              \
+                                                                                                                 \
+        node = slist->slh_snap.pres;                                                                             \
+        while (node) {                                                                                           \
+            next = node->field.sle_next[0];                                                                      \
+            prefix##skip_free_node_##decl(slist, node);                                                          \
+            node = next;                                                                                         \
+        }                                                                                                        \
+        slist->slh_snap.era = 0;                                                                                 \
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
@@ -1789,23 +1798,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         node.key = key;                                                                      \
         node.value = value;                                                                  \
         return prefix##skip_update_##decl(slist, &node);                                     \
-    }                                                                                        \
-                                                                                             \
-    /**                                                                                      \
-     * skip_merge_ -- TODO                                                                   \
-     *                                                                                       \
-     * Merges an array of kvp into the list.                                                 \
-     */                                                                                      \
-    int prefix##skip_merge_##decl(decl##_t *slist, ktype *key, vtype *value, size_t len)     \
-    {                                                                                        \
-        decl##_node_t *nodes[len];                                                           \
-        ((void)slist);                                                                       \
-        ((void)key);                                                                         \
-        ((void)value);                                                                       \
-        ((void)len);                                                                         \
-        ((void)nodes);                                                                       \
-        int rc = 0;                                                                          \
-        return rc;                                                                           \
     }                                                                                        \
                                                                                              \
     /**                                                                                      \

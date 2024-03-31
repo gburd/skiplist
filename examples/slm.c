@@ -142,23 +142,25 @@ SKIPLIST_DECL_ACCESS(
 /*
  * Optional: Snapshots
  *
- * TODO
+ * Enable functions that enable returning to an earlier point in
+ * time when a snapshot was created.
  */
 SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
 
 /*
  * Optional: Archive to/from bytes
  *
- * TODO
+ * Enable functions that can write/read the content of your Skiplist
+ * out/in to/from an array of bytes.
  */
 SKIPLIST_DECL_ARCHIVE(sample, api_, entries)
 
 /*
  * Optional: As Hashtable
  *
- * Turn your Skiplist into a hash table. TODO
+ * Turn your Skiplist into a hash table.
  */
-// SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
+//TODO SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
 
 /*
  * Optional: Check Skiplists at runtime
@@ -265,7 +267,7 @@ main()
     if (list == NULL)
         return ENOMEM;
 
-    rc = api_skip_init_sample(list, 12); // TODO -12
+    rc = api_skip_init_sample(list, -12);
     if (rc)
         return rc;
     api_skip_snapshots_init_sample(list);
@@ -355,8 +357,8 @@ main()
 #endif
 
 #ifdef SNAPSHOTS
-    // TODO api_skip_restore_snapshot_sample(list, snap_ids[snap_i - 1]);
-    // TODO api_skip_release_snapshots_sample(list);
+    //api_skip_restore_snapshot_sample(list, snap_ids[snap_i - 1]);
+    api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
