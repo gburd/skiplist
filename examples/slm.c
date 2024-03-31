@@ -173,7 +173,7 @@ SKIPLIST_DECL_DOT(sample, api_, entries)
 void
 sprintf_sample_node(sample_node_t *node, char *buf)
 {
-//    sprintf(buf, "h:%lu <<>> %d:%s", node->entries.sle_hits, node->key, node->value);
+//    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_hits);
     sprintf(buf, "%d:%s", node->key, node->value);
 }
 
