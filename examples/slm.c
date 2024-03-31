@@ -68,16 +68,11 @@ SKIPLIST_DECL(
     },
     /* free entry: node */
     { free(node->value); },
-    /* update entry: rc, src, dest */
+    /* update entry: rc, node, value */
     {
-        char *new = calloc(strlen(node->value) + 1, sizeof(char));
-        if (new == NULL) {
-            rc = ENOMEM;
-        } else {
-            strncpy(new, node->value, strlen(node->value));
+        if (node->value)
             free(node->value);
-            node->value = new;
-        }
+        node->value = (char*)value;
     },
     /* archive an entry: rc, src, dest */
     {
@@ -178,6 +173,7 @@ SKIPLIST_DECL_DOT(sample, api_, entries)
 void
 sprintf_sample_node(sample_node_t *node, char *buf)
 {
+//    sprintf(buf, "h:%lu <<>> %d:%s", node->entries.sle_hits, node->key, node->value);
     sprintf(buf, "%d:%s", node->key, node->value);
 }
 
@@ -298,8 +294,8 @@ main()
     shuffle(array, asz);
 
     for (i = 0; i < asz; i++) {
-        numeral = int_to_roman_numeral(array[i]);
-        rc = api_skip_put_sample(list, array[i], to_lower(numeral));
+        numeral = to_lower(int_to_roman_numeral(array[i]));
+        rc = api_skip_put_sample(list, array[i], numeral);
         CHECK;
 #ifdef SNAPSHOTS
         if (i > TEST_ARRAY_SIZE + 1) {
@@ -314,7 +310,10 @@ main()
 #endif
         char *v = api_skip_get_sample(list, array[i]);
         CHECK;
-        api_skip_set_sample(list, array[i], to_upper(v));
+        char *upper_numeral = calloc(1, strlen(v) + 1);
+        strncpy(upper_numeral, v, strlen(v));
+        to_upper(upper_numeral);
+        api_skip_set_sample(list, array[i], upper_numeral);
         CHECK;
     }
     numeral = int_to_roman_numeral(-1);
@@ -358,7 +357,7 @@ main()
 
 #ifdef SNAPSHOTS
     //api_skip_restore_snapshot_sample(list, snap_ids[snap_i - 1]);
-    api_skip_release_snapshots_sample(list);
+    //api_skip_release_snapshots_sample(list);
 #endif
 
     assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
