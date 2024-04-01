@@ -261,8 +261,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             void (*snapshot_record_era)(struct decl *, decl##_node_t *);                                                                                  \
         } slh_fns;                                                                                                                                        \
         struct {                                                                                                                                          \
-            size_t threshold;  /* `k`, the floor of log(max height) */ \
-            size_t total_hits; /* total hits across nodes in the list */ \
+            size_t threshold;  /* `k`, the floor of log(max height) */                                                                                    \
+            size_t total_hits; /* total hits across nodes in the list */                                                                                  \
         } slh_splay;                                                                                                                                      \
         struct {                                                                                                                                          \
             size_t era;                                                                                                                                   \
@@ -411,7 +411,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         slist->slh_max_height = SKIPLIST_MAX_HEIGHT == 1 ? slist->slh_max_height : SKIPLIST_MAX_HEIGHT;                                                   \
         if (SKIPLIST_MAX_HEIGHT > 1 && slist->slh_max_height > SKIPLIST_MAX_HEIGHT)                                                                       \
             return -1;                                                                                                                                    \
-        slist->slh_splay.threshold = floor(log(max) / M_LOG2E);                             \
+        slist->slh_splay.threshold = floor(log(max) / M_LOG2E);                                                                                           \
         slist->slh_fns.free_entry = __skip_free_entry_fn_##decl;                                                                                          \
         slist->slh_fns.update_entry = __skip_update_entry_fn_##decl;                                                                                      \
         slist->slh_fns.archive_entry = __skip_archive_entry_fn_##decl;                                                                                    \
@@ -588,37 +588,37 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         return nodes;                                                                                                                                     \
     }                                                                                                                                                     \
                                                                                                                                                           \
-    /**                                                                 \
-     * -- __skip_rebalance_ TODO                                        \
-     *                                                                  \
-     */                                                                 \
-    static void __skip_rebalance_##decl(decl##_t *slist, size_t len, decl##_node_t **path, size_t par_sum) \
-    {                                                                   \
-        size_t i;                                                       \
-        double asc_cond, dsc_cond;                                      \
-                                                                        \
-        /* Moving backwards along the path... */                        \
-        for (i = 1; i <=len; i++) {                                     \
-            if (par_sum > 0) {                                          \
-                /* check the decent condition:                          \
-                   par_sum <= hits total / (2 ^ (height of head - height of node)) \
-                 */                                                     \
-                dsc_cond = pow(2.0, slist->slh_head->field.sle_height - path[i]->field.sle_height); \
-                if (0 && par_sum <= dsc_cond) {                             \
-                    /* reduce height by one, change forward pointer */  \
-                    path[i - 1]->field.sle_next[i] = path[i]->field.sle_next[i]; \
-                    path[i]->field.sle_next[i] = slist->slh_tail;                   \
-                    path[i]->field.sle_height--;                         \
-                }                                                       \
-                /* check the ascent condition                           \
-                   par_sum + node_hits > hits total / (2 ^ (height of head - height of node - 1)) \
-                */                                                      \
-                asc_cond = pow(2.0, slist->slh_head->field.sle_height - path[i]->field.sle_height - 1); \
-                if (+ path[i]->field.sle_hits > asc_cond) {                       \
-                }                                                       \
-            }                                                           \
-        }                                                               \
-    }                                                                   \
+    /**                                                                                                                                                   \
+     * -- __skip_rebalence_ TODO                                                                                                                          \
+     *                                                                                                                                                    \
+     */                                                                                                                                                   \
+    static void __skip_rebalence_##decl(decl##_t *slist, size_t len, decl##_node_t **path, size_t par_sum)                                                \
+    {                                                                                                                                                     \
+        size_t i;                                                                                                                                         \
+        double asc_cond, dsc_cond;                                                                                                                        \
+                                                                                                                                                          \
+        /* Moving backwards along the path... */                                                                                                          \
+        for (i = 1; i < len; i++) {                                                                                                                       \
+            if (par_sum > 0) {                                                                                                                            \
+                /* check the decent condition:                                                                                                            \
+                   par_sum <= hits total / (2 ^ (height of head - height of node))                                                                        \
+                 */                                                                                                                                       \
+                dsc_cond = pow(2.0, slist->slh_head->field.sle_height - path[i]->field.sle_height);                                                       \
+                if (par_sum <= dsc_cond) {                                                                                                                \
+                    /* reduce height by one, change forward pointer */                                                                                    \
+                    path[i - 1]->field.sle_next[i] = path[i]->field.sle_next[i];                                                                          \
+                    path[i]->field.sle_next[i] = slist->slh_tail;                                                                                         \
+                    path[i]->field.sle_height--;                                                                                                          \
+                }                                                                                                                                         \
+                /* check the ascent condition                                                                                                             \
+                   par_sum + node_hits > hits total / (2 ^ (height of head - height of node - 1))                                                         \
+                */                                                                                                                                        \
+                asc_cond = pow(2.0, slist->slh_head->field.sle_height - path[i]->field.sle_height - 1);                                                   \
+                if (+path[i]->field.sle_hits > asc_cond) {                                                                                                \
+                }                                                                                                                                         \
+            }                                                                                                                                             \
+        }                                                                                                                                                 \
+    }                                                                                                                                                     \
                                                                                                                                                           \
     /**                                                                                                                                                   \
      * -- __skip_locate_                                                                                                                                  \
@@ -650,7 +650,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (__skip_compare_nodes_##decl(slist, elm, n, slist->slh_aux) == 0) {                                                                            \
             path[0] = elm;                                                                                                                                \
             path[0]->field.sle_hits++;                                                                                                                    \
-            __skip_rebalance_##decl(slist, len, path, par_sum);                                                                                           \
+            __skip_rebalence_##decl(slist, len, path, par_sum);                                                                                           \
         }                                                                                                                                                 \
         return len;                                                                                                                                       \
     }                                                                                                                                                     \
@@ -735,9 +735,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 slist->slh_head->field.sle_height = new_height;                                                                                           \
                 slist->slh_tail->field.sle_height = new_height;                                                                                           \
             }                                                                                                                                             \
-            /* Adjust the splay threshold based on the height. */       \
-            slist->slh_splay.threshold = floor(log(slist->slh_head->field.sle_height) / M_LOG2E); \
-            /* Record the era for this node to enable snapshots. */     \
+            /* Adjust the splay threshold based on the height. */                                                                                         \
+            slist->slh_splay.threshold = floor(log(slist->slh_head->field.sle_height) / M_LOG2E);                                                         \
+            /* Record the era for this node to enable snapshots. */                                                                                       \
             if (slist->slh_fns.snapshot_record_era)                                                                                                       \
                 slist->slh_fns.snapshot_record_era(slist, new);                                                                                           \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                                               \
@@ -1089,14 +1089,14 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                                                                                                                                                           \
             slist->slh_fns.free_entry(node);                                                                                                              \
                                                                                                                                                           \
-            /* Reduce the height of the head node. */                                                                                                        \
+            /* Reduce the height of the head node. */                                                                                                     \
             i = 0;                                                                                                                                        \
             while (slist->slh_head->field.sle_next[i] != slist->slh_tail && i < slist->slh_head->field.sle_height)                                        \
                 i++;                                                                                                                                      \
             slist->slh_head->field.sle_height = i;                                                                                                        \
             slist->slh_tail->field.sle_height = i;                                                                                                        \
-            /* Adjust the splay threshold based on the height. */ \
-            slist->slh_splay.threshold = floor(log(slist->slh_head->field.sle_height) / M_LOG2E); \
+            /* Adjust the splay threshold based on the height. */                                                                                         \
+            slist->slh_splay.threshold = floor(log(slist->slh_head->field.sle_height) / M_LOG2E);                                                         \
                                                                                                                                                           \
             slist->slh_length--;                                                                                                                          \
         }                                                                                                                                                 \
@@ -1251,7 +1251,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
-     * -- skip_restore_snapshot_ TODO test!                                                                                \
+     * -- skip_restore_snapshot_ TODO test!                                                                      \
      *                                                                                                           \
      * Restores the Skiplist to generation `era`.  Once you restore `era` you                                    \
      * can no longer access any generations > `era`.                                                             \
