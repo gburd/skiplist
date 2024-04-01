@@ -16,10 +16,19 @@
 
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
+#define TEST_ARRAY_SIZE 10
 #define VALIDATE
 #define SNAPSHOTS
 #define DOT
-#define TEST_ARRAY_SIZE 50
+#ifdef DOT
+size_t gen = 0;
+FILE *of = 0;
+typedef struct esempio esempio_t;
+typedef struct esempio_node esempio_node_t;
+static int __skip_integrity_check_esempio(esempio_t *slist, int flags);
+int api_skip_dot_esempio(FILE *os, esempio_t *slist, size_t nsg, char *msg, void (*fn)(struct esempio_node *, char *));
+void sprintf_esempio_node(esempio_node_t *node, char *buf);
+#endif
 
 // ---------------------------------------------------------------------------
 #ifdef VALIDATE
@@ -171,8 +180,8 @@ SKIPLIST_DECL_DOT(esempio, api_, entries)
 void
 sprintf_esempio_node(esempio_node_t *node, char *buf)
 {
-//    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_hits);
-    sprintf(buf, "%d:%s", node->key, node->value);
+    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_hits);
+//TODO    sprintf(buf, "%d:%s", node->key, node->value);
 }
 
 // Function for this demo application.
@@ -248,8 +257,7 @@ main()
 #endif
 
 #ifdef DOT
-    size_t gen = 0;
-    FILE *of = fopen("/tmp/slm.dot", "w");
+    of = fopen("/tmp/slm.dot", "w");
     if (!of) {
         perror("Failed to open file /tmp/slm.dot");
         return 1;
