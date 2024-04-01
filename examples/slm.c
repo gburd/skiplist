@@ -19,11 +19,11 @@
 #define VALIDATE
 #define SNAPSHOTS
 #define DOT
-#define TEST_ARRAY_SIZE 10
+#define TEST_ARRAY_SIZE 50
 
 // ---------------------------------------------------------------------------
 #ifdef VALIDATE
-#define CHECK __skip_integrity_check_sample(list, 0)
+#define CHECK __skip_integrity_check_esempio(list, 0)
 #else
 #define CHECK ((void)0)
 #endif
@@ -31,10 +31,8 @@
 /*
  * SKIPLIST EXAMPLE:
  *
- * This example creates a "sample" Skiplist where keys are integers, values are
- * strings allocated on the heap.
- *
- * 'sample' - meaning: EXample
+ * This example creates an "esempio" (example in Italian) Skiplist where keys
+ * are integers, values are strings allocated on the heap.
  */
 
 /*
@@ -45,17 +43,17 @@
  * node against another, logic you'll provide in SKIP_DECL as a
  * block below.
  */
-struct sample_node {
+struct esempio_node {
     int key;
     char *value;
-    SKIPLIST_ENTRY(sample) entries;
+    SKIPLIST_ENTRY(esempio) entries;
 };
 
 /*
  * Generate all the access functions for our type of Skiplist.
  */
 SKIPLIST_DECL(
-    sample, api_, entries,
+    esempio, api_, entries,
     /* compare entries: list, a, b, aux */
     {
         (void)list;
@@ -109,7 +107,7 @@ SKIPLIST_DECL(
  * list or when `a == b`.  In those cases the comparison function
  * returns before using the code in your block, don't panic. :)
 int
-__sample_key_compare(sample_t *list, sample_node_t *a, sample_node_t *b, void *aux)
+__esempio_key_compare(esempio_t *list, esempio_node_t *a, esempio_node_t *b, void *aux)
 {
     (void)list;
     (void)aux;
@@ -130,7 +128,7 @@ __sample_key_compare(sample_t *list, sample_node_t *a, sample_node_t *b, void *a
  * extract data from within your nodes.
  */
 SKIPLIST_DECL_ACCESS(
-    sample, api_, key, int, value, char *,
+    esempio, api_, key, int, value, char *,
     /* query blk */ { query.key = key; },
     /* return blk */ { return node->value; })
 
@@ -140,7 +138,7 @@ SKIPLIST_DECL_ACCESS(
  * Enable functions that enable returning to an earlier point in
  * time when a snapshot was created.
  */
-SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
+SKIPLIST_DECL_SNAPSHOTS(esempio, api_, entries)
 
 /*
  * Optional: Archive to/from bytes
@@ -148,30 +146,30 @@ SKIPLIST_DECL_SNAPSHOTS(sample, api_, entries)
  * Enable functions that can write/read the content of your Skiplist
  * out/in to/from an array of bytes.
  */
-SKIPLIST_DECL_ARCHIVE(sample, api_, entries)
+SKIPLIST_DECL_ARCHIVE(esempio, api_, entries)
 
 /*
  * Optional: As Hashtable
  *
  * Turn your Skiplist into a hash table.
  */
-//TODO SKIPLIST_DECL_HASHTABLE(sample, api_, entries, snaps)
+//TODO SKIPLIST_DECL_HASHTABLE(esempio, api_, entries, snaps)
 
 /*
  * Optional: Check Skiplists at runtime
  *
  * Create a functions that validate the integrity of a Skiplist.
  */
-SKIPLIST_DECL_VALIDATE(sample, api_, entries)
+SKIPLIST_DECL_VALIDATE(esempio, api_, entries)
 
 /* Optional: Visualize your Skiplist using DOT/Graphviz in PDF
  *
  * Create the functions used to annotate a visualization of a Skiplist.
  */
-SKIPLIST_DECL_DOT(sample, api_, entries)
+SKIPLIST_DECL_DOT(esempio, api_, entries)
 
 void
-sprintf_sample_node(sample_node_t *node, char *buf)
+sprintf_esempio_node(esempio_node_t *node, char *buf)
 {
 //    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_hits);
     sprintf(buf, "%d:%s", node->key, node->value);
@@ -259,25 +257,25 @@ main()
 #endif
 
     /* Allocate and initialize a Skiplist. */
-    sample_t *list = (sample_t *)malloc(sizeof(sample_t));
+    esempio_t *list = (esempio_t *)malloc(sizeof(esempio_t));
     if (list == NULL)
         return ENOMEM;
 
-    rc = api_skip_init_sample(list, -12);
+    rc = api_skip_init_esempio(list, -12);
     if (rc)
         return rc;
-    api_skip_snapshots_init_sample(list);
+    api_skip_snapshots_init_esempio(list);
 #ifdef DOT
-    api_skip_dot_sample(of, list, gen++, "init", sprintf_sample_node);
+    api_skip_dot_esempio(of, list, gen++, "init", sprintf_esempio_node);
 #endif
-    if (api_skip_get_sample(list, 0) != NULL)
+    if (api_skip_get_esempio(list, 0) != NULL)
         perror("found a non-existent item!");
-    api_skip_del_sample(list, 0);
+    api_skip_del_esempio(list, 0);
     CHECK;
 
 #ifdef SNAPSHOTS
     /* Test creating a snapshot of an empty Skiplist */
-    snap_ids[snap_i++] = api_skip_snapshot_sample(list);
+    snap_ids[snap_i++] = api_skip_snapshot_esempio(list);
 #endif
 
     /* Insert 7 key/value pairs into the list. */
@@ -295,98 +293,104 @@ main()
 
     for (i = 0; i < asz; i++) {
         numeral = to_lower(int_to_roman_numeral(array[i]));
-        rc = api_skip_put_sample(list, array[i], numeral);
+        rc = api_skip_put_esempio(list, array[i], numeral);
         CHECK;
 #ifdef SNAPSHOTS
         if (i > TEST_ARRAY_SIZE + 1) {
-            snap_ids[snap_i++] = api_skip_snapshot_sample(list);
+            snap_ids[snap_i++] = api_skip_snapshot_esempio(list);
             CHECK;
         }
 #endif
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
-        api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+        api_skip_dot_esempio(of, list, gen++, msg, sprintf_esempio_node);
         CHECK;
 #endif
-        char *v = api_skip_get_sample(list, array[i]);
+        char *v = api_skip_get_esempio(list, array[i]);
         CHECK;
         char *upper_numeral = calloc(1, strlen(v) + 1);
         strncpy(upper_numeral, v, strlen(v));
         to_upper(upper_numeral);
-        api_skip_set_sample(list, array[i], upper_numeral);
+        api_skip_set_esempio(list, array[i], upper_numeral);
         CHECK;
+        if (i == 8) {
+            api_skip_get_esempio(list, -2);
+            api_skip_get_esempio(list, -2);
+            api_skip_get_esempio(list, -2);
+            api_skip_get_esempio(list, -2);
+        }
     }
     numeral = int_to_roman_numeral(-1);
-    api_skip_dup_sample(list, -1, numeral);
+    api_skip_dup_esempio(list, -1, numeral);
     CHECK;
 #ifdef DOT
     sprintf(msg, "put dup key: %d value: %s", i, numeral);
-    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    api_skip_dot_esempio(of, list, gen++, msg, sprintf_esempio_node);
     CHECK;
 #endif
     numeral = int_to_roman_numeral(1);
-    api_skip_dup_sample(list, 1, numeral);
+    api_skip_dup_esempio(list, 1, numeral);
     CHECK;
 #ifdef DOT
     sprintf(msg, "put dup key: %d value: %s", i, numeral);
-    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    api_skip_dot_esempio(of, list, gen++, msg, sprintf_esempio_node);
     CHECK;
 #endif
 
-    api_skip_del_sample(list, 0);
+    api_skip_del_esempio(list, 0);
     CHECK;
-    if (api_skip_get_sample(list, 0) != NULL)
+    if (api_skip_get_esempio(list, 0) != NULL)
         perror("found a deleted item!");
-    api_skip_del_sample(list, 0);
+    api_skip_del_esempio(list, 0);
     CHECK;
-    if (api_skip_get_sample(list, 0) != NULL)
+    if (api_skip_get_esempio(list, 0) != NULL)
         perror("found a deleted item!");
     int key = TEST_ARRAY_SIZE + 1;
-    api_skip_del_sample(list, key);
+    api_skip_del_esempio(list, key);
     CHECK;
     key = -(TEST_ARRAY_SIZE)-1;
     numeral = int_to_roman_numeral(key);
-    api_skip_del_sample(list, key);
+    api_skip_del_esempio(list, key);
     CHECK;
 
 #ifdef DOT
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
-    api_skip_dot_sample(of, list, gen++, msg, sprintf_sample_node);
+    api_skip_dot_esempio(of, list, gen++, msg, sprintf_esempio_node);
     CHECK;
 #endif
 
 #ifdef SNAPSHOTS
-    //api_skip_restore_snapshot_sample(list, snap_ids[snap_i - 1]);
-    //api_skip_release_snapshots_sample(list);
+    api_skip_restore_snapshot_esempio(list, snap_ids[snap_i - 1]);
+    api_skip_release_snapshots_esempio(list);
 #endif
 
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
-    assert(api_skip_pos_sample(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_esempio(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
 
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
-    assert(api_skip_pos_sample(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
+    assert(api_skip_pos_esempio(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
 
-    assert(api_skip_pos_sample(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    assert(api_skip_pos_esempio(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    assert(api_skip_pos_sample(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
-    assert(strcmp(api_skip_pos_sample(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    assert(api_skip_pos_esempio(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
 
-    api_skip_free_sample(list);
+    api_skip_free_esempio(list);
 #ifdef DOT
-    api_skip_dot_end_sample(of, gen);
+    api_skip_dot_end_esempio(of, gen);
     fclose(of);
 #endif
     return rc;

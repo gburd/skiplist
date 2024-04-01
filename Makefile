@@ -3,9 +3,11 @@ OBJS = skiplist.o
 STATIC_LIB = libskiplist.a
 SHARED_LIB = libskiplist.so
 
+# https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
+#CFLAGS = -Wall -Wextra -Wpedantic -Of -std=c99 -Iinclude/ -fPIC
 CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
+#CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,undefined -std=c99 -Iinclude/ -fPIC
 TEST_FLAGS = -Itests/
-#-fsanitize=address,undefined
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
