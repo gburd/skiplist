@@ -34,7 +34,7 @@ test: $(TESTS)
 #	env LSAN_OPTIONS=verbosity=1:log_threads=1 ./tests/test
 
 tests/test: $(TEST_OBJS) $(STATIC_LIB)
-	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 clean:
 	rm -f $(OBJS) munit.o test.o
@@ -61,7 +61,7 @@ examples/mls.c: examples/slm.c
 #	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e 's/^#\( [0-9]* ".*$$\)/\/\* \1 \*\//' | clang-format > examples/mls.c
 
 examples/mls: examples/mls.o $(STATIC_LIB)
-	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -pthread
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 #dot:
 #	./examples/mls
