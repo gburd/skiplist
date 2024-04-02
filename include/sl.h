@@ -636,11 +636,11 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             if (path[i].node == slist->slh_head || path[i].node == slist->slh_tail)                                                                         \
                 continue;                                                                                                                                   \
                                                                                                                                                             \
-            __SKIP_SUBTREE_CHu(decl, field, slist, path, 0)                                                                                                 \
+            __SKIP_SUBTREE_CHu(decl, field, slist, path, i)                                                                                                 \
             {                                                                                                                                               \
                 hits_CHu += elm->field.sle_hits;                                                                                                            \
             }                                                                                                                                               \
-            __SKIP_SUBTREE_CHv(decl, field, slist, path, 0)                                                                                                 \
+            __SKIP_SUBTREE_CHv(decl, field, slist, path, i)                                                                                                 \
             {                                                                                                                                               \
                 hits_CHv += elm->field.sle_hits;                                                                                                            \
             }                                                                                                                                               \
@@ -687,7 +687,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
              */                                                                                                                                             \
             /* 1) check ascent condition */                                                                                                                 \
             asc_cond = m_total_hits / pow(2.0, delta_height == 0 ? 0 : delta_height - 1);                                                                   \
-            if (path[i - 1].pu > asc_cond && path[i].node->field.sle_height < slist->slh_max_height - 1 && 0) {                                             \
+            if (path[i - 1].pu > asc_cond && path[i].node->field.sle_height < slist->slh_max_height - 1) {                                             \
                 /* 2) increase height by one */                                                                                                             \
                 new_height = path[i].node->field.sle_height++;                                                                                              \
                 /* 3) update hit counter */                                                                                                                 \
