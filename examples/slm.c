@@ -182,7 +182,7 @@ SKIPLIST_DECL_DOT(esempio, api_, entries)
 void
 sprintf_esempio_node(esempio_node_t *node, char *buf)
 {
-    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_levels[0]->hits);
+    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_levels[0].hits);
 //TODO    sprintf(buf, "%d:%s", node->key, node->value);
 }
 
