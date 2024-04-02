@@ -1,3 +1,5 @@
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
 
 // OPTIONS to set before including sl.h
 // ---------------------------------------------------------------------------
@@ -16,7 +18,7 @@
 
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
-#define TEST_ARRAY_SIZE 10
+#define TEST_ARRAY_SIZE 50
 #define VALIDATE
 #define SNAPSHOTS
 #define DOT
@@ -403,3 +405,4 @@ main()
 #endif
     return rc;
 }
+#pragma GCC pop_options
