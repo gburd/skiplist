@@ -18,11 +18,11 @@
 
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
-#define TEST_ARRAY_SIZE 10
+#define TEST_ARRAY_SIZE 1000
 #define VALIDATE
-#define SNAPSHOTS
+//define SNAPSHOTS
 //define TODO_RESTORE_SNAPSHOTS
-#define DOT
+//define DOT
 #ifdef DOT
 size_t gen = 0;
 FILE *of = 0;

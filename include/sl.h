@@ -605,19 +605,19 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                                                  \
                                                                                                                                        \
     /**                                                                                                                                \
-     * -- __skip_rebalence_                                                                                                            \
+     * -- __skip_rebalance_                                                                                                            \
      *                                                                                                                                 \
      * Restore balance to our list by adjusting heights and forward pointers                                                           \
      * according to the algorithm put forth in "The Splay-List: A                                                                      \
      * Distribution-Adaptive Concurrent Skip-List".                                                                                    \
      *                                                                                                                                 \
      */                                                                                                                                \
-    static void __skip_rebalence_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                \
+    static void __skip_rebalance_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                \
     {                                                                                                                                  \
         size_t i, j, u_hits, hits_CHu = 0, hits_CHv = 0, delta_height, new_height, cur_hits, prev_hits;                                \
         double k_threshold, m_total_hits, asc_cond, dsc_cond;                                                                          \
                                                                                                                                        \
-        return; /* TODO */                                                                                                             \
+        /* return; TODO/WIP */                                            \
         /* Total hits, `k`, accross all nodes. */                                                                                      \
         m_total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                      \
                                                                                                                                        \
@@ -730,7 +730,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (__skip_compare_nodes_##decl(slist, elm, n, slist->slh_aux) == 0) {                                                         \
             path[0].node = elm;                                                                                                        \
             path[0].node->field.sle_levels[0].hits++;                                                                                  \
-            __skip_rebalence_##decl(slist, len, path);                                                                                 \
+            __skip_rebalance_##decl(slist, len, path);                                                                                 \
         }                                                                                                                              \
         return len;                                                                                                                    \
     }                                                                                                                                  \
