@@ -21,7 +21,7 @@
 #define TEST_ARRAY_SIZE 1000
 #define VALIDATE
 //define SNAPSHOTS
-//define DOT
+#define DOT
 #ifdef DOT
 size_t gen = 0;
 FILE *of = 0;
@@ -79,9 +79,10 @@ SKIPLIST_DECL(
     { free(node->value); },
     /* update entry: rc, node, value */
     {
+        char *numeral = (char *)value;
         if (node->value)
             free(node->value);
-        node->value = (char*)value;
+        node->value = numeral;
     },
     /* archive an entry: rc, src, dest */
     {
@@ -363,7 +364,6 @@ main()
     api_skip_del_esempio(list, key);
     CHECK;
     key = -(TEST_ARRAY_SIZE)-1;
-    numeral = int_to_roman_numeral(key);
     api_skip_del_esempio(list, key);
     CHECK;
 
@@ -378,35 +378,68 @@ main()
     api_skip_release_snapshots_esempio(list);
 #endif
 
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 2)->value, int_to_roman_numeral(2)) == 0);
+    numeral = int_to_roman_numeral(-(TEST_ARRAY_SIZE));
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(-2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, -2)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 0)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GTE, 2)->value, numeral) == 0);
+    free(numeral);
     assert(api_skip_pos_esempio(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
 
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, int_to_roman_numeral(-(TEST_ARRAY_SIZE))) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -2)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 0)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 1)->value, int_to_roman_numeral(2)) == 0);
+    numeral = int_to_roman_numeral(-(TEST_ARRAY_SIZE));
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(-1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, -2)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 0)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_GT, 1)->value, numeral) == 0);
+    free(numeral);
     assert(api_skip_pos_esempio(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
 
     assert(api_skip_pos_esempio(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, -1)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 2)->value, int_to_roman_numeral(1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    numeral = int_to_roman_numeral(-2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, -1)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(-1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 0)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, 2)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(TEST_ARRAY_SIZE);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, numeral) == 0);
+    free(numeral);
 
     assert(api_skip_pos_esempio(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, -2)->value, int_to_roman_numeral(-2)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 0)->value, int_to_roman_numeral(-1)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 2)->value, int_to_roman_numeral(2)) == 0);
-    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, int_to_roman_numeral(TEST_ARRAY_SIZE)) == 0);
+    numeral = int_to_roman_numeral(-2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, -2)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(-1);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 0)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(2);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, 2)->value, numeral) == 0);
+    free(numeral);
+    numeral = int_to_roman_numeral(TEST_ARRAY_SIZE);
+    assert(strcmp(api_skip_pos_esempio(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, numeral) == 0);
+    free(numeral);
 
-    api_skip_free_esempio(list);
 #ifdef DOT
     api_skip_dot_end_esempio(of, gen);
     fclose(of);
 #endif
+    api_skip_free_esempio(list);
+    free(list);
     return rc;
 }
 #pragma GCC pop_options

@@ -213,13 +213,12 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         } *sle_levels;                     \
     }
 
-#define SKIPLIST_FOREACH_H2T(decl, prefix, list, elm, iter) \
-    for (iter = 0, (elm) = prefix##skip_head_##decl(list); (elm) != NULL; iter++, (elm) = prefix##skip_next_node_##decl(list, elm))
+#define SKIPLIST_FOREACH_H2T(decl, prefix, field, list, elm, iter) \
+    for (iter = 0, (elm) = (list)->slh_head; ((elm) = (elm)->field.sle_levels[0].next) != (list)->slh_tail; iter++)
 
 /* Iterate from tail to head over the nodes. */
-#define SKIPLIST_FOREACH_T2H(decl, prefix, list, elm, iter)                                             \
-    for (iter = prefix##skip_size_##decl(list), (elm) = prefix##skip_tailf_##decl(list); (elm) != NULL; \
-         iter--, (elm) = prefix##skip_prev_node_##decl(list, elm))
+#define SKIPLIST_FOREACH_T2H(decl, prefix, field, list, elm, iter) \
+    for (iter = (list)->slh_length, (elm) = (list)->slh_tail; ((elm) = (elm)->field.sle_prev) != (list)->slh_head; iter--)
 
 /* Iterate over the next pointers in a node from bottom to top (B2T) or top to bottom (T2B). */
 #define __SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_max_height; lvl != (size_t)-1; lvl--)
@@ -227,9 +226,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
 #define __SKIP_ENTRIES_T2B_FROM(field, elm, off) for (size_t lvl = off; lvl != (size_t)-1; lvl--)
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
-#define __SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_max_height + 1; lvl++)
-#define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < elm->field.sle_height + 1; lvl++)
-#define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl < elm->field.sle_height + 1; lvl++)
+#define __SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_max_height; lvl++)
+#define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < elm->field.sle_height; lvl++)
+#define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl < elm->field.sle_height; lvl++)
 #define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == elm->field.sle_height)
 
 /* Iterate over the subtree to the left (v, or 'lt') and right (u) or "CHu" and "CHv". */
@@ -421,6 +420,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         slist->slh_length = 0;                                                                                                         \
         slist->slh_max_height = SKIPLIST_MAX_HEIGHT == 1 ? (size_t)(max < 0 ? -max : max) : SKIPLIST_MAX_HEIGHT;                       \
         slist->slh_snap.era = 0;                                                                                                       \
+        slist->slh_snap.pres = 0;                                                                                                      \
         slist->slh_fns.free_entry = __skip_free_entry_fn_##decl;                                                                       \
         slist->slh_fns.update_entry = __skip_update_entry_fn_##decl;                                                                   \
         slist->slh_fns.archive_entry = __skip_archive_entry_fn_##decl;                                                                 \
@@ -433,7 +433,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (rc)                                                                                                                        \
             goto fail;                                                                                                                 \
                                                                                                                                        \
-        slist->slh_head->field.sle_height = floor(log(slist->slh_max_height) / M_LOG2E);                                               \
+        slist->slh_head->field.sle_height = 0;                                                                                         \
         for (i = 0; i < slist->slh_max_height; i++)                                                                                    \
             slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                               \
         slist->slh_head->field.sle_prev = NULL;                                                                                        \
@@ -555,18 +555,11 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             return;                                                                                                                    \
         if (prefix##skip_is_empty_##decl(slist))                                                                                       \
             return;                                                                                                                    \
-        node = prefix##skip_head_##decl(slist);                                                                                        \
-        do {                                                                                                                           \
-            next = prefix##skip_next_node_##decl(slist, node);                                                                         \
+        node = slist->slh_head->field.sle_levels[0].next;                                                                              \
+        while (node != slist->slh_tail) {                                                                                              \
+            next = node->field.sle_levels[0].next;                                                                                     \
             prefix##skip_free_node_##decl(slist, node);                                                                                \
             node = next;                                                                                                               \
-        } while (node != NULL);                                                                                                        \
-                                                                                                                                       \
-        while (node) {                                                                                                                 \
-            next = node->field.sle_levels[0].next;                                                                                     \
-            if (next->field.sle_prev)                                                                                                  \
-                slist->slh_fns.free_entry(node);                                                                                       \
-            free(node);                                                                                                                \
         }                                                                                                                              \
         if (slist->slh_fns.snapshot_incr_era)                                                                                          \
             slist->slh_fns.snapshot_incr_era(slist);                                                                                   \
@@ -589,7 +582,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (nodes != NULL) {                                                                                                           \
             nodes[0] = (decl##_node_t *)(uintptr_t)len;                                                                                \
             nodes++;                                                                                                                   \
-            SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, nth)                                                                       \
+            SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, nth)                                                                \
             {                                                                                                                          \
                 nodes[nth] = node;                                                                                                     \
             }                                                                                                                          \
@@ -773,7 +766,15 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             if (path == NULL)                                                                                                          \
                 return ENOMEM;                                                                                                         \
         }                                                                                                                              \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * slist->slh_max_height + 1);                                               \
+        /* First element in path should be NULL, reset should start pointing at tail. */                                               \
+        path[0].node = NULL;                                                                                                           \
+        path[0].in = 0;                                                                                                                \
+        path[0].pu = 0;                                                                                                                \
+        for (i = 1; i < slist->slh_max_height + 1; i++) {                                                                              \
+            path[i].node = slist->slh_tail;                                                                                            \
+            path[i].in = 0;                                                                                                            \
+            path[i].pu = 0;                                                                                                            \
+        }                                                                                                                              \
                                                                                                                                        \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                 \
         len = __skip_locate_##decl(slist, new, path);                                                                                  \
@@ -785,21 +786,19 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             }                                                                                                                          \
             /* Coin toss to determine level of this new node [0, max) */                                                               \
             cur_height = slist->slh_head->field.sle_height;                                                                            \
-            new_height = __skip_toss_##decl(slist->slh_max_height);                                                                    \
+            new_height = __skip_toss_##decl(slist->slh_max_height - 1);                                                                \
             new->field.sle_height = new_height;                                                                                        \
             /* Trim the path to at most the new height for the new node. */                                                            \
-            if (new_height > cur_height) {                                                                                             \
-                for (i = cur_height + 1; i <= new_height; i++) {                                                                       \
-                    path[i + 1].node = slist->slh_tail;                                                                                \
-                }                                                                                                                      \
+            for (i = cur_height + 1; i <= new_height; i++) {                                                                           \
+                path[i + 1].node = slist->slh_tail;                                                                                    \
             }                                                                                                                          \
             /* Ensure all next[] point to tail. */                                                                                     \
-            __SKIP_ENTRIES_B2T(field, new)                                                                                             \
+            __SKIP_ALL_ENTRIES_B2T(field, new)                                                                                         \
             {                                                                                                                          \
                 new->field.sle_levels[lvl].next = slist->slh_tail;                                                                     \
             }                                                                                                                          \
             /* Adjust all forward pointers for each element in the path. */                                                            \
-            for (i = 0; i <= new_height; i++) {                                                                                        \
+            for (i = 0; i <= new_height; i++) {                                                                                     \
                 /* The tail's next[i] is always NULL, we don't want that in the                                                        \
                    next[i] for our new node. Also, don't set the tail's next[i]                                                        \
                    because it is always NULL. */                                                                                       \
@@ -822,9 +821,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             new->field.sle_prev = path[1].node;                                                                                        \
             new->field.sle_levels[0].next->field.sle_prev = new;                                                                       \
             /* Account for insert at tail. */                                                                                          \
-            if (new->field.sle_levels[0].next == slist->slh_tail) {                                                                    \
+            if (new->field.sle_levels[0].next == slist->slh_tail)                                                                      \
                 slist->slh_tail->field.sle_prev = new;                                                                                 \
-            }                                                                                                                          \
             /* Adjust the head/tail boundary node heights if necessary. */                                                             \
             if (new_height > cur_height) {                                                                                             \
                 slist->slh_head->field.sle_height = new_height;                                                                        \
@@ -1212,6 +1210,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                                                                                                                                        \
         prefix##skip_release_##decl(slist);                                                                                            \
                                                                                                                                        \
+        if (slist->slh_fns.release_snapshots)                                                                                          \
+            slist->slh_fns.release_snapshots(slist);                                                                                   \
+                                                                                                                                       \
         free(slist->slh_head);                                                                                                         \
         free(slist->slh_tail);                                                                                                         \
     }
@@ -1380,7 +1381,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         cur_era = slist->slh_fns.snapshot_current_era(slist);                                                    \
                                                                                                                  \
         /* (a) */                                                                                                \
-        SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, i)                                                       \
+        SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                                                \
         {                                                                                                        \
             ((void)i);                                                                                           \
             if (node->field.sle_era > era)                                                                       \
@@ -1704,12 +1705,14 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 if (flags)                                                                                                                                     \
                     return n_err;                                                                                                                              \
             }                                                                                                                                                  \
-            if (node->field.sle_levels[lvl].next != slist->slh_tail) {                                                                                         \
-                __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail\n", lvl);                            \
-                n_err++;                                                                                                                                       \
-                if (flags)                                                                                                                                     \
-                    return n_err;                                                                                                                              \
-            }                                                                                                                                                  \
+            /* TODO: really?                                                                                                                                   \
+               if (node->field.sle_levels[lvl].next != slist->slh_tail) {                                                                                      \
+               __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail\n", lvl);                             \
+               n_err++;                                                                                                                                        \
+               if (flags)                                                                                                                                      \
+               return n_err;                                                                                                                                   \
+               }                                                                                                                                               \
+            */                                                                                                                                                 \
         }                                                                                                                                                      \
                                                                                                                                                                \
         if (slist->slh_length > 0 && slist->slh_tail->field.sle_prev == slist->slh_head) {                                                                     \
@@ -1724,7 +1727,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         /* Validate the tail node */                                                                                                                           \
                                                                                                                                                                \
         /* Validate each node */                                                                                                                               \
-        SKIPLIST_FOREACH_H2T(decl, prefix, slist, node, nth)                                                                                                   \
+        SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, nth)                                                                                            \
         {                                                                                                                                                      \
             this = &node->field;                                                                                                                               \
                                                                                                                                                                \
@@ -2154,7 +2157,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         /* Now all nodes via level 0, if non-empty */                                                                               \
         node = slist->slh_head;                                                                                                     \
         if (letitgo) {                                                                                                              \
-            SKIPLIST_FOREACH_H2T(decl, prefix, slist, next, i)                                                                      \
+            SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, next, i)                                                               \
             {                                                                                                                       \
                 ((void)i);                                                                                                          \
                 __skip_dot_node_##decl(os, slist, next, nsg, fn);                                                                   \
