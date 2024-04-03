@@ -265,14 +265,12 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             int (*compare_entries)(decl##_t *, decl##_node_t *, decl##_node_t *, void *);                                              \
                                                                                                                                        \
             /* Optional: Snapshots */                                                                                                  \
-            int (*preserve_node)(decl##_t * slist, const decl##_node_t *src, decl##_node_t **preserved);                               \
-            void (*release_snapshots)(decl##_t *);                                                                                     \
-            size_t (*snapshot_current_era)(decl##_t *);                                                                                \
-            size_t (*snapshot_incr_era)(decl##_t *);                                                                                   \
-            void (*snapshot_record_era)(decl##_t *, decl##_node_t *);                                                                  \
+            int (*snapshot_preserve_node)(decl##_t * slist, const decl##_node_t *src, decl##_node_t **preserved);                      \
+            void (*snapshot_release)(decl##_t *);                                                                                      \
         } slh_fns;                                                                                                                     \
         struct {                                                                                                                       \
-            size_t era;                                                                                                                \
+            size_t cur_era;                                                                                                            \
+            size_t pres_era;                                                                                                           \
             decl##_node_t *pres;                                                                                                       \
         } slh_snap;                                                                                                                    \
     };                                                                                                                                 \
@@ -419,7 +417,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                                                                                                                                        \
         slist->slh_length = 0;                                                                                                         \
         slist->slh_max_height = SKIPLIST_MAX_HEIGHT == 1 ? (size_t)(max < 0 ? -max : max) : SKIPLIST_MAX_HEIGHT;                       \
-        slist->slh_snap.era = 0;                                                                                                       \
+        slist->slh_snap.cur_era = 0;                                                                                                   \
+        slist->slh_snap.pres_era = 0;                                                                                                  \
         slist->slh_snap.pres = 0;                                                                                                      \
         slist->slh_fns.free_entry = __skip_free_entry_fn_##decl;                                                                       \
         slist->slh_fns.update_entry = __skip_update_entry_fn_##decl;                                                                   \
@@ -433,11 +432,13 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (rc)                                                                                                                        \
             goto fail;                                                                                                                 \
                                                                                                                                        \
+        /* Initial height is 0 (meaning 1 level), all next point to tail */                                                            \
         slist->slh_head->field.sle_height = 0;                                                                                         \
         for (i = 0; i < slist->slh_max_height; i++)                                                                                    \
             slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                               \
         slist->slh_head->field.sle_prev = NULL;                                                                                        \
                                                                                                                                        \
+        /* Initial height is 0 (meaning 1 level), all next point to tail */                                                            \
         slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                         \
         for (i = 0; i < slist->slh_max_height; i++)                                                                                    \
             slist->slh_tail->field.sle_levels[i].next = NULL;                                                                          \
@@ -473,7 +474,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
      *                                                                                                                                 \
      * Returns the current length of the list.                                                                                         \
      */                                                                                                                                \
-    int prefix##skip_length_##decl(decl##_t *slist)                                                                                    \
+    size_t prefix##skip_length_##decl(decl##_t *slist)                                                                                 \
     {                                                                                                                                  \
         return slist->slh_length;                                                                                                      \
     }                                                                                                                                  \
@@ -561,8 +562,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             prefix##skip_free_node_##decl(slist, node);                                                                                \
             node = next;                                                                                                               \
         }                                                                                                                              \
-        if (slist->slh_fns.snapshot_incr_era)                                                                                          \
-            slist->slh_fns.snapshot_incr_era(slist);                                                                                   \
+        if (slist->slh_snap.pres_era > 0)                                                                                              \
+            slist->slh_snap.cur_era++;                                                                                                 \
         return;                                                                                                                        \
     }                                                                                                                                  \
                                                                                                                                        \
@@ -669,10 +670,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     } while (j-- > 1);                                                                                                 \
                     /* 4) reduce height by one */                                                                                      \
                     path[i].node->field.sle_height--;                                                                                  \
-                    /* TODO: remove me                                                                                                 \
-                    __skip_integrity_check_##decl(slist, 0);                                                                           \
-                    prefix##skip_dot_##decl(of, slist, gen, "dsc_cond", sprintf_##decl##_node);                                        \
-                    */                                                                                                                 \
                 }                                                                                                                      \
             }                                                                                                                          \
             /* (b) Check the ascent condition:                                                                                         \
@@ -694,10 +691,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 path[i - 1].node->field.sle_levels[path[i - 1].in].hits = 0;                                                           \
                 if (path[i - 1].in != 0)                                                                                               \
                     path[i - 1].node->field.sle_levels[path[i - 1].in].next->field.sle_levels[path[i - 1].in].next = path[i].node;     \
-                /* TODO: remove me                                                                                                     \
-                __skip_integrity_check_##decl(slist, 0);                                                                               \
-                prefix##skip_dot_##decl(of, slist, gen, "asc_cond", sprintf_##decl##_node);                                            \
-                */                                                                                                                     \
             }                                                                                                                          \
         }                                                                                                                              \
     }                                                                                                                                  \
@@ -829,8 +822,10 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 slist->slh_tail->field.sle_height = new_height;                                                                        \
             }                                                                                                                          \
             /* Record the era for this node to enable snapshots. */                                                                    \
-            if (slist->slh_fns.snapshot_record_era)                                                                                    \
-                slist->slh_fns.snapshot_record_era(slist, new);                                                                        \
+            if (slist->slh_snap.pres_era > 0) {                                                                                        \
+                /* Increase the the list's era/age and record it. */                                                                   \
+                new->field.sle_era = slist->slh_snap.cur_era++;                                                                        \
+            }                                                                                                                          \
             /* Set hits for rebalencing to 1 when new born. */                                                                         \
             new->field.sle_levels[new_height].hits = 1;                                                                                \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                            \
@@ -1102,19 +1097,19 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             return -1;                                                                                                                 \
                                                                                                                                        \
         /* If the optional snapshots feature is configured, use it now.                                                                \
-           Snapshots preserve the node if it is younger than our snapshot                                                              \
-           moment. */                                                                                                                  \
-        if (slist->slh_fns.preserve_node) {                                                                                            \
-            np = slist->slh_fns.preserve_node(slist, node, NULL);                                                                      \
+           Snapshots preserve the node if it is older than our snapshot                                                                \
+           and about to be mutated. */                                                                                                 \
+        if (slist->slh_snap.pres_era > 0) {                                                                                            \
+            /* Preserve the node. */                                                                                                   \
+            np = slist->slh_fns.snapshot_preserve_node(slist, node, NULL);                                                             \
             if (np > 0)                                                                                                                \
                 return np;                                                                                                             \
+                                                                                                                                       \
+            /* Increase the the list's era/age. */                                                                                     \
+            slist->slh_snap.cur_era++;                                                                                                 \
         }                                                                                                                              \
                                                                                                                                        \
         slist->slh_fns.update_entry(node, value);                                                                                      \
-                                                                                                                                       \
-        /* Record the era for this node to enable snapshots. */                                                                        \
-        if (slist->slh_fns.snapshot_record_era)                                                                                        \
-            slist->slh_fns.snapshot_record_era(slist, node);                                                                           \
                                                                                                                                        \
         return rc;                                                                                                                     \
     }                                                                                                                                  \
@@ -1150,12 +1145,16 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         node = path[0].node;                                                                                                           \
         if (node) {                                                                                                                    \
             /* If the optional snapshots feature is configured, use it now.                                                            \
-               Snapshots preserve the node if it is younger than our snapshot                                                          \
-               moment, this node is about to be removed. */                                                                            \
-            if (slist->slh_fns.preserve_node) {                                                                                        \
-                np = slist->slh_fns.preserve_node(slist, node, NULL);                                                                  \
+               Snapshots preserve the node if it is older than our snapshot                                                            \
+               and about to be mutated. */                                                                                             \
+            if (slist->slh_snap.pres_era > 0) {                                                                                        \
+                /* Preserve the node. */                                                                                               \
+                np = slist->slh_fns.snapshot_preserve_node(slist, node, NULL);                                                         \
                 if (np > 0)                                                                                                            \
                     return np;                                                                                                         \
+                                                                                                                                       \
+                /* Increase the the list's era/age. */                                                                                 \
+                slist->slh_snap.cur_era++;                                                                                             \
             }                                                                                                                          \
             /* We found it, set the next->prev to the node->prev keeping in mind                                                       \
                that the next node might be the tail). */                                                                               \
@@ -1208,8 +1207,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (slist == NULL)                                                                                                             \
             return;                                                                                                                    \
                                                                                                                                        \
-        if (slist->slh_fns.release_snapshots)                                                                                          \
-            slist->slh_fns.release_snapshots(slist);                                                                                   \
+        if (slist->slh_snap.pres_era > 0 && slist->slh_fns.snapshot_release)                                                           \
+            slist->slh_fns.snapshot_release(slist);                                                                                    \
                                                                                                                                        \
         prefix##skip_release_##decl(slist);                                                                                            \
                                                                                                                                        \
@@ -1220,15 +1219,18 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
 #define SKIPLIST_DECL_SNAPSHOTS(decl, prefix, field)                                                             \
                                                                                                                  \
     /**                                                                                                          \
-     * -- __skip_snapshot_record_era_                                                                            \
+     * -- skip_snapshot_                                                                                         \
      *                                                                                                           \
+     * A snapshot is a read-only view of a Skiplist at a point in time.  Once                                    \
+     * taken, a snapshot must be restored or released. Any number of snapshots                                   \
+     * can be created. Return the `era` of the snapshot.                                                         \
      */                                                                                                          \
-    static void __skip_snapshot_record_era_##decl(decl##_t *slist, decl##_node_t *node)                          \
+    uint64_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                       \
     {                                                                                                            \
         if (slist == NULL)                                                                                       \
-            return;                                                                                              \
+            return 0;                                                                                            \
                                                                                                                  \
-        node->field.sle_era = slist->slh_fns.snapshot_current_era(slist);                                        \
+        return ++slist->slh_snap.pres_era;                                                                       \
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
@@ -1238,7 +1240,11 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     void prefix##skip_release_snapshots_##decl(decl##_t *slist)                                                  \
     {                                                                                                            \
         decl##_node_t *node, *next;                                                                              \
+                                                                                                                 \
         if (slist == NULL)                                                                                       \
+            return;                                                                                              \
+                                                                                                                 \
+        if (slist->slh_snap.pres_era == 0)                                                                       \
             return;                                                                                              \
                                                                                                                  \
         node = slist->slh_snap.pres;                                                                             \
@@ -1247,8 +1253,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             prefix##skip_free_node_##decl(slist, node);                                                          \
             node = next;                                                                                         \
         }                                                                                                        \
-        slist->slh_snap.pres = NULL;                                                                                  \
-        slist->slh_snap.era = 0;                                                                                 \
+        slist->slh_snap.pres = NULL;                                                                             \
+        slist->slh_snap.pres_era = 0;                                                                            \
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
@@ -1276,7 +1282,15 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (slist == NULL || src == NULL)                                                                        \
             return 0;                                                                                            \
                                                                                                                  \
-        if (src->field.sle_era > slist->slh_snap.era)                                                            \
+        /* Never preserve the head or the tail. */                                                               \
+        if (src == slist->slh_head || src == slist->slh_tail)                                                    \
+            return 0;                                                                                            \
+                                                                                                                 \
+        /* If the era into which the node `src` was born preceeded the latest                                    \
+           snapshot era, then we need to preserve the older version of this                                      \
+           node.  Said another way, we preserve anything with an era that is                                     \
+           less than the slh_snap.cur_era. */                                                                    \
+        if (src->field.sle_era > slist->slh_snap.pres_era)                                                       \
             return 0;                                                                                            \
                                                                                                                  \
         /* (a) alloc, ... */                                                                                     \
@@ -1285,18 +1299,16 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (rc)                                                                                                  \
             return rc;                                                                                           \
                                                                                                                  \
-        /* (b) shallow copy, fix sle_levels pointer, ... */                                                      \
+        /* (b) shallow copy, copied sle_levels pointer is to the src list, so                                    \
+           update that to point to the offset in this heap object, ... */                                        \
         memcpy(dest, src, sizeof(decl##_node_t) + sle_arr_sz);                                                   \
         dest->field.sle_levels = (struct __skiplist_##decl##_level *)((uintptr_t)dest + sizeof(decl##_node_t));  \
                                                                                                                  \
-        /* ... if we're not preserving the head or the tail, ... */                                              \
-        if (!(src == slist->slh_head || src == slist->slh_tail)) {                                               \
-            /* (c) then user-supplied copy */                                                                    \
-            slist->slh_fns.archive_entry(dest, src);                                                             \
-            if (rc) {                                                                                            \
-                prefix##skip_free_node_##decl(slist, dest);                                                      \
-                return rc;                                                                                       \
-            }                                                                                                    \
+        /* (c) then user-supplied copy */                                                                        \
+        slist->slh_fns.archive_entry(dest, src);                                                                 \
+        if (rc) {                                                                                                \
+            prefix##skip_free_node_##decl(slist, dest);                                                          \
+            return rc;                                                                                           \
         }                                                                                                        \
                                                                                                                  \
         /* (d) is this a duplicate? */                                                                           \
@@ -1312,7 +1324,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         }                                                                                                        \
                                                                                                                  \
         /* (f) set duplicate flag */                                                                             \
-        dest->field.sle_levels[1].next = (decl##_node_t *)is_dup;                                                \
+        dest->field.sle_levels[1].next = is_dup;                                                                 \
                                                                                                                  \
         /* (g) insert node into slh_pres list at head */                                                         \
         if (slist->slh_snap.pres == NULL) {                                                                      \
@@ -1333,29 +1345,14 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
-     * -- skip_snapshot_                                                                                         \
-     *                                                                                                           \
-     * A snapshot is a read-only view of a Skiplist at a point in time.  Once                                    \
-     * taken, a snapshot must be restored or released. Any number of snapshots                                   \
-     * can be created.                                                                                           \
-     */                                                                                                          \
-    uint64_t prefix##skip_snapshot_##decl(decl##_t *slist)                                                       \
-    {                                                                                                            \
-        if (slist == NULL)                                                                                       \
-            return 0;                                                                                            \
-        slist->slh_snap.era = slist->slh_fns.snapshot_current_era(slist);                                        \
-        slist->slh_fns.snapshot_incr_era(slist);                                                                 \
-        return slist->slh_snap.era;                                                                              \
-    }                                                                                                            \
-                                                                                                                 \
-    /**                                                                                                          \
-     * -- skip_restore_snapshot_ TODO test!                                                                      \
+     * -- skip_restore_snapshot_ TODO/WIP                                                                        \
      *                                                                                                           \
      * Restores the Skiplist to generation `era`.  Once you restore `era` you                                    \
-     * can no longer access any generations > `era`.                                                             \
+     * can no longer restore any [era, current era] only those earlier than                                      \
+     * era.                                                                                                      \
      *                                                                                                           \
      * ALGORITHM:                                                                                                \
-     * iterate over the preserved nodes (slist->slh_snap.pres)                                                        \
+     * iterate over the preserved nodes (slist->slh_snap.pres)                                                   \
      *  a) remove/free nodes with node->era > era from slist                                                     \
      *  b) remove/free nodes > era from slh_pres                                                                 \
      *  c) restore nodes == era by...                                                                            \
@@ -1376,31 +1373,35 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (slist == NULL)                                                                                       \
             return NULL;                                                                                         \
                                                                                                                  \
-        if (era >= slist->slh_snap.era || slist->slh_snap.pres == NULL)                                          \
+        if (slist->slh_snap.pres_era == 0)                                                                       \
+            return NULL;                                                                                         \
+                                                                                                                 \
+        if (era >= slist->slh_snap.cur_era || slist->slh_snap.pres == NULL)                                      \
             return slist;                                                                                        \
                                                                                                                  \
-        cur_era = slist->slh_fns.snapshot_current_era(slist);                                                    \
+        cur_era = slist->slh_snap.cur_era;                                                                       \
                                                                                                                  \
-        /* (a) */                                                                                                \
+        /* (a) remove and free nodes from slist that are newer than era */                                       \
         SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                                                \
         {                                                                                                        \
             ((void)i);                                                                                           \
-            if (node->field.sle_era > era)                                                                       \
+            if (node->field.sle_era > era) {                                                                     \
                 prefix##skip_remove_node_##decl(slist, node);                                                    \
+            }                                                                                                    \
         }                                                                                                        \
                                                                                                                  \
         prev = NULL;                                                                                             \
         node = slist->slh_snap.pres;                                                                             \
         while (node) {                                                                                           \
-            /* (b) */                                                                                            \
+            /* (b) remove nodes from slh_pres that are newer than era */                                         \
             if (node->field.sle_era > era) {                                                                     \
                 /* remove node from slh_snap.pres list */                                                        \
                 if (slist->slh_snap.pres == node)                                                                \
                     slist->slh_snap.pres = node->field.sle_levels[0].next;                                       \
                 else {                                                                                           \
                     if (node->field.sle_levels[0].next == NULL)                                                  \
-                        if (node == slist->slh_snap.pres)                                                             \
-                            slist->slh_snap.pres = NULL;                                                              \
+                        if (node == slist->slh_snap.pres)                                                        \
+                            slist->slh_snap.pres = NULL;                                                         \
                         else                                                                                     \
                             prev->field.sle_levels[0].next = NULL;                                               \
                     else                                                                                         \
@@ -1409,7 +1410,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 prefix##skip_free_node_##decl(slist, node);                                                      \
             }                                                                                                    \
                                                                                                                  \
-            /* c */                                                                                              \
+            /* (c) restore nodes from slh_pres that match the era */                                             \
             prev = NULL;                                                                                         \
             if (node->field.sle_era == era) {                                                                    \
                 /* remove node from slh_snap.pres list */                                                        \
@@ -1417,7 +1418,10 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     slist->slh_snap.pres = node->field.sle_levels[0].next;                                       \
                 else {                                                                                           \
                     if (node->field.sle_levels[0].next == NULL)                                                  \
-                        prev->field.sle_levels[0].next = NULL;                                                   \
+                        if (node == slist->slh_snap.pres)                                                        \
+                            slist->slh_snap.pres = NULL;                                                         \
+                        else                                                                                     \
+                            prev->field.sle_levels[0].next = NULL;                                               \
                     else                                                                                         \
                         prev->field.sle_levels[0].next = node->field.sle_levels[0].next;                         \
                 }                                                                                                \
@@ -1434,30 +1438,10 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             node = node->field.sle_levels[0].next;                                                               \
         }                                                                                                        \
                                                                                                                  \
-        /* (d) */                                                                                                \
-        slist->slh_snap.era = cur_era;                                                                           \
+        /* (d) set list's era */                                                                                 \
+        slist->slh_snap.pres_era = slist->slh_snap.pres == NULL ? 0 : cur_era;                                   \
                                                                                                                  \
         return slist;                                                                                            \
-    }                                                                                                            \
-                                                                                                                 \
-    /**                                                                                                          \
-     * -- __skip_snapshot_current_era                                                                            \
-     *                                                                                                           \
-     * Returns the current era for snapshot purposes.                                                            \
-     */                                                                                                          \
-    static size_t __skip_snapshot_current_era_##decl(decl##_t *slist)                                            \
-    {                                                                                                            \
-        return slist->slh_snap.era;                                                                              \
-    }                                                                                                            \
-                                                                                                                 \
-    /**                                                                                                          \
-     * -- __skip_snapshot_incr_era                                                                               \
-     *                                                                                                           \
-     * Increments the snapshot era.                                                                              \
-     */                                                                                                          \
-    static size_t __skip_snapshot_incr_era_##decl(decl##_t *slist)                                               \
-    {                                                                                                            \
-        return ++slist->slh_snap.era;                                                                            \
     }                                                                                                            \
                                                                                                                  \
     /**                                                                                                          \
@@ -1468,120 +1452,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     void prefix##skip_snapshots_init_##decl(decl##_t *slist)                                                     \
     {                                                                                                            \
         if (slist != NULL) {                                                                                     \
-            slist->slh_fns.preserve_node = __skip_preserve_node_##decl;                                          \
-            slist->slh_fns.release_snapshots = prefix##skip_release_snapshots_##decl;                            \
-            slist->slh_fns.snapshot_current_era = __skip_snapshot_current_era_##decl;                            \
-            slist->slh_fns.snapshot_incr_era = __skip_snapshot_incr_era_##decl;                                  \
-            slist->slh_fns.snapshot_record_era = __skip_snapshot_record_era_##decl;                              \
+            slist->slh_fns.snapshot_preserve_node = __skip_preserve_node_##decl;                                 \
+            slist->slh_fns.snapshot_release = prefix##skip_release_snapshots_##decl;                             \
         }                                                                                                        \
-    }
-
-#define SKIPLIST_DECL_ARCHIVE(decl, prefix, field)                                              \
-                                                                                                \
-    /* Archive of a Skip List */                                                                \
-    typedef struct decl##_archive {                                                             \
-        decl##_t list;                                                                          \
-        decl##_node_t *nodes;                                                                   \
-        size_t bytes;                                                                           \
-    } decl##_archive_t;                                                                         \
-                                                                                                \
-    /**                                                                                         \
-     * -- skip_to_bytes_ TODO/WIP                                                               \
-     *                                                                                          \
-     * Writes out list and node content to a portable array of bytes                            \
-     * suitable for archiving to disk.                                                          \
-     */                                                                                         \
-    decl##_archive_t *prefix##skip_to_bytes_##decl(decl##_t *slist)                             \
-    {                                                                                           \
-        int rc = 0;                                                                             \
-        size_t size = 0, bytes, i;                                                              \
-        decl##_archive_t *archive;                                                              \
-        decl##_node_t *src;                                                                     \
-                                                                                                \
-        if (slist == NULL)                                                                      \
-            return NULL;                                                                        \
-                                                                                                \
-        bytes = sizeof(decl##_archive_t) + (slist->slh_length * sizeof(decl##_node_t));         \
-        src = prefix##skip_head_##decl(slist);                                                  \
-        while (src) {                                                                           \
-            slist->slh_fns.sizeof_entry(src);                                                   \
-            bytes += sizeof(size_t);                                                            \
-            bytes += size;                                                                      \
-            src = prefix##skip_next_node_##decl(slist, src);                                    \
-        }                                                                                       \
-        archive = (decl##_archive_t *)calloc(1, bytes);                                         \
-        if (archive == NULL)                                                                    \
-            return NULL;                                                                        \
-                                                                                                \
-        archive->bytes = bytes;                                                                 \
-        archive->list.slh_length = slist->slh_length;                                           \
-        archive->list.slh_max_height = slist->slh_max_height;                                   \
-        archive->nodes = (decl##_node_t *)(archive + sizeof(decl##_archive_t));                 \
-                                                                                                \
-        i = 0;                                                                                  \
-        src = prefix##skip_head_##decl(slist);                                                  \
-        while (src) {                                                                           \
-            decl##_node_t *n = (decl##_node_t *)archive->nodes + (i++ * sizeof(decl##_node_t)); \
-            slist->slh_fns.archive_entry(n, src);                                               \
-            if (rc)                                                                             \
-                return NULL;                                                                    \
-            src = prefix##skip_next_node_##decl(slist, src);                                    \
-        }                                                                                       \
-        return archive;                                                                         \
-    }                                                                                           \
-                                                                                                \
-    /**                                                                                         \
-     * -- skip_from_bytes_ TODO/WIP                                                             \
-     *                                                                                          \
-     */                                                                                         \
-    decl##_t *prefix##skip_from_bytes_##decl(decl##_archive_t *archive)                         \
-    {                                                                                           \
-        int rc;                                                                                 \
-        size_t i;                                                                               \
-        decl##_t *slist;                                                                        \
-        decl##_node_t *src, *dest;                                                              \
-                                                                                                \
-        if (archive == NULL)                                                                    \
-            return 0;                                                                           \
-        slist = (decl##_t *)calloc(1, sizeof(decl##_t));                                        \
-        if (slist == NULL)                                                                      \
-            return NULL;                                                                        \
-                                                                                                \
-        slist->slh_max_height = archive->list.slh_max_height;                                   \
-                                                                                                \
-        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_head);                           \
-        if (rc)                                                                                 \
-            goto fail;                                                                          \
-        rc = prefix##skip_alloc_node_##decl(slist, &slist->slh_tail);                           \
-        if (rc)                                                                                 \
-            goto fail;                                                                          \
-                                                                                                \
-        slist->slh_head->field.sle_height = 0;                                                  \
-        for (i = 0; i < slist->slh_max_height; i++)                                             \
-            slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                        \
-        slist->slh_head->field.sle_prev = NULL;                                                 \
-                                                                                                \
-        slist->slh_tail->field.sle_height = slist->slh_max_height;                              \
-        for (i = 0; i < slist->slh_max_height; i++)                                             \
-            slist->slh_tail->field.sle_levels[i].next = NULL;                                   \
-        slist->slh_tail->field.sle_prev = slist->slh_head;                                      \
-                                                                                                \
-        i = 0;                                                                                  \
-        while (archive->list.slh_length > 0) {                                                  \
-            decl##_node_t *n = (decl##_node_t *)archive->nodes + (i++ * sizeof(decl##_node_t)); \
-            src = (decl##_node_t *)&n;                                                          \
-            rc = prefix##skip_alloc_node_##decl(slist, &dest);                                  \
-            slist->slh_fns.archive_entry(dest, src);                                            \
-            __skip_insert_##decl(slist, dest, 1);                                               \
-            archive->list.slh_length--;                                                         \
-        }                                                                                       \
-        return slist;                                                                           \
-    fail:;                                                                                      \
-        if (slist->slh_head)                                                                    \
-            free(slist->slh_head);                                                              \
-        if (slist->slh_tail)                                                                    \
-            free(slist->slh_tail);                                                              \
-        return NULL;                                                                            \
     }
 
 #define SKIPLIST_DECL_VALIDATE(decl, prefix, field)                                                                                                            \
@@ -1709,12 +1582,12 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     return n_err;                                                                                                                              \
             }                                                                                                                                                  \
             /* TODO: really?                                                                                                                                   \
-               if (node->field.sle_levels[lvl].next != slist->slh_tail) {                                                                                      \
-               __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail\n", lvl);                             \
-               n_err++;                                                                                                                                        \
-               if (flags)                                                                                                                                      \
-               return n_err;                                                                                                                                   \
-               }                                                                                                                                               \
+            if (node->field.sle_levels[lvl].next != slist->slh_tail) {                                                                                         \
+                __skip_integrity_failure_##decl("after internal nodes, the head's %lu next node should always be the tail\n", lvl);                            \
+                n_err++;                                                                                                                                       \
+                if (flags)                                                                                                                                     \
+                    return n_err;                                                                                                                              \
+            }                                                                                                                                                  \
             */                                                                                                                                                 \
         }                                                                                                                                                      \
                                                                                                                                                                \
