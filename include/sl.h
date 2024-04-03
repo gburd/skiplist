@@ -798,7 +798,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 new->field.sle_levels[lvl].next = slist->slh_tail;                                                                     \
             }                                                                                                                          \
             /* Adjust all forward pointers for each element in the path. */                                                            \
-            for (i = 0; i <= new_height; i++) {                                                                                     \
+            for (i = 0; i <= new_height; i++) {                                                                                        \
                 /* The tail's next[i] is always NULL, we don't want that in the                                                        \
                    next[i] for our new node. Also, don't set the tail's next[i]                                                        \
                    because it is always NULL. */                                                                                       \
@@ -1208,10 +1208,10 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         if (slist == NULL)                                                                                                             \
             return;                                                                                                                    \
                                                                                                                                        \
-        prefix##skip_release_##decl(slist);                                                                                            \
-                                                                                                                                       \
         if (slist->slh_fns.release_snapshots)                                                                                          \
             slist->slh_fns.release_snapshots(slist);                                                                                   \
+                                                                                                                                       \
+        prefix##skip_release_##decl(slist);                                                                                            \
                                                                                                                                        \
         free(slist->slh_head);                                                                                                         \
         free(slist->slh_tail);                                                                                                         \
@@ -1247,6 +1247,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             prefix##skip_free_node_##decl(slist, node);                                                          \
             node = next;                                                                                         \
         }                                                                                                        \
+        slist->slh_snap.pres = NULL;                                                                                  \
         slist->slh_snap.era = 0;                                                                                 \
     }                                                                                                            \
                                                                                                                  \
@@ -1354,7 +1355,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
      * can no longer access any generations > `era`.                                                             \
      *                                                                                                           \
      * ALGORITHM:                                                                                                \
-     * iterate over the preserved nodes (slist->slh_pres)                                                        \
+     * iterate over the preserved nodes (slist->slh_snap.pres)                                                        \
      *  a) remove/free nodes with node->era > era from slist                                                     \
      *  b) remove/free nodes > era from slh_pres                                                                 \
      *  c) restore nodes == era by...                                                                            \
@@ -1398,11 +1399,13 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     slist->slh_snap.pres = node->field.sle_levels[0].next;                                       \
                 else {                                                                                           \
                     if (node->field.sle_levels[0].next == NULL)                                                  \
-                        prev->field.sle_levels[0].next = NULL;                                                   \
+                        if (node == slist->slh_snap.pres)                                                             \
+                            slist->slh_snap.pres = NULL;                                                              \
+                        else                                                                                     \
+                            prev->field.sle_levels[0].next = NULL;                                               \
                     else                                                                                         \
                         prev->field.sle_levels[0].next = node->field.sle_levels[0].next;                         \
                 }                                                                                                \
-                                                                                                                 \
                 prefix##skip_free_node_##decl(slist, node);                                                      \
             }                                                                                                    \
                                                                                                                  \

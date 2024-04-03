@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 #define TEST_ARRAY_SIZE 1000
 #define VALIDATE
-//define SNAPSHOTS
+#define SNAPSHOTS
 #define DOT
 #ifdef DOT
 size_t gen = 0;
