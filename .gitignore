@@ -2,7 +2,7 @@ libskiplist.a
 libskiplist.so
 **/*.o
 tests/test
-examples/mls
+examples/mls*
 /mxe
 .cache
 hints.txt
