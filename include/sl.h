@@ -600,7 +600,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                                                  \
                                                                                                                                        \
     /**                                                                                                                                \
-     * -- __skip_adjust_hit_counts_ TODO                                                                                               \
+     * -- __skip_adjust_hit_counts_ TODO: see gburd/splay-list                                                                         \
      *                                                                                                                                 \
      * On delete we check the hit counts across all nodes and next[] pointers                                                          \
      * and find the smallest counter then subtract that + 1 from all hit                                                               \
@@ -622,85 +622,10 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
      */                                                                                                                                \
     static void __skip_rebalance_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                \
     {                                                                                                                                  \
-        size_t i, j, u_hits, hits_CHu = 0, hits_CHv = 0, delta_height, new_height, cur_hits, prev_hits;                                \
-        double k_threshold, m_total_hits, asc_cond, dsc_cond;                                                                          \
-                                                                                                                                       \
-        /* return; TODO/WIP */                                            \
-        /* Total hits, `k`, accross all nodes. */                                                                                      \
-        m_total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                      \
-                                                                                                                                       \
-        /* Height of the head node, should be close to floor(log(max_height)). */                                                      \
-        k_threshold = slist->slh_head->field.sle_height + 1;                                                                           \
-                                                                                                                                       \
-        /* Moving backwards along the path...                                                                                          \
-         *  - path[0] contains a match, if there was one                                                                               \
-         *  - path[1..len] will be the nodes traversed along the way                                                                   \
-         *  - path[len] is where the locate() terminated, just before path[0]                                                          \
-         *    if there was a match                                                                                                     \
-         */                                                                                                                            \
-        for (i = 1; i < len; i++) {                                                                                                    \
-            if (path[i].node == slist->slh_head || path[i].node == slist->slh_tail)                                                    \
-                continue;                                                                                                              \
-                                                                                                                                       \
-            __SKIP_SUBTREE_CHu(decl, field, slist, path, i)                                                                            \
-            {                                                                                                                          \
-                hits_CHu += elm->field.sle_levels[i].hits;                                                                             \
-            }                                                                                                                          \
-            __SKIP_SUBTREE_CHv(decl, field, slist, path, i)                                                                            \
-            {                                                                                                                          \
-                hits_CHv += elm->field.sle_levels[i].hits;                                                                             \
-            }                                                                                                                          \
-            u_hits = hits_CHu + hits_CHv;                                                                                              \
-                                                                                                                                       \
-            /* (a) Check the decent condition:                                                                                         \
-             *     u_hits <= m_total_hits / (2 ^ (k_threshold - height of node))                                                       \
-             *   When met should induce:                                                                                               \
-             *     1) traverse the path backward, and...                                                                               \
-             *     2) propagate path[i].level[i] hits backward along path, and...                                                      \
-             *     3) adjust any forward pointers along the way, then...                                                               \
-             *     4) lower the path[i]'s node height by 1                                                                             \
-             */                                                                                                                        \
-            delta_height = k_threshold - path[i].node->field.sle_height + 1;                                                           \
-            dsc_cond = m_total_hits / pow(2.0, delta_height);                                                                          \
-            if (u_hits <= dsc_cond && path[i].node->field.sle_height > 0) {                                                            \
-                if (path[i - 1].node->field.sle_prev != slist->slh_head) {                                                             \
-                    /* 1) go backwards along path from where we are until head */                                                      \
-                    j = i;                                                                                                             \
-                    cur_hits = path[j].node->field.sle_levels[path[j].in].hits;                                                        \
-                    do {                                                                                                               \
-                        /* 2) propagate hits */                                                                                        \
-                        prev_hits = path[j - 1].node->field.sle_levels[path[j - 1].in].hits;                                           \
-                        path[j - 1].node->field.sle_levels[path[j - 1].in].hits += cur_hits;                                           \
-                        cur_hits = prev_hits;                                                                                          \
-                        /* 3) adjust forward pointers */                                                                               \
-                        if (path[j - 1].node->field.sle_levels[j].next == path[i].node)                                                \
-                            path[j - 1].node->field.sle_levels[j].next = path[i].node->field.sle_levels[j].next;                       \
-                    } while (j-- > 1);                                                                                                 \
-                    /* 4) reduce height by one */                                                                                      \
-                    path[i].node->field.sle_height--;                                                                                  \
-                }                                                                                                                      \
-            }                                                                                                                          \
-            /* (b) Check the ascent condition:                                                                                         \
-             *   path[i].pu + node_hits > hits total / (2 ^ (height of head - height of node - 1))                                     \
-             *   When met should induce:                                                                                               \
-             *     1) check the ascent condition, then iff true ...                                                                    \
-             *     2) add a level, and ...                                                                                             \
-             *     3) set its hits to the prev node at intersection height                                                             \
-             *     4) set prev node hits to 0 and forward to this new level                                                            \
-             */                                                                                                                        \
-            /* 1) check ascent condition */                                                                                            \
-            asc_cond = m_total_hits / pow(2.0, delta_height == 0 ? 0 : delta_height - 1);                                              \
-            if (path[i - 1].pu > asc_cond && path[i].node->field.sle_height < slist->slh_max_height - 1) {                             \
-                /* 2) increase height by one */                                                                                        \
-                new_height = path[i].node->field.sle_height++;                                                                         \
-                /* 3) update hit counter */                                                                                            \
-                path[i].node->field.sle_levels[new_height].hits += path[i - 1].node->field.sle_levels[path[i - 1].in].hits;            \
-                /* 4) reset the prev node hits to 0 */                                                                                 \
-                path[i - 1].node->field.sle_levels[path[i - 1].in].hits = 0;                                                           \
-                if (path[i - 1].in != 0)                                                                                               \
-                    path[i - 1].node->field.sle_levels[path[i - 1].in].next->field.sle_levels[path[i - 1].in].next = path[i].node;     \
-            }                                                                                                                          \
-        }                                                                                                                              \
+        ((void)slist);                                                                                                                 \
+        ((void)len);                                                                                                                   \
+        ((void)path);                                                                                                                  \
+        return; /* TODO: WIP, see branch gburd/splay-list */                                                                           \
     }                                                                                                                                  \
                                                                                                                                        \
     /**                                                                                                                                \
