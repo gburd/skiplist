@@ -14,7 +14,7 @@ TEST_FLAGS = -Itests/
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
-EXAMPLES = examples/skip examples/slm
+EXAMPLES = examples/ex1.c
 
 .PHONY: all shared static clean test examples mls
 
@@ -45,6 +45,7 @@ clean:
 	rm -f $(OBJS) munit.o test.o
 	rm -f examples/mls.c
 	rm -f $(STATIC_LIB)
+	rm -f $(SHARED_LIB)
 	rm -f $(TESTS)
 	rm -f $(EXAMPLES)
 
@@ -60,10 +61,8 @@ tests/%.o: tests/%.c
 examples/%.o: examples/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
 
-examples/mls.c: examples/slm.c
-	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
-
-#	$(CC) $(CFLAGS) -C -E examples/slm.c | sed -e '1,7d' -e 's/^#\( [0-9]* ".*$$\)/\/\* \1 \*\//' | clang-format > examples/mls.c
+examples/mls.c: examples/ex1.c
+	$(CC) $(CFLAGS) -C -E examples/ex1.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
 
 examples/mls: examples/mls.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
@@ -71,3 +70,10 @@ examples/mls: examples/mls.o $(STATIC_LIB)
 #dot:
 #	./examples/mls
 #	dot -Tpdf /tmp/slm.dot -o /tmp/slm.pdf >/dev/null 2>&1
+
+#re-write CPP line information comments, but keep them
+#	$(CC) $(CFLAGS) -C -E examples/ex1.c | sed -e '1,7d' -e 's/^#\( [0-9]* ".*$$\)/\/\* \1 \*\//' | clang-format > examples/mls.c
+
+# workflow:
+# clear; rm examples/mls.c;  make examples/mls && env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls #&& dot -Tpdf /tmp/slm.dot -o /tmp/slm.pdf
+# cp include/sl.h /tmp/foo; clang-format -i include/sl.h

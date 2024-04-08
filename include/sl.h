@@ -53,10 +53,18 @@
 #define _SKIPLIST_H_
 
 /*
- * This file defines a skiplist data structure.
+ * This file defines a skiplist data structure written in C.  Implemented as
+ * using macros this code provides a way to essentially "template" (as in C++)
+ * and emit code with types and functions specific to your use case.  You can
+ * apply these macros multiple times safely in your code, once for each
+ * application.
  *
- * A skiplist is a way of storing sorted elements in such a way that they can be
- * accessed, inserted and removed, all in O(log(n)) on average.
+ * A skiplist is a sorted list with O(log(n)) on average for most operations.
+ * It is a probabilistic datastructure, meaning that it does not guarantee
+ * O(log(n)) it approximates it over time.  This implementation includes
+ * improves the probability by integrating the splay list algorithm for
+ * rebalancing trading off a bit of computational overhead and code complexity
+ * for a nearly always optimal, or "perfect" skiplist.
  *
  * Conceptually, a skiplist is arranged as follows:
  *
