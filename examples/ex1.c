@@ -18,11 +18,13 @@
 
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
-#define TEST_ARRAY_SIZE 1000
+#define TEST_ARRAY_SIZE 10
 #define VALIDATE
 //define SNAPSHOTS
 //define TODO_RESTORE_SNAPSHOTS
-//define DOT
+#define STABLE_SEED
+#define DOT
+
 #ifdef DOT
 size_t gen = 0;
 FILE *of = 0;
@@ -38,8 +40,8 @@ FILE *of = 0;
 /*
  * SKIPLIST EXAMPLE:
  *
- * This example creates an "ex" (example in Italian) Skiplist where keys
- * are integers, values are strings allocated on the heap.
+ * This example creates an "ex" Skiplist where keys are integers, values are
+ * strings containing the roman numeral for the key allocated on the heap.
  */
 
 /*
@@ -179,12 +181,38 @@ SKIPLIST_DECL_DOT(ex, api_, entries)
 void
 sprintf_ex_node(ex_node_t *node, char *buf)
 {
-    //    sprintf(buf, "%d:%s (hits: %lu)", node->key, node->value, node->entries.sle_levels[0].hits);
     sprintf(buf, "%d:%s", node->key, node->value);
 }
 
 // Function for this demo application.
 // ---------------------------------------------------------------------------
+int __xorshift32_state = 0;
+
+// Xorshift algorithm for PRNG
+uint32_t
+xorshift32()
+{
+  uint32_t x = __xorshift32_state;
+  if (x == 0)
+    x = 123456789;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  __xorshift32_state = x;
+  return x;
+}
+
+void
+xorshift32_seed()
+{
+  // Seed the PRNG
+#ifdef STABLE_SEED
+  __xorshift32_state = 8675309;
+#else
+  __xorshift32_state = (unsigned int)time(NULL) ^ getpid();
+#endif
+}
+
 static char *
 to_lower(char *str)
 {
@@ -241,7 +269,7 @@ shuffle(int *array, size_t n)
     if (n > 1) {
         size_t i;
         for (i = n - 1; i > 0; i--) {
-            size_t j = (unsigned int)(rand() % (i + 1)); /* NOLINT(*-msc50-cpp) */
+            size_t j = (unsigned int)(xorshift32() % (i + 1)); /* NOLINT(*-msc50-cpp) */
             int t = array[j];
             array[j] = array[i];
             array[i] = t;
@@ -267,10 +295,12 @@ main()
     snap_info_t snaps[TEST_ARRAY_SIZE * 2 + 1];
 #endif
 
+    xorshift32_seed();
+
 #ifdef DOT
-    of = fopen("/tmp/slm.dot", "w");
+    of = fopen("/tmp/ex1.dot", "w");
     if (!of) {
-        perror("Failed to open file /tmp/slm.dot");
+        perror("Failed to open file /tmp/ex1.dot");
         return 1;
     }
 #endif
@@ -280,6 +310,9 @@ main()
     if (list == NULL)
         return ENOMEM;
 
+    /* We set the max height here to 12, it's negative so that
+       the PRNG is seeded with this value as a testing trick for
+       predictable random sequences. */
     rc = api_skip_init_ex(list, -12);
     if (rc)
         return rc;

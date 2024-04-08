@@ -1,7 +1,7 @@
 
-OBJS = skiplist.o
-STATIC_LIB = libskiplist.a
-SHARED_LIB = libskiplist.so
+OBJS =
+STATIC_LIB =
+SHARED_LIB =
 
 # https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
 #CFLAGS = -Wall -Wextra -Wpedantic -Of -std=c99 -Iinclude/ -fPIC
@@ -69,11 +69,11 @@ examples/mls: examples/mls.o $(STATIC_LIB)
 
 #dot:
 #	./examples/mls
-#	dot -Tpdf /tmp/slm.dot -o /tmp/slm.pdf >/dev/null 2>&1
+#	dot -Tpdf /tmp/ex1.dot -o /tmp/ex1.pdf >/dev/null 2>&1
 
 #re-write CPP line information comments, but keep them
 #	$(CC) $(CFLAGS) -C -E examples/ex1.c | sed -e '1,7d' -e 's/^#\( [0-9]* ".*$$\)/\/\* \1 \*\//' | clang-format > examples/mls.c
 
 # workflow:
-# clear; rm examples/mls.c;  make examples/mls && env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls #&& dot -Tpdf /tmp/slm.dot -o /tmp/slm.pdf
+# clear; rm examples/mls.c;  make examples/mls && env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls #&& dot -Tpdf /tmp/ex1.dot -o /tmp/ex1.pdf
 # cp include/sl.h /tmp/foo; clang-format -i include/sl.h

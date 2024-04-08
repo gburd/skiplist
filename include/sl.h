@@ -61,10 +61,10 @@
  *
  * A skiplist is a sorted list with O(log(n)) on average for most operations.
  * It is a probabilistic datastructure, meaning that it does not guarantee
- * O(log(n)) it approximates it over time.  This implementation includes
- * improves the probability by integrating the splay list algorithm for
- * rebalancing trading off a bit of computational overhead and code complexity
- * for a nearly always optimal, or "perfect" skiplist.
+ * O(log(n)) it approximates it over time.  This implementation improves the
+ * probability by integrating the splay list algorithm for rebalancing trading
+ * off a bit of computational overhead and code complexity for a nearly always
+ * optimal, or "perfect" skiplist.
  *
  * Conceptually, a skiplist is arranged as follows:
  *
@@ -217,7 +217,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         struct decl##_node *sle_prev;      \
         struct __skiplist_##decl##_level { \
             struct decl##_node *next;      \
-            size_t hits;                   \
         } *sle_levels;                     \
     }
 
@@ -235,15 +234,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
 #define __SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
 #define __SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_max_height; lvl++)
-#define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < elm->field.sle_height; lvl++)
-#define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl < elm->field.sle_height; lvl++)
+#define __SKIP_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl <= elm->field.sle_height; lvl++)
+#define __SKIP_ENTRIES_B2T_FROM(field, elm, off) for (size_t lvl = off; lvl <= elm->field.sle_height; lvl++)
 #define __SKIP_IS_LAST_ENTRY_B2T() if (lvl + 1 == elm->field.sle_height)
-
-/* Iterate over the subtree to the left (v, or 'lt') and right (u) or "CHu" and "CHv". */
-#define __SKIP_SUBTREE_CHv(decl, field, list, path, nth) \
-    for (decl##_node_t *elm = path[nth].node; elm->field.sle_levels[path[nth].in].next == path[nth].node; elm = elm->field.sle_prev)
-#define __SKIP_SUBTREE_CHu(decl, field, list, path, nth) \
-    for (decl##_node_t *elm = path[nth].node; elm != path[nth].node->field.sle_levels[0].next; elm = elm->field.sle_levels[0].next)
 
 /*
  * Skiplist declarations and access methods.
@@ -263,6 +256,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     struct decl {                                                                                                                      \
         size_t slh_length, slh_max_height;                                                                                             \
         void *slh_aux;                                                                                                                 \
+        int slh_prng_state;                                                                                                            \
         decl##_node_t *slh_head;                                                                                                       \
         decl##_node_t *slh_tail;                                                                                                       \
         struct {                                                                                                                       \
@@ -285,9 +279,20 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                                                                                                                                        \
     typedef struct __skiplist_path_##decl {                                                                                            \
         decl##_node_t *node; /* node traversed in the act of location */                                                               \
-        size_t in;           /* level at which the node was intersected */                                                             \
-        size_t pu;           /* sum of hits from intersection to level[1] */                                                           \
     } __skiplist_path_##decl##_t;                                                                                                      \
+                                                                                                                                       \
+    /* Xorshift algorithm for PRNG */                                                                                                  \
+    static uint32_t __##decl##_xorshift32(int *state)                                                                                  \
+    {                                                                                                                                  \
+        uint32_t x = *state;                                                                                                           \
+        if (x == 0)                                                                                                                    \
+            x = 123456789;                                                                                                             \
+        x ^= x << 13;                                                                                                                  \
+        x ^= x >> 17;                                                                                                                  \
+        x ^= x << 5;                                                                                                                   \
+        *state = x;                                                                                                                    \
+        return x;                                                                                                                      \
+    }                                                                                                                                  \
                                                                                                                                        \
     /**                                                                                                                                \
      * -- __skip_compare_entries_fn_                                                                                                   \
@@ -379,12 +384,12 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
      * Skiplist.  For example, when `max = 6` this function returns 0 with                                                             \
      * probability 0.5, 1 with 0.25, 2 with 0.125, etc. until 6 with 0.5^7.                                                            \
      */                                                                                                                                \
-    static int __skip_toss_##decl(size_t max)                                                                                          \
+    static int __skip_toss_##decl(decl##_t *slist, size_t max)                                                                         \
     {                                                                                                                                  \
         size_t level = 0;                                                                                                              \
         double probability = 0.5;                                                                                                      \
                                                                                                                                        \
-        double random_value = (double)rand() / RAND_MAX; /* NOLINT(*-msc50-cpp) */                                                     \
+        double random_value = (double)__##decl##_xorshift32(&slist->slh_prng_state) / RAND_MAX;                                        \
         while (random_value < probability && level < max) {                                                                            \
             level++;                                                                                                                   \
             probability *= 0.5;                                                                                                        \
@@ -456,9 +461,9 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
          * seed the PRNG in a predictable way and have reproducible random numbers.                                                    \
          */                                                                                                                            \
         if (max < 0)                                                                                                                   \
-            srand(-max);                                                                                                               \
+            slist->slh_prng_state = -max;                                                                                              \
         else                                                                                                                           \
-            srand(((unsigned int)time(NULL) ^ getpid()));                                                                              \
+            slist->slh_prng_state = ((unsigned int)time(NULL) ^ getpid());                                                             \
     fail:;                                                                                                                             \
         return rc;                                                                                                                     \
     }                                                                                                                                  \
@@ -600,35 +605,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     }                                                                                                                                  \
                                                                                                                                        \
     /**                                                                                                                                \
-     * -- __skip_adjust_hit_counts_ TODO: see gburd/splay-list                                                                         \
-     *                                                                                                                                 \
-     * On delete we check the hit counts across all nodes and next[] pointers                                                          \
-     * and find the smallest counter then subtract that + 1 from all hit                                                               \
-     * counters.                                                                                                                       \
-     *                                                                                                                                 \
-     */                                                                                                                                \
-    static void __skip_adjust_hit_counts_##decl(decl##_t *slist)                                                                       \
-    {                                                                                                                                  \
-        ((void)slist);                                                                                                                 \
-    }                                                                                                                                  \
-                                                                                                                                       \
-    /**                                                                                                                                \
-     * -- __skip_rebalance_                                                                                                            \
-     *                                                                                                                                 \
-     * Restore balance to our list by adjusting heights and forward pointers                                                           \
-     * according to the algorithm put forth in "The Splay-List: A                                                                      \
-     * Distribution-Adaptive Concurrent Skip-List".                                                                                    \
-     *                                                                                                                                 \
-     */                                                                                                                                \
-    static void __skip_rebalance_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                \
-    {                                                                                                                                  \
-        ((void)slist);                                                                                                                 \
-        ((void)len);                                                                                                                   \
-        ((void)path);                                                                                                                  \
-        return; /* TODO: WIP, see branch gburd/splay-list */                                                                           \
-    }                                                                                                                                  \
-                                                                                                                                       \
-    /**                                                                                                                                \
      * -- __skip_locate_                                                                                                               \
      *                                                                                                                                 \
      * Locates a node that matches another node updating `path` and then                                                               \
@@ -648,22 +624,16 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         /* Find the node that matches `node` or NULL. */                                                                               \
         i = slist->slh_head->field.sle_height;                                                                                         \
         do {                                                                                                                           \
-            path[i + 1].pu = 0;                                                                                                        \
             while (elm != slist->slh_tail && elm->field.sle_levels[i].next &&                                                          \
                 __skip_compare_nodes_##decl(slist, elm->field.sle_levels[i].next, n, slist->slh_aux) < 0) {                            \
                 elm = elm->field.sle_levels[i].next;                                                                                   \
-                path[i + 1].in = i;                                                                                                    \
-                path[i + 1].pu += elm->field.sle_levels[path[i + 1].in].hits;                                                          \
             }                                                                                                                          \
             path[i + 1].node = elm;                                                                                                    \
-            path[i + 1].node->field.sle_levels[path[i + 1].in].hits++;                                                                 \
             len++;                                                                                                                     \
         } while (i--);                                                                                                                 \
         elm = elm->field.sle_levels[0].next;                                                                                           \
         if (__skip_compare_nodes_##decl(slist, elm, n, slist->slh_aux) == 0) {                                                         \
             path[0].node = elm;                                                                                                        \
-            path[0].node->field.sle_levels[0].hits++;                                                                                  \
-            __skip_rebalance_##decl(slist, len, path);                                                                                 \
         }                                                                                                                              \
         return len;                                                                                                                    \
     }                                                                                                                                  \
@@ -694,12 +664,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         }                                                                                                                              \
         /* First element in path should be NULL, reset should start pointing at tail. */                                               \
         path[0].node = NULL;                                                                                                           \
-        path[0].in = 0;                                                                                                                \
-        path[0].pu = 0;                                                                                                                \
         for (i = 1; i < slist->slh_max_height + 1; i++) {                                                                              \
             path[i].node = slist->slh_tail;                                                                                            \
-            path[i].in = 0;                                                                                                            \
-            path[i].pu = 0;                                                                                                            \
         }                                                                                                                              \
                                                                                                                                        \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                 \
@@ -712,7 +678,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             }                                                                                                                          \
             /* Coin toss to determine level of this new node [0, max) */                                                               \
             cur_height = slist->slh_head->field.sle_height;                                                                            \
-            new_height = __skip_toss_##decl(slist->slh_max_height - 1);                                                                \
+            new_height = __skip_toss_##decl(slist, slist->slh_max_height - 1);                                                         \
             new->field.sle_height = new_height;                                                                                        \
             /* Trim the path to at most the new height for the new node. */                                                            \
             for (i = cur_height + 1; i <= new_height; i++) {                                                                           \
@@ -759,8 +725,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 /* Increase the the list's era/age and record it. */                                                                   \
                 new->field.sle_era = slist->slh_snap.cur_era++;                                                                        \
             }                                                                                                                          \
-            /* Set hits for rebalencing to 1 when new born. */                                                                         \
-            new->field.sle_levels[new_height].hits = 1;                                                                                \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                            \
             slist->slh_length++;                                                                                                       \
                                                                                                                                        \
@@ -1124,7 +1088,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             slist->slh_tail->field.sle_height = i;                                                                                     \
                                                                                                                                        \
             slist->slh_length--;                                                                                                       \
-            __skip_adjust_hit_counts_##decl(slist);                                                                                    \
         }                                                                                                                              \
         return 0;                                                                                                                      \
     }                                                                                                                                  \
