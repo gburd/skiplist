@@ -18,7 +18,7 @@
 
 // Local demo application OPTIONS:
 // ---------------------------------------------------------------------------
-#define TEST_ARRAY_SIZE 10
+#define TEST_ARRAY_SIZE 100
 #define VALIDATE
 //define SNAPSHOTS
 //define TODO_RESTORE_SNAPSHOTS
