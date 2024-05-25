@@ -53,20 +53,23 @@
 #define _SKIPLIST_H_
 
 /*
- * This file defines a skiplist data structure written in C.  Implemented as
+ * This file defines a skip-list data structure written in C.  Implemented as
  * using macros this code provides a way to essentially "template" (as in C++)
  * and emit code with types and functions specific to your use case.  You can
- * apply these macros multiple times safely in your code, once for each
- * application.
+ * apply these macros multiple times safely, once for each list type you need.
  *
- * A skiplist is a sorted list with O(log(n)) on average for most operations.
+ * A skip-list is a sorted list with O(log(n)) on average for most operations.
  * It is a probabilistic datastructure, meaning that it does not guarantee
- * O(log(n)) it approximates it over time.  This implementation improves the
- * probability by integrating the splay list algorithm for rebalancing trading
- * off a bit of computational overhead and code complexity for a nearly always
- * optimal, or "perfect" skiplist.
+ * O(log(n)), but it has been shown to approximate it over time.  This
+ * implementation includes the rebalancing techniques that improve on that
+ * approximation using an adaptive technique called "splay-list" (named after
+ * the splay-tree due to the similarities between the two). It is similar to a
+ * standard skip-list, with the key distinction that the height of each element
+ * adapts dynamically to its access rate: popular elements increase in height,
+ * whereas rarely-accessed elements decrease in height.  See below for the link
+ * to the research behind this adaptive technique.
  *
- * Conceptually, a skiplist is arranged as follows:
+ * Conceptually, at a high level, a skip-list is arranged as follows:
  *
  * <head> ----------> [2] --------------------------------------------------> [9] ---------->
  * <head> ----------> [2] ------------------------------------[7] ----------> [9] ---------->
@@ -79,22 +82,22 @@
  * diagram). This allows for the algorithm to move down the list faster than
  * having to visit every element.
  *
- * Conceptually, the skiplist can be thought of as a stack of linked lists. At
- * the very bottom is the full linked list with every element, and each layer
- * above corresponds to a linked list containing a random subset of the elements
- * from the layer immediately below it. The probability distribution that
- * determines this random subset can be customized, but typically a layer will
- * contain half the nodes from the layer below.
+ * A skip-list can be thought of as a stack of linked lists. At the very bottom
+ * is a linked list with every element, and each layer above corresponds to a
+ * linked list containing a random subset of the elements from the layer
+ * immediately below it. The probability distribution that determines this
+ * random subset can be customized, but typically a layer will contain half the
+ * nodes from the layer below.
  *
  * This implementation maintains a doubly-linked list at the bottom layer to
- * support efficient iteration in either direction.  There is also a guard
- * node at the tail rather than simply pointing to NULL.
+ * support efficient iteration in either direction.  There is also a guard node
+ * at the tail rather than simply pointing to NULL.
  *
  * <head> <-> [1] <-> [2] <-> [3] <-> [4] <-> [5] <-> [6] <-> [7] <-> <tail>
  *
  * Safety:
  *
- * The ordered skiplist relies on a well-behaved comparison
+ * The ordered skip-list relies on a well-behaved comparison
  * function. Specifically, given some ordering function f(a, b), it must satisfy
  * the following properties:
  *
@@ -639,7 +642,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         size_t i, j, u_hits, hits_CHu = 0, hits_CHv = 0, delta_height, new_height, cur_hits, prev_hits;                                \
         double k_threshold, m_total_hits, asc_cond, dsc_cond;                                                                          \
                                                                                                                                        \
-        /* return; TODO/WIP */                                            \
+        /* return; TODO/WIP */                                                                                                         \
         /* Total hits, `k`, accross all nodes. */                                                                                      \
         m_total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                      \
                                                                                                                                        \
