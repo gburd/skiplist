@@ -14,7 +14,7 @@ TEST_FLAGS = -Itests/
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
-EXAMPLES = examples/ex1.c
+EXAMPLES = examples/ex1 examples/ex2
 
 .PHONY: all shared static clean test examples mls
 
@@ -64,7 +64,13 @@ examples/%.o: examples/%.c
 examples/mls.c: examples/ex1.c
 	$(CC) $(CFLAGS) -C -E examples/ex1.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
 
+examples/ex2_sl.c: examples/ex2.c
+	$(CC) $(CFLAGS) -C -E examples/ex2.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/ex2_sl.c
+
 examples/mls: examples/mls.o $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
+
+examples/ex2_sl: examples/ex2_sl.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 #dot:

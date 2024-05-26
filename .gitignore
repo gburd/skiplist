@@ -5,6 +5,9 @@ tests/test
 examples/mls.c
 examples/mls
 examples/mls.o
+examples/ex2_sl.c
+examples/ex2_sl
+examples/ex2_sl.o
 /mxe
 .cache
 hints.txt
