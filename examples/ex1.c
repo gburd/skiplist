@@ -5,12 +5,6 @@
 // ---------------------------------------------------------------------------
 #define DEBUG
 #define SKIPLIST_DIAGNOSTIC
-/* Setting SKIPLIST_MAX_HEIGHT will do two things:
- * 1) limit our max height across all instances of this data structure.
- * 2) remove a heap allocation on frequently used paths, insert/remove/etc.
- * so, use it when you need it.
- */
-#define SKIPLIST_MAX_HEIGHT 12
 
 // Include our monolithic ADT, the Skiplist!
 // ---------------------------------------------------------------------------
@@ -20,8 +14,8 @@
 // ---------------------------------------------------------------------------
 #define TEST_ARRAY_SIZE 10
 #define VALIDATE
-//define SNAPSHOTS
-//define TODO_RESTORE_SNAPSHOTS
+// define SNAPSHOTS
+// define TODO_RESTORE_SNAPSHOTS
 #define STABLE_SEED
 #define DOT
 
@@ -181,7 +175,7 @@ SKIPLIST_DECL_VALIDATE(ex, api_, entries)
  */
 SKIPLIST_DECL_DOT(ex, api_, entries)
 
-void
+static void
 sprintf_ex_node(ex_node_t *node, char *buf)
 {
     sprintf(buf, "%d:%s", node->key, node->value);
@@ -189,51 +183,8 @@ sprintf_ex_node(ex_node_t *node, char *buf)
 
 // Function for this demo application.
 // ---------------------------------------------------------------------------
-int __xorshift32_state = 0;
 
-// Xorshift algorithm for PRNG
-uint32_t
-xorshift32()
-{
-  uint32_t x = __xorshift32_state;
-  if (x == 0)
-    x = 123456789;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  __xorshift32_state = x;
-  return x;
-}
-
-void
-xorshift32_seed()
-{
-  // Seed the PRNG
-#ifdef STABLE_SEED
-  __xorshift32_state = 8675309;
-#else
-  __xorshift32_state = (unsigned int)time(NULL) ^ getpid();
-#endif
-}
-
-static char *
-to_lower(char *str)
-{
-    char *p = str;
-    for (; *p; ++p)
-        *p = (char)(*p >= 'A' && *p <= 'Z' ? *p | 0x60 : *p);
-    return str;
-}
-
-static char *
-to_upper(char *str)
-{
-    char *p = str;
-    for (; *p; ++p)
-        *p = (char)(*p >= 'a' && *p <= 'z' ? *p & ~0x20 : *p);
-    return str;
-}
-
+/* convert a number into the Roman numeral equivalent, allocates a string caller must free */
 static char *
 int_to_roman_numeral(int num)
 {
@@ -266,18 +217,11 @@ int_to_roman_numeral(int num)
     return res;
 }
 
-void
-shuffle(int *array, size_t n)
+/* calculate the floor of the log base 2 of a number m (⌊log2(m)⌋) */
+static int
+floor_log2(unsigned int m)
 {
-    if (n > 1) {
-        size_t i;
-        for (i = n - 1; i > 0; i--) {
-            size_t j = (unsigned int)(xorshift32() % (i + 1)); /* NOLINT(*-msc50-cpp) */
-            int t = array[j];
-            array[j] = array[i];
-            array[i] = t;
-        }
-    }
+    return (int)floor(log(m) / log(2));
 }
 
 #ifdef TODO_RESTORE_SNAPSHOTS
@@ -289,16 +233,24 @@ typedef struct {
 #endif
 
 // ---------------------------------------------------------------------------
+
+/* The head node's height is always 1 more than the tallest node, that location
+   is where we store the total hits, or "m". */
+#define splay_list_m(m) list->slh_head->entries.sle_levels[list->slh_head->entries.sle_height].hits
+
 int
 main()
 {
     int rc;
+    char *numeral;
+#ifdef DOT
+    char msg[1024];
+    memset(msg, 0, 1024);
+#endif
 #ifdef TODO_RESTORE_SNAPSHOTS
     size_t n_snaps = 0;
     snap_info_t snaps[TEST_ARRAY_SIZE * 2 + 1];
 #endif
-
-    xorshift32_seed();
 
 #ifdef DOT
     of = fopen("/tmp/ex1.dot", "w");
@@ -314,162 +266,114 @@ main()
         return ENOMEM;
 
     rc = api_skip_init_ex(list);
-    list->slh_prng_state = 12;
     if (rc)
         return rc;
+
+    /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
+    list->slh_prng_state = 12;
+#ifdef SNAPSHOTS
     api_skip_snapshots_init_ex(list);
+#endif
 #ifdef DOT
     api_skip_dot_ex(of, list, gen++, "init", sprintf_ex_node);
 #endif
-    if (api_skip_get_ex(list, 0) != NULL)
-        perror("found a non-existent item!");
-    api_skip_del_ex(list, 0);
-    CHECK;
 
-    /* Insert TEST_ARRAY_SIZE key/value pairs into the list. */
-    int i, j;
-    char *numeral;
-#ifdef DOT
-    char msg[1024];
-    memset(msg, 0, 1024);
-#endif
-    int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
-    int array[(TEST_ARRAY_SIZE * 2) + 1];
-    for (j = 0, i = -amt; i <= amt; i++, j++)
-        array[j] = i;
-    shuffle(array, asz);
+    /* This example mirrors the example given in the paper about splay-lists
+       to test implementation against research. */
 
-    for (i = 0; i < asz; i++) {
-#ifdef SNAPSHOTS
-        api_skip_snapshot_ex(list);
-#elif defined(TODO_RESTORE_SNAPSHOTS)
-        /* Snapshot the first iteration, and then every 5th after that. */
-        if (i % 5 == 0) {
-            snaps[i].length = api_skip_length_ex(list);
-            snaps[i].key = array[i];
-            snaps[i].snap_id = api_skip_snapshot_ex(list);
-            n_snaps++;
-            CHECK;
-        }
-#endif
-        numeral = to_lower(int_to_roman_numeral(array[i]));
-        rc = api_skip_put_ex(list, array[i], numeral);
-        CHECK;
+    for (int i = 1; i < 8; i++) {
+        numeral = int_to_roman_numeral(i);
+        if ((rc = api_skip_put_ex(list, i, numeral)))
+            perror("put failed");
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
         api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
-        char *v = api_skip_get_ex(list, array[i]);
-        CHECK;
-        char *upper_numeral = calloc(1, strlen(v) + 1);
-        strncpy(upper_numeral, v, strlen(v));
-        assert(strncmp(v, upper_numeral, strlen(upper_numeral)) == 0);
-        to_upper(upper_numeral);
-        api_skip_set_ex(list, array[i], upper_numeral);
-        CHECK;
     }
-    numeral = int_to_roman_numeral(-1);
-    api_skip_dup_ex(list, -1, numeral);
     CHECK;
+
+    /* Now we're going to poke around the internals a bit to set things up.
+       This first time around we're going to build the list by hand, later
+       we'll ensure that we can build this shape using only API calls. */
+
+    ex_node_t *head = list->slh_head;
+    ex_node_t *tail = list->slh_tail;
+    ex_node_t *node_1 = head->entries.sle_levels[0].next;
+    ex_node_t *node_2 = node_1->entries.sle_levels[0].next;
+    ex_node_t *node_3 = node_2->entries.sle_levels[0].next;
+    ex_node_t *node_4 = node_3->entries.sle_levels[0].next;
+    ex_node_t *node_5 = node_4->entries.sle_levels[0].next;
+    ex_node_t *node_6 = node_5->entries.sle_levels[0].next;
+
+    // Head/Tail-nodes are height 3, ...
+    head->entries.sle_height = tail->entries.sle_height = 3;
+
+    // Head-node
+    head->entries.sle_levels[3].hits = 10;
+    head->entries.sle_levels[2].hits = 5;
+    head->entries.sle_levels[1].hits = 1;
+    head->entries.sle_levels[0].hits = 1;
+    head->entries.sle_levels[1].next = node_2;
+    head->entries.sle_levels[2].next = node_6;
+    head->entries.sle_levels[3].next = tail;
+
+    // Tail-node
+    tail->entries.sle_levels[3].hits = 0;
+    tail->entries.sle_levels[2].hits = 0;
+    tail->entries.sle_levels[1].hits = 0;
+    tail->entries.sle_levels[0].hits = 1;
+    tail->entries.sle_levels[1].next = tail;
+    tail->entries.sle_levels[2].next = tail;
+    tail->entries.sle_levels[3].next = tail;
+
+    // First node has key "1", height "0", hits(0) = 1
+    node_1->entries.sle_height = 0;
+    node_1->entries.sle_levels[0].hits = 1;
+
+    // Second node has key "2", height "1", hits(0) = 1, hits(1) = 0
+    node_2->entries.sle_height = 1;
+    node_2->entries.sle_levels[0].hits = 1;
+    node_2->entries.sle_levels[1].hits = 0;
+    node_2->entries.sle_levels[1].next = node_3;
+
+    // Third node has key "3", height "1", hits(0) = 1, hits(1) = 2
+    node_3->entries.sle_height = 1;
+    node_3->entries.sle_levels[0].hits = 1;
+    node_3->entries.sle_levels[1].hits = 2;
+    node_3->entries.sle_levels[1].next = node_6;
+
+    // Fourth node has key "4", height "0", hits(0) = 1
+    node_4->entries.sle_height = 0;
+    node_4->entries.sle_levels[0].hits = 1;
+
+    // Fifth node has key "5", height "0", hits(0) = 1
+    node_5->entries.sle_height = 0;
+    node_5->entries.sle_levels[0].hits = 1;
+
+    // Sixth node has key "6", height "2", hits(0) = 5, hits(1) = 0, hits(2) = 0
+    node_6->entries.sle_height = 2;
+    node_6->entries.sle_levels[0].hits = 5;
+    node_6->entries.sle_levels[1].hits = 0;
+    node_6->entries.sle_levels[2].hits = 0;
+    node_6->entries.sle_levels[1].next = tail;
+    node_6->entries.sle_levels[2].next = tail;
+
+    CHECK;
+
 #ifdef DOT
-    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    sprintf(msg, "manually adjusted");
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
-    numeral = int_to_roman_numeral(1);
-    api_skip_dup_ex(list, 1, numeral);
+
+    printf("m = %ld\n", splay_list_m(list));
+    printf("(⌊log2(m)⌋) = %d\n", floor_log2(splay_list_m(list)));
+
+    if (!(rc = api_skip_contains_ex(list, 5)))
+        perror("missing element 5");
     CHECK;
 #ifdef DOT
-    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    sprintf(msg, "contains(5)");
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
-#endif
-
-    api_skip_del_ex(list, 0);
-    CHECK;
-    if (api_skip_get_ex(list, 0) != NULL)
-        perror("found a deleted item!");
-    api_skip_del_ex(list, 0);
-    CHECK;
-    if (api_skip_get_ex(list, 0) != NULL)
-        perror("found a deleted item!");
-    int key = TEST_ARRAY_SIZE + 1;
-    api_skip_del_ex(list, key);
-    CHECK;
-    key = -(TEST_ARRAY_SIZE)-1;
-    api_skip_del_ex(list, key);
-    CHECK;
-
-#ifdef DOT
-    sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
-    api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
-#endif
-
-    numeral = int_to_roman_numeral(-(TEST_ARRAY_SIZE));
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(-2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GTE, -2)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GTE, 0)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GTE, 2)->value, numeral) == 0);
-    free(numeral);
-    assert(api_skip_pos_ex(list, SKIP_GTE, (TEST_ARRAY_SIZE + 1)) == NULL);
-
-    numeral = int_to_roman_numeral(-(TEST_ARRAY_SIZE));
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GT, -(TEST_ARRAY_SIZE)-1)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(-1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GT, -2)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GT, 0)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_GT, 1)->value, numeral) == 0);
-    free(numeral);
-    assert(api_skip_pos_ex(list, SKIP_GT, TEST_ARRAY_SIZE) == NULL);
-
-    assert(api_skip_pos_ex(list, SKIP_LT, -(TEST_ARRAY_SIZE)) == NULL);
-    numeral = int_to_roman_numeral(-2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LT, -1)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(-1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LT, 0)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LT, 2)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(TEST_ARRAY_SIZE);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LT, (TEST_ARRAY_SIZE + 1))->value, numeral) == 0);
-    free(numeral);
-
-    assert(api_skip_pos_ex(list, SKIP_LTE, -(TEST_ARRAY_SIZE)-1) == NULL);
-    numeral = int_to_roman_numeral(-2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LTE, -2)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(-1);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LTE, 0)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(2);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LTE, 2)->value, numeral) == 0);
-    free(numeral);
-    numeral = int_to_roman_numeral(TEST_ARRAY_SIZE);
-    assert(strcmp(api_skip_pos_ex(list, SKIP_LTE, (TEST_ARRAY_SIZE + 1))->value, numeral) == 0);
-    free(numeral);
-
-#ifdef TODO_RESTORE_SNAPSHOTS
-    // Walk backward by 2 and test snapshot restore.
-    for (i = n_snaps; i > 0; i -= 2) {
-        api_skip_restore_snapshot_ex(list, snaps[i].snap_id);
-        CHECK;
-        assert(api_skip_length_ex(list) == snaps[i].length);
-        numeral = int_to_roman_numeral(snaps[i].key);
-        assert(strncmp(api_skip_get_ex(list, snaps[i].key), numeral, strlen(numeral)) == 0);
-        free(numeral);
-    }
-    api_skip_release_snapshots_ex(list);
 #endif
 
 #ifdef DOT

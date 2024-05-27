@@ -5,12 +5,6 @@
 // ---------------------------------------------------------------------------
 #define DEBUG
 #define SKIPLIST_DIAGNOSTIC
-/* Setting SKIPLIST_MAX_HEIGHT will do two things:
- * 1) limit our max height across all instances of this data structure.
- * 2) remove a heap allocation on frequently used paths, insert/remove/etc.
- * so, use it when you need it.
- */
-#define SKIPLIST_MAX_HEIGHT 12
 
 // Include our monolithic ADT, the Skiplist!
 // ---------------------------------------------------------------------------
@@ -181,7 +175,7 @@ SKIPLIST_DECL_VALIDATE(ex, api_, entries)
  */
 SKIPLIST_DECL_DOT(ex, api_, entries)
 
-void
+static void
 sprintf_ex_node(ex_node_t *node, char *buf)
 {
     sprintf(buf, "%d:%s", node->key, node->value);
@@ -192,7 +186,7 @@ sprintf_ex_node(ex_node_t *node, char *buf)
 int __xorshift32_state = 0;
 
 // Xorshift algorithm for PRNG
-uint32_t
+static uint32_t
 xorshift32()
 {
   uint32_t x = __xorshift32_state;
@@ -205,7 +199,7 @@ xorshift32()
   return x;
 }
 
-void
+static void
 xorshift32_seed()
 {
   // Seed the PRNG
@@ -216,6 +210,7 @@ xorshift32_seed()
 #endif
 }
 
+/* convert upper case characters to lower case */
 static char *
 to_lower(char *str)
 {
@@ -225,6 +220,7 @@ to_lower(char *str)
     return str;
 }
 
+/* convert lower case characters to upper case */
 static char *
 to_upper(char *str)
 {
@@ -234,6 +230,7 @@ to_upper(char *str)
     return str;
 }
 
+/* convert a number into the Roman numeral equivalent, allocates a string caller must free */
 static char *
 int_to_roman_numeral(int num)
 {
@@ -266,7 +263,8 @@ int_to_roman_numeral(int num)
     return res;
 }
 
-void
+/* shuffle an array of length n */
+static void
 shuffle(int *array, size_t n)
 {
     if (n > 1) {
@@ -301,9 +299,9 @@ main()
     xorshift32_seed();
 
 #ifdef DOT
-    of = fopen("/tmp/ex1.dot", "w");
+    of = fopen("/tmp/ex2.dot", "w");
     if (!of) {
-        perror("Failed to open file /tmp/ex1.dot");
+        perror("Failed to open file /tmp/ex2.dot");
         return 1;
     }
 #endif
@@ -314,10 +312,14 @@ main()
         return ENOMEM;
 
     rc = api_skip_init_ex(list);
-    list->slh_prng_state = 12;
     if (rc)
         return rc;
+
+    /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
+    list->slh_prng_state = 12;
+#ifdef SNAPSHOTS
     api_skip_snapshots_init_ex(list);
+#endif
 #ifdef DOT
     api_skip_dot_ex(of, list, gen++, "init", sprintf_ex_node);
 #endif
