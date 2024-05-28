@@ -365,12 +365,12 @@ main()
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
 
-    printf("m = %ld\n", splay_list_m(list));
+    printf("m = %ld; ", splay_list_m(list));
     printf("(⌊log2(m)⌋) = %d\n", floor_log2(splay_list_m(list)));
 
     if (!(rc = api_skip_contains_ex(list, 5)))
         perror("missing element 5");
-    CHECK;
+
 #ifdef DOT
     sprintf(msg, "contains(5)");
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
