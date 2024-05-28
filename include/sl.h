@@ -678,7 +678,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                                                                                                                                          \
             /* (a) Check the decent condition:                                                                                           \
              *     u_hits <= m_total_hits / (2 ^ (k_threshold - height of node))                                                         \
-             *   When met we:                                                                                                 \
+             *   When met we:                                                                                                            \
              *     1) traverse the path backward, and...                                                                                 \
              *     2) propagate path[i].level[i] hits backward along path, and...                                                        \
              *     3) adjust any forward pointers along the way, then...                                                                 \
@@ -692,25 +692,21 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     /* 1) go backwards along path from where we are until head */                                                        \
                     cur = &path[i];                                                                                                      \
                     cur_hits = cur->node->field.sle_levels[cur->in].hits;                                                                \
-                    do {                                                                                                                 \
-                        prv_node = (*(p + 1)).node->entries.sle_levels[path_u.in].next;                                                  \
-                                                                                                                                         \
-                        /* 2) propagate hits */                                                                                          \
-                        prv_hits = prv_node->field.sle_levels[cur->in].hits;                                                             \
-                        prv_node->field.sle_levels[cur->in].hits += 1;                                                            \
-                        cur_hits = prv_hits;                                                                                             \
-                        /* 3) adjust forward pointers */                                                                                 \
-                        if (prv_node->field.sle_levels[cur->in].next == cur->node)                                                       \
-                            prv_node->field.sle_levels[cur->in].next = cur->node->field.sle_levels[cur->in].next;                        \
-                        cur++;                                                                                                           \
-                    } while (cur->node != slist->slh_head);                                                                              \
+                    prv_node = (*(p + 1)).node->entries.sle_levels[path_u.in].next;                                                      \
+                    /* 2) propagate hits */                                                                                              \
+                    prv_hits = prv_node->field.sle_levels[cur->in].hits;                                                                 \
+                    prv_node->field.sle_levels[cur->in].hits += 1;                                                                       \
+                    cur_hits = prv_hits;                                                                                                 \
+                    /* 3) adjust forward pointers */                                                                                     \
+                    if (prv_node->field.sle_levels[cur->in].next == cur->node)                                                           \
+                        prv_node->field.sle_levels[cur->in].next = cur->node->field.sle_levels[cur->in].next;                            \
                     /* 4) reduce height by one */                                                                                        \
                     cur->node->field.sle_height--;                                                                                       \
                 }                                                                                                                        \
             }                                                                                                                            \
             /* (b) Check the ascent condition:                                                                                           \
              *   path[i].pu + node_hits > hits total / (2 ^ (height of head - height of node - 1))                                       \
-             *   When met we:                                                                                                 \
+             *   When met we:                                                                                                            \
              *     1) check the ascent condition, then iff true ...                                                                      \
              *     2) add a level, and ...                                                                                               \
              *     3) set its hits to the prev node at intersection height                                                               \
