@@ -832,13 +832,6 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                     new->field.sle_levels[i].next = slist->slh_tail;                                                                     \
                 }                                                                                                                        \
             }                                                                                                                            \
-            /* Ensure all slh_head->next[] above loc point to tail. */                                                                   \
-            if (path[1].node == slist->slh_head) {                                                                                       \
-                __SKIP_ENTRIES_B2T_FROM(field, slist->slh_head, loc + 1)                                                                 \
-                {                                                                                                                        \
-                    slist->slh_head->field.sle_levels[lvl].next = slist->slh_tail;                                                       \
-                }                                                                                                                        \
-            }                                                                                                                            \
             /* Adjust the previous pointers in the nodes. */                                                                             \
             new->field.sle_prev = path[1].node;                                                                                          \
             new->field.sle_levels[0].next->field.sle_prev = new;                                                                         \
