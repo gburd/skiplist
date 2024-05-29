@@ -14,8 +14,8 @@
 // ---------------------------------------------------------------------------
 #define TEST_ARRAY_SIZE 10
 #define VALIDATE
-//define SNAPSHOTS
-//define TODO_RESTORE_SNAPSHOTS
+// define SNAPSHOTS
+// define TODO_RESTORE_SNAPSHOTS
 #define STABLE_SEED
 #define DOT
 
@@ -189,24 +189,24 @@ int __xorshift32_state = 0;
 static uint32_t
 xorshift32()
 {
-  uint32_t x = __xorshift32_state;
-  if (x == 0)
-    x = 123456789;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  __xorshift32_state = x;
-  return x;
+    uint32_t x = __xorshift32_state;
+    if (x == 0)
+        x = 123456789;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    __xorshift32_state = x;
+    return x;
 }
 
 static void
 xorshift32_seed()
 {
-  // Seed the PRNG
+    // Seed the PRNG
 #ifdef STABLE_SEED
-  __xorshift32_state = 8675309;
+    __xorshift32_state = 8675309;
 #else
-  __xorshift32_state = (unsigned int)time(NULL) ^ getpid();
+    __xorshift32_state = (unsigned int)time(NULL) ^ getpid();
 #endif
 }
 
@@ -358,7 +358,7 @@ main()
         rc = api_skip_put_ex(list, array[i], numeral);
         CHECK;
 #ifdef DOT
-        sprintf(msg, "put key: %d value: %s", i, numeral);
+        sprintf(msg, "put key: %d value: %s", array[i], numeral);
         api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
         char *v = api_skip_get_ex(list, array[i]);
@@ -369,24 +369,38 @@ main()
         to_upper(upper_numeral);
         api_skip_set_ex(list, array[i], upper_numeral);
         CHECK;
+
+        for (size_t j = 0; j < api_skip_length_ex(list); j++) {
+            int n = xorshift32() % api_skip_length_ex(list);
+            api_skip_contains_ex(list, n);
+            CHECK;
+#if 0
+            sprintf(msg, "locate key: %d", n);
+            api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
+#endif
+        }
     }
     numeral = int_to_roman_numeral(-1);
     api_skip_dup_ex(list, -1, numeral);
     CHECK;
 #ifdef DOT
-    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    sprintf(msg, "put dup key: %d value: %s", -1, numeral);
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
     numeral = int_to_roman_numeral(1);
     api_skip_dup_ex(list, 1, numeral);
     CHECK;
 #ifdef DOT
-    sprintf(msg, "put dup key: %d value: %s", i, numeral);
+    sprintf(msg, "put dup key: %d value: %s", 1, numeral);
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
 
     api_skip_del_ex(list, 0);
     CHECK;
+#ifdef DOT
+    sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
+    api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
+#endif
     if (api_skip_get_ex(list, 0) != NULL)
         perror("found a deleted item!");
     api_skip_del_ex(list, 0);
@@ -399,11 +413,6 @@ main()
     key = -(TEST_ARRAY_SIZE)-1;
     api_skip_del_ex(list, key);
     CHECK;
-
-#ifdef DOT
-    sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
-    api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
-#endif
 
     numeral = int_to_roman_numeral(-(TEST_ARRAY_SIZE));
     assert(strcmp(api_skip_pos_ex(list, SKIP_GTE, -(TEST_ARRAY_SIZE)-1)->value, numeral) == 0);
