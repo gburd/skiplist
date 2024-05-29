@@ -16,7 +16,7 @@
 #define VALIDATE
 // define SNAPSHOTS
 // define TODO_RESTORE_SNAPSHOTS
-//define STABLE_SEED
+// define STABLE_SEED
 #define DOT
 
 #ifdef DOT
@@ -315,8 +315,10 @@ main()
     if (rc)
         return rc;
 
-    /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
+        /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
+#ifdef STABLE_SEED
     list->slh_prng_state = 12;
+#endif
 #ifdef SNAPSHOTS
     api_skip_snapshots_init_ex(list);
 #endif
@@ -378,12 +380,12 @@ main()
 #endif
         CHECK;
 
-        for (size_t j = 0; j < api_skip_length_ex(list); j++) {
+        for (size_t j = 0, k = api_skip_length_ex(list); j < k; j++) {
             int n = xorshift32() % api_skip_length_ex(list);
-            api_skip_contains_ex(list, n);
+            api_skip_contains_ex(list, array[n]);
             CHECK;
         }
-#ifdef DOT
+#if 0
         sprintf(msg, "locate all the keys!!!");
         api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
@@ -489,6 +491,18 @@ main()
         free(numeral);
     }
     api_skip_release_snapshots_ex(list);
+#endif
+
+    for (size_t i = 0; i < 1000000; i++) {
+        for (size_t j = 0, k = api_skip_length_ex(list); j < k; j++) {
+            int n = xorshift32() % api_skip_length_ex(list);
+            api_skip_contains_ex(list, array[n]);
+            CHECK;
+        }
+    }
+#ifdef DOT
+    sprintf(msg, "lots-o-contains later...");
+    api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
 
 #ifdef DOT
