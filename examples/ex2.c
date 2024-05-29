@@ -16,7 +16,7 @@
 #define VALIDATE
 // define SNAPSHOTS
 // define TODO_RESTORE_SNAPSHOTS
-#define STABLE_SEED
+//define STABLE_SEED
 #define DOT
 
 #ifdef DOT
@@ -362,23 +362,31 @@ main()
         api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
         char *v = api_skip_get_ex(list, array[i]);
+#ifdef DOT
+        sprintf(msg, "get key: %d", array[i]);
+        api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
+#endif
         CHECK;
         char *upper_numeral = calloc(1, strlen(v) + 1);
         strncpy(upper_numeral, v, strlen(v));
         assert(strncmp(v, upper_numeral, strlen(upper_numeral)) == 0);
         to_upper(upper_numeral);
         api_skip_set_ex(list, array[i], upper_numeral);
+#ifdef DOT
+        sprintf(msg, "set key: %d value: %s", array[i], upper_numeral);
+        api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
+#endif
         CHECK;
 
         for (size_t j = 0; j < api_skip_length_ex(list); j++) {
             int n = xorshift32() % api_skip_length_ex(list);
             api_skip_contains_ex(list, n);
             CHECK;
-#if 0
-            sprintf(msg, "locate key: %d", n);
-            api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
-#endif
         }
+#ifdef DOT
+        sprintf(msg, "locate all the keys!!!");
+        api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
+#endif
     }
     numeral = int_to_roman_numeral(-1);
     api_skip_dup_ex(list, -1, numeral);
