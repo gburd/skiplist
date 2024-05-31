@@ -457,19 +457,19 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
         rc = prefix##skip_alloc_node_##decl(&slist->slh_tail);                                                                           \
         if (rc)                                                                                                                          \
             goto fail;                                                                                                                   \
-                                                                                                                                                              \
-        /* Initial height at head is 0 (meaning 0 sub-lists), all next point to tail */                                                                       \
-        slist->slh_head->field.sle_height = 1;                                                                                                                \
-        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                                           \
-            slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                                                      \
-        slist->slh_head->field.sle_prev = NULL;                                                                                                               \
-                                                                                                                                                              \
-        /* Initial height at tail is also 0 and all next point to tail */                                                                                     \
-        slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                                                \
-        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                                           \
-            slist->slh_tail->field.sle_levels[i].next = NULL;                                                                                                 \
-        slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                    \
-        slist->slh_prng_state = ((unsigned int)time(NULL) ^ getpid());                                                                                        \
+                                                                                                                                         \
+        /* Initial height at head is 0 (meaning 0 sub-lists), all next point to tail */                                                  \
+        slist->slh_head->field.sle_height = 1;                                                                                           \
+        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                      \
+            slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                                 \
+        slist->slh_head->field.sle_prev = NULL;                                                                                          \
+                                                                                                                                         \
+        /* Initial height at tail is also 0 and all next point to tail */                                                                \
+        slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                           \
+        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                      \
+            slist->slh_tail->field.sle_levels[i].next = NULL;                                                                            \
+        slist->slh_tail->field.sle_prev = slist->slh_head;                                                                               \
+        slist->slh_prng_state = ((unsigned int)time(NULL) ^ getpid());                                                                   \
     fail:;                                                                                                                               \
         return rc;                                                                                                                       \
     }                                                                                                                                    \
@@ -635,11 +635,21 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
      */                                                                                                                                  \
     static void __skip_rebalance_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                  \
     {                                                                                                                                    \
-        size_t i, lvl, u_hits, hits_CHu = 0, hits_CHv = 0, delta_height;                                                                 \
+        size_t i, j, lvl, u_hits, hits_CHu = 0, hits_CHv = 0, delta_height;                                                              \
         size_t k_threshold, m_total_hits, expected_height;                                                                               \
         double asc_cond, dsc_cond;                                                                                                       \
-        __skiplist_path_##decl##_t *p, path_u, path_v;                                                                                   \
+        __skiplist_path_##decl##_t path_u, path_v;                                                                                       \
         decl##_node_t *node;                                                                                                             \
+                                                                                                                                         \
+        if (len > 2) {                                                                                                                   \
+            for (i = 1, j = 1; path[i].node; i++) {                                                                                      \
+                if (path[i].node == path[i - 1].node) {                                                                                  \
+                    len--;                                                                                                               \
+                    continue;                                                                                                            \
+                }                                                                                                                        \
+                path[j++] = path[i];                                                                                                     \
+            }                                                                                                                            \
+        }                                                                                                                                \
                                                                                                                                          \
         /* Total hits, `k`, across all nodes. */                                                                                         \
         m_total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                        \
@@ -666,13 +676,12 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
          *  - path[len] is where the locate() terminated, just before path[0]                                                            \
          *    if there was a match                                                                                                       \
          */                                                                                                                              \
-        p = &path[0];                                                                                                                    \
-        for (i = 0; i < len; i++, p++) {                                                                                                 \
+        for (i = 0; i < len; i++) {                                                                                                      \
             hits_CHu = hits_CHv = 0;                                                                                                     \
-            path_u = *p;                                                                                                                 \
+            path_u = path[i];                                                                                                            \
             if (path_u.node == slist->slh_head || path_u.node == slist->slh_tail)                                                        \
                 continue;                                                                                                                \
-            path_v = *(p + 1);                                                                                                           \
+            path_v = path[i + 1];                                                                                                        \
                                                                                                                                          \
             /* Evaluate the subtree 'u'. */                                                                                              \
             __SKIP_SUBTREE_CHux(decl, field, slist, path_u.node, path_u.in)                                                              \
@@ -680,7 +689,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
                 hits_CHu += elm->field.sle_levels[0].hits;                                                                               \
             }                                                                                                                            \
             /* Evaluate the subtree 'v' at the same level. */                                                                            \
-            __SKIP_SUBTREE_CHux(decl, field, slist, (*(p + 1)).node->field.sle_levels[path_u.in].next, path_u.in)                        \
+            __SKIP_SUBTREE_CHux(decl, field, slist, path[i + 1].node->field.sle_levels[path_u.in].next, path_u.in)                       \
             {                                                                                                                            \
                 hits_CHv += elm->field.sle_levels[0].hits;                                                                               \
             }                                                                                                                            \
@@ -693,13 +702,14 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
              *     3) adjust hits, and...                                                                                                \
              *     4) lower the path[i]'s node height by 1                                                                               \
              */                                                                                                                          \
-            delta_height = k_threshold - path_u.node->field.sle_height;                                                                                       \
-            dsc_cond = m_total_hits / pow(2.0, delta_height);                                                                                                 \
-            u_hits = hits_CHu + hits_CHv;                                                                                                                     \
-            printf("decent: u_hits = %ld <= dsc_cond = %f ? %s\n", u_hits, dsc_cond, u_hits <= dsc_cond && path_u.node->field.sle_height > 0 ? "YES" : "NO"); \
-            if (u_hits <= dsc_cond && path_u.node->field.sle_height > 0) {                                                                                    \
-                lvl = path_u.node->field.sle_height;                                                                                                          \
-                /* 1) go backwards along path from where we are until head */                                                                                 \
+            delta_height = k_threshold - path_u.node->field.sle_height;                                                                  \
+            dsc_cond = m_total_hits / pow(2.0, delta_height);                                                                            \
+            u_hits = hits_CHu + hits_CHv;                                                                                                \
+            __skip_diag("decent: u_hits = %ld <= dsc_cond = %f ? %s\n", u_hits, dsc_cond,                                                \
+                u_hits <= dsc_cond && path_u.node->field.sle_height > 0 ? "YES" : "NO");                                                 \
+            if (u_hits <= dsc_cond && path_u.node->field.sle_height > 0) {                                                               \
+                lvl = path_u.node->field.sle_height;                                                                                     \
+                /* 1) go backwards along path from where we are until head */                                                            \
                 node = path_u.node;                                                                                                      \
                 do {                                                                                                                     \
                     node = node->field.sle_prev;                                                                                         \
@@ -721,22 +731,22 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
              *     2) add a level, and ...                                                                                               \
              *     3) set its hits to the prev node at intersection height                                                               \
              *     4) set prev node hits to 0 and forward to this new level                                                              \
-             */                                                                                                                                               \
-            /* 1) check ascent condition */                                                                                                                   \
-            asc_cond = m_total_hits / pow(2.0, delta_height - 1);                                                                                             \
-            printf("ascent: P(u) = %ld > asc_cond = %f ? %s\n", path_u.pu, asc_cond,                                                                          \
-                path_u.pu > asc_cond && path_u.node->field.sle_height < SKIPLIST_MAX_HEIGHT - 1 ? "YES" : "NO");                                              \
-            if (path_u.pu > asc_cond && path_u.node->field.sle_height < SKIPLIST_MAX_HEIGHT - 1) {                                                            \
-                if (path_u.node->field.sle_height + 1 > path_v.node->field.sle_height) {                                                                      \
-                    continue;                                                                                                                                 \
-                }                                                                                                                                             \
-                lvl = ++path_u.node->field.sle_height;                                                                                                        \
-                /* Don't adjust hits when the previous node on the path is the head. */                                                                       \
-                if (path_v.node != slist->slh_head) {                                                                                                         \
-                    path_u.node->field.sle_levels[lvl].hits = path_v.node->field.sle_levels[lvl].hits;                                                        \
-                    path_v.node->field.sle_levels[lvl].hits = 0;                                                                                              \
-                }                                                                                                                                             \
-                path_u.node->field.sle_levels[lvl].next = path_v.node->field.sle_levels[lvl].next;                                                            \
+             */                                                                                                                          \
+            /* 1) check ascent condition */                                                                                              \
+            asc_cond = m_total_hits / pow(2.0, delta_height - 1);                                                                        \
+            __skip_diag("ascent: P(u) = %ld > asc_cond = %f ? %s\n", path_u.pu, asc_cond,                                                \
+                path_u.pu > asc_cond && path_u.node->field.sle_height < SKIPLIST_MAX_HEIGHT - 1 ? "YES" : "NO");                         \
+            if (path_u.pu > asc_cond && path_u.node->field.sle_height < SKIPLIST_MAX_HEIGHT - 1) {                                       \
+                if (path_u.node->field.sle_height + 1 > path_v.node->field.sle_height) {                                                 \
+                    continue;                                                                                                            \
+                }                                                                                                                        \
+                lvl = ++path_u.node->field.sle_height;                                                                                   \
+                /* Don't adjust hits when the previous node on the path is the head. */                                                  \
+                if (path_v.node != slist->slh_head) {                                                                                    \
+                    path_u.node->field.sle_levels[lvl].hits = path_v.node->field.sle_levels[lvl].hits;                                   \
+                    path_v.node->field.sle_levels[lvl].hits = 0;                                                                         \
+                }                                                                                                                        \
+                path_u.node->field.sle_levels[lvl].next = path_v.node->field.sle_levels[lvl].next;                                       \
                 path_v.node->field.sle_levels[lvl].next = path_u.node;                                                                   \
             }                                                                                                                            \
         }                                                                                                                                \
@@ -773,7 +783,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             }                                                                                                                            \
             cur->node = elm;                                                                                                             \
             cur->node->field.sle_levels[cur->in].hits += i ? 1 : 0;                                                                      \
-            cur->pu += cur->node->field.sle_levels[0].hits;                                                                              \
+            cur->pu += cur->node->field.sle_levels[cur->in].hits;                                                                        \
             len++;                                                                                                                       \
         } while (i--);                                                                                                                   \
         elm = elm->field.sle_levels[0].next;                                                                                             \
@@ -1161,13 +1171,13 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
             slist->slh_fns.free_entry(node);                                                                                             \
             free(node);                                                                                                                  \
                                                                                                                                          \
-            /* Reduce the height of the head/tail nodes. */                                                                                                   \
-            for (i = 0; slist->slh_head->field.sle_levels[i].next != slist->slh_tail && i < SKIPLIST_MAX_HEIGHT; i++)                                         \
-                ;                                                                                                                                             \
-            /* TODO: GSB: reducing the height maintain the ratio of hits to height (hits = ⌊log2(total_hits)⌋) */                                         \
-            slist->slh_head->field.sle_levels[i].hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                            \
-            slist->slh_head->field.sle_height = slist->slh_tail->field.sle_height = i;                                                                        \
-                                                                                                                                                              \
+            /* Reduce the height of the head/tail nodes. */                                                                              \
+            for (i = 0; slist->slh_head->field.sle_levels[i].next != slist->slh_tail && i < SKIPLIST_MAX_HEIGHT; i++)                    \
+                ;                                                                                                                        \
+            /* Reduce the height to maintain the ratio of hits to height (hits = ⌊log2(total_hits)⌋) */                              \
+            slist->slh_head->field.sle_levels[i].hits = pow(2, i);                                                                       \
+            slist->slh_head->field.sle_height = slist->slh_tail->field.sle_height = i;                                                   \
+                                                                                                                                         \
             slist->slh_length--;                                                                                                         \
             __skip_adjust_hit_counts_##decl(slist);                                                                                      \
         }                                                                                                                                \

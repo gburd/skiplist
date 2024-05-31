@@ -16,7 +16,7 @@
 #define VALIDATE
 // define SNAPSHOTS
 // define TODO_RESTORE_SNAPSHOTS
-// define STABLE_SEED
+#define STABLE_SEED
 #define DOT
 
 #ifdef DOT
