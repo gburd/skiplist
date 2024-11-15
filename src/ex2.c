@@ -190,8 +190,9 @@ static uint32_t
 xorshift32()
 {
     uint32_t x = __xorshift32_state;
-    if (x == 0)
+    if (x == 0) {
         x = 123456789;
+    }
     x ^= x << 13;
     x ^= x >> 17;
     x ^= x << 5;
@@ -215,8 +216,9 @@ static char *
 to_lower(char *str)
 {
     char *p = str;
-    for (; *p; ++p)
+    for (; *p; ++p) {
         *p = (char)(*p >= 'A' && *p <= 'Z' ? *p | 0x60 : *p);
+    }
     return str;
 }
 
@@ -225,8 +227,9 @@ static char *
 to_upper(char *str)
 {
     char *p = str;
-    for (; *p; ++p)
+    for (; *p; ++p) {
         *p = (char)(*p >= 'a' && *p <= 'z' ? *p & ~0x20 : *p);
+    }
     return str;
 }
 
@@ -308,12 +311,14 @@ main()
 
     /* Allocate and initialize a Skiplist. */
     ex_t *list = (ex_t *)malloc(sizeof(ex_t));
-    if (list == NULL)
+    if (list == NULL) {
         return ENOMEM;
+    }
 
     rc = api_skip_init_ex(list);
-    if (rc)
+    if (rc) {
         return rc;
+    }
 
         /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
 #ifdef STABLE_SEED
@@ -325,8 +330,9 @@ main()
 #ifdef DOT
     api_skip_dot_ex(of, list, gen++, "init", sprintf_ex_node);
 #endif
-    if (api_skip_get_ex(list, 0) != NULL)
+    if (api_skip_get_ex(list, 0) != NULL) {
         perror("found a non-existent item!");
+    }
     api_skip_del_ex(list, 0);
     CHECK;
 
@@ -339,8 +345,9 @@ main()
 #endif
     int amt = TEST_ARRAY_SIZE, asz = (amt * 2) + 1;
     int array[(TEST_ARRAY_SIZE * 2) + 1];
-    for (j = 0, i = -amt; i <= amt; i++, j++)
+    for (j = 0, i = -amt; i <= amt; i++, j++) {
         array[j] = i;
+    }
     shuffle(array, asz);
 
     for (i = 0; i < asz; i++) {
@@ -411,12 +418,14 @@ main()
     sprintf(msg, "deleted key: %d, value: %s", 0, numeral);
     api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
 #endif
-    if (api_skip_get_ex(list, 0) != NULL)
+    if (api_skip_get_ex(list, 0) != NULL) {
         perror("found a deleted item!");
+    }
     api_skip_del_ex(list, 0);
     CHECK;
-    if (api_skip_get_ex(list, 0) != NULL)
+    if (api_skip_get_ex(list, 0) != NULL) {
         perror("found a deleted item!");
+    }
     int key = TEST_ARRAY_SIZE + 1;
     api_skip_del_ex(list, key);
     CHECK;

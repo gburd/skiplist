@@ -113,6 +113,7 @@ SKIPLIST_DECL(
  * happen when `a` or `b` are references to the head or tail of the
  * list or when `a == b`.  In those cases the comparison function
  * returns before using the code in your block, don't panic. :)
+ */
 int
 __ex_key_compare(ex_t *list, ex_node_t *a, ex_node_t *b, void *aux)
 {
@@ -124,7 +125,6 @@ __ex_key_compare(ex_t *list, ex_node_t *a, ex_node_t *b, void *aux)
         return 1;
     return 0;
 }
-*/
 
 /*
  * Optional: Getters and Setters
@@ -238,14 +238,18 @@ typedef struct {
    is where we store the total hits, or "m". */
 #define splay_list_m(m) list->slh_head->entries.sle_levels[list->slh_head->entries.sle_height].hits
 
+#define COMPQUIET(n, v) (n) = (v)
+
 int
-main()
+main(int argc, char *argv[], char *envp[])
 {
+    COMPQUIET(argc, 1);
+    COMPQUIET(argv, NULL);
+    COMPQUIET(envp, NULL);
     int rc;
     char *numeral;
 #ifdef DOT
-    char msg[1024];
-    memset(msg, 0, 1024);
+    char msg[1024] = {0};
 #endif
 #ifdef TODO_RESTORE_SNAPSHOTS
     size_t n_snaps = 0;
@@ -262,12 +266,14 @@ main()
 
     /* Allocate and initialize a Skiplist. */
     ex_t *list = (ex_t *)malloc(sizeof(ex_t));
-    if (list == NULL)
+    if (list == NULL) {
         return ENOMEM;
+    }
 
     rc = api_skip_init_ex(list);
-    if (rc)
+    if (rc) {
         return rc;
+    }
 
     /* Set the PRNG state to a known constant for reproducible generation, easing debugging. */
     list->slh_prng_state = 12;
@@ -283,8 +289,9 @@ main()
 
     for (int i = 1; i < 8; i++) {
         numeral = int_to_roman_numeral(i);
-        if ((rc = api_skip_put_ex(list, i, numeral)))
+        if ((rc = api_skip_put_ex(list, i, numeral))) {
             perror("put failed");
+        }
 #ifdef DOT
         sprintf(msg, "put key: %d value: %s", i, numeral);
         api_skip_dot_ex(of, list, gen++, msg, sprintf_ex_node);
@@ -368,8 +375,9 @@ main()
     printf("m = %ld; ", splay_list_m(list));
     printf("(⌊log2(m)⌋) = %d\n", floor_log2(splay_list_m(list)));
 
-    if (!(rc = api_skip_contains_ex(list, 5)))
+    if (!(rc = api_skip_contains_ex(list, 5))) {
         perror("missing element 5");
+    }
 
 #ifdef DOT
     sprintf(msg, "contains(5)");
