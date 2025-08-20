@@ -59,7 +59,7 @@
  * apply these macros multiple times safely, once for each list type you need.
  *
  * A skip-list is a sorted list with O(log(n)) on average for most operations.
- * It is a probabilistic datastructure, meaning that it does not guarantee
+ * It is a probabilistic data structure, meaning that it does not guarantee
  * O(log(n)), but it has been shown to approximate it over time.  This
  * implementation includes the re-balancing techniques that improve on that
  * approximation using an adaptive technique called "splay-list". It is similar
@@ -206,7 +206,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
 
 /*
  * Every Skiplist node has to have an additional section of data used to manage
- * nodes in the list. The rest of the datastructure is defined by the use case.
+ * nodes in the list. The rest of the data structure is defined by the use case.
  * This housekeeping portion is the SKIPLIST_ENTRY, see below.  It maintains the
  * array of forward pointers to nodes and has a height, this height is a
  * zero-based count of levels, so a height of `0` means one (1) level and a
@@ -420,7 +420,7 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     {                                                                                                                                    \
         decl##_node_t *n;                                                                                                                \
         /* Calculate the size of the struct sle within decl##_node_t, multiply                                                           \
-           by array size. (16/24 bytes on 32/64 bit systems) */                                                                          \
+           by array size. (16/24 bytes on 32/64-bit systems) */                                                                          \
         size_t sle_arr_sz = sizeof(struct __skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT;                                              \
         n = (decl##_node_t *)calloc(1, sizeof(decl##_node_t) + sle_arr_sz);                                                              \
         if (n == NULL)                                                                                                                   \
@@ -884,8 +884,8 @@ void __attribute__((format(printf, 4, 5))) __skip_diag_(const char *file, int li
     /**                                                                                                                                  \
      * -- skip_position_eq_                                                                                                              \
      *                                                                                                                                   \
-     * Find a node that matches the node `n`.  This differs from the locate()                                                            \
-     * API in that it does not return the path to the node, only the match.                                                              \
+     * Find a node that matches the node `n`.  This differs from the function                                                            \
+     * locate() in that it does not return the path to the node, only the match.                                                         \
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_eq_##decl(decl##_t *slist, decl##_node_t *query)                                                \
     {                                                                                                                                    \

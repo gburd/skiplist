@@ -18,7 +18,7 @@ how this works in practice.
 
 ## Overview
 A skiplist is a sorted list with O(log(n)) on average for most operations.  It
-is a probabilistic datastructure, meaning that it does not guarantee O(log(n))
+is a probabilistic data structure, meaning that it does not guarantee O(log(n))
 it approximates it over time.  This implementation includes improves the
 probability by integrating the splay list algorithm for re-balancing trading off
 a bit of computational overhead and code complexity for a nearly always optimal,

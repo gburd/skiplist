@@ -387,8 +387,8 @@ main()
 #endif
         CHECK;
 
-        for (size_t j = 0, k = api_skip_length_ex(list); j < k; j++) {
-            int n = xorshift32() % api_skip_length_ex(list);
+        for (size_t l = 0, m = api_skip_length_ex(list); l < m; l++) {
+            const int n = xorshift32() % api_skip_length_ex(list);
             api_skip_contains_ex(list, array[n]);
             CHECK;
         }
