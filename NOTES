@@ -1,0 +1,157 @@
+                if (path_u.node->field.sle_height + 1 == slist->slh_head->field.sle_height && slist->slh_head->field.sle_height + 1 < SKIPLIST_MAX_HEIGHT) { \
+                    slist->slh_head->field.sle_height++;                                                                                                     \
+                    slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].next = slist->slh_tail;                                             \
+                    slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits =                                                              \
+                        slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height - 1].hits;                                                       \
+                    slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height - 1].hits = 0;                                                       \
+                    slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                                   \
+                }                                                                                                                                            \
+
+
+
+
+
+
+
+
+\
+        /* De-duplicate and expand the path. The path contains each step down a level, but not every                                                          \
+           step forward only the last step.  It does that because that bounds the size of the array to                                                        \
+           SKIPLIST_SIZE_MAX avoiding an alloc/free.  We need to traverse every step, so we re-create                                                         \
+           the path here. */                                                                                                                                  \
+        if (len > 2) {                                                                                                                                        \
+            for (i = 1, j = 1; path[i].node; i++) {                                                                                                           \
+                if (path[i].node == path[i - 1].node)                                                                                                         \
+                    continue;                                                                                                                                 \
+                node = path[i - 1].node->field.sle_levels[path[i - 1].in].next;                                                                               \
+                while (node != path[i].node) {                                                                                                                \
+                    for (size_t k = len + 1; k > i; path[k] = path[k - 1], k--)                                                                               \
+                        ;                                                                                                                                     \
+                    len++;                                                                                                                                    \
+                    path[i].pu -= path[i - 1].node->field.sle_levels[path[i].in].hits;                                                                        \
+                    path[i].node = node;                                                                                                                      \
+                }                                                                                                                                             \
+                path[j++] = path[i];                                                                                                                          \
+                j++;                                                                                                                                          \
+            }                                                                                                                                                 \
+            len = j;                                                                                                                                          \
+            path[j].node = slist->slh_tail;                                                                                                                   \
+            path[j].pu = 0;                                                                                                                                   \
+            path[j].in = 0;                                                                                                                                   \
+        }                                                                                                                                                     \
+
+
+
+
+        next:;                                                                                                                                                \
+            if (path_v.node == path[i + 1].node) {                                                                                                            \
+                i++;                                                                                                                                          \
+            } else {                                                                                                                                          \
+                path[i].pu = path_v.pu;                                                                                                                       \
+                path[i].node = path_v.node;                                                                                                                   \
+            }                                                                                                                                                 \
+        }                                                                                                                                                     \
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+if (path_v.node->field.sle_levels[path_u.in].next != path_u.node) {                                                          \
+                path_v.node = path_v.node->field.sle_levels[path_u.in].next;                                                             \
+                path_v.pu = 0;                                                                                                           \
+            } else {                                                                                                                     \
+                i++;                                                                                                                     \
+                p++;                                                                                                                     \
+            }                                                                                                                            \
+
+
+->node->field.sle_levels[path_u.in].next)
+
+
+        if (m_total_hits > 0) {                                                                                                                           \
+            expected_height = floor(log(m_total_hits) / log(2));                                                                                          \
+            if (expected_height > slist->slh_head->field.sle_height && expected_height < SKIPLIST_MAX_HEIGHT - 1) {                                       \
+                slist->slh_head->field.sle_height++;                                                                                                      \
+                slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].next = slist->slh_tail;                                              \
+                slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                                    \
+            }                                                                                                                                             \
+        }                                                                                                                                                 \
+
+
+
+        if (path_u.pu > asc_cond && path_u.node->entries.sle_height < 64 - 1) {
+            lvl = ++path_u.node->entries.sle_height;
+            if (path_u.node->entries.sle_prev != slist->slh_head) {
+                path_u.node->entries.sle_levels[lvl].hits = path_v.node->entries.sle_levels[lvl].hits;
+                path_v.node->entries.sle_levels[lvl].hits = 0;
+            }
+            if (path_v.node->entries.sle_height >= path_v.in) {
+                path_u.node->entries.sle_levels[lvl].next = path_v.node->entries.sle_levels[lvl].next;
+                path_v.node->entries.sle_levels[lvl].next = path_u.node;
+            } else {
+                path_u.node->entries.sle_levels[lvl].next = slist->slh_tail;
+                slist->slh_head->entries.sle_levels[lvl].next = path_u.node;
+            }
+        }
+
+
+
+                                                                                                                                         \
+            if (path_u.pu > asc_cond && path_u.node->field.sle_height < SKIPLIST_MAX_HEIGHT - 1) {                                       \
+                /* 2) increase height by one */                                                                                          \
+                lvl = ++path_u.node->field.sle_height;                                                                                   \
+                /* 3) update hit counter */                                                                                              \
+                path_u.node->field.sle_levels[lvl].hits = path_v.node->field.sle_levels[lvl].hits;                                       \
+                /* 4) reset the prev node hits to 0 */                                                                                   \
+                path_v.node->field.sle_levels[lvl].hits = 0;                                                                             \
+                /* 5) update forward pointers in the level */                                                                            \
+                path_u.node->field.sle_levels[lvl].next = path_v.node->field.sle_levels[lvl].next;                                       \
+                path_v.node->field.sle_levels[lvl].next = path_u.node;                                                                   \
+            }                                                                                                                            \
+
+
+
+
+
+                lvl = path_v.node->field.sle_height + 1;                                                                                 \
+                int j = i;                                                                                                             \
+                do {                                                                                                                     \
+                    /* 1) adjust hits */                                                                                                 \
+                    path[j].node->field.sle_levels[lvl].hits += 1;                                                                          \
+                    /* 2) adjust forward pointers */                                                                                     \
+                    path[j]node->field.sle_levels[lvl].next = path_u.node->field.sle_levels[lvl].next;                                     \
+                    p++;                                                                                                                 \
+                } while (j++ < len);                                                                         \
+                /* 3) reduce height by one */                                                                                            \
+                path_u.node->field.sle_height--;                                                                                         \
+
+
+
+                if (path[i - 1].node->field.sle_prev != slist->slh_head) {                                                             \
+                    /* 1) go backwards along path from where we are until head */                                                      \
+                    j = i;                                                                                                             \
+                    cur_hits = path[j].node->field.sle_levels[path[j].in].hits;                                                        \
+                    do {                                                                                                               \
+                        /* 2) propagate hits */                                                                                        \
+                        prev_hits = path[j - 1].node->field.sle_levels[path[j - 1].in].hits;                                           \
+                        path[j - 1].node->field.sle_levels[path[j - 1].in].hits += cur_hits;                                           \
+                        cur_hits = prev_hits;                                                                                          \
+                        /* 3) adjust forward pointers */                                                                               \
+                        if (path[j - 1].node->field.sle_levels[j].next == path[i].node)                                                \
+                            path[j - 1].node->field.sle_levels[j].next = path[i].node->field.sle_levels[j].next;                       \
+                    } while (j-- > 1);                                                                                                 \
+                    /* 4) reduce height by one */                                                                                      \
+                    path[i].node->field.sle_height--;                                                                                  \
+                }                                                                                                                      \

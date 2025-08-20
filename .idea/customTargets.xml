@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CLionExternalBuildManager">
+    <target id="81cdda30-289f-4224-a58d-07d7546ade5e" name="mls" defaultType="MAKE">
+      <configuration id="612c5439-be94-45a8-b17a-6eb1da8d8fd2" name="mls">
+        <build type="MAKE">
+          <make targetName="examples/mls" />
+        </build>
+        <clean type="MAKE">
+          <make targetName="clean" />
+        </clean>
+      </configuration>
+    </target>
+  </component>
+</project>
