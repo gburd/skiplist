@@ -5,12 +5,12 @@ SHARED_LIB =
 
 # https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
 #CFLAGS = -Wall -Wextra -Wpedantic -Of -std=c99 -Iinclude/ -fPIC
-CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-#CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined -fsanitize-address-use-after-scope -std=c99 -Iinclude/ -fPIC
+#CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
+CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined -fsanitize-address-use-after-scope -std=c99 -Iinclude/ -fPIC
 #CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=all -fhardened -std=c99 -Iinclude/ -fPIC
 #env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls
 
-TEST_FLAGS = -Itests/
+TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
@@ -64,10 +64,16 @@ examples/%.o: examples/%.c
 examples/mls.c: examples/ex1.c
 	$(CC) $(CFLAGS) -C -E examples/ex1.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
 
+examples/ex1_sl.c: examples/ex1.c
+	$(CC) $(CFLAGS) -C -E examples/ex2.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/ex1_sl.c
+
 examples/ex2_sl.c: examples/ex2.c
 	$(CC) $(CFLAGS) -C -E examples/ex2.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/ex2_sl.c
 
 examples/mls: examples/mls.o $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
+
+examples/ex1_sl: examples/ex1_sl.o $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 examples/ex2_sl: examples/ex2_sl.o $(STATIC_LIB)
@@ -83,3 +89,4 @@ examples/ex2_sl: examples/ex2_sl.o $(STATIC_LIB)
 # workflow:
 # clear; rm examples/mls.c;  make examples/mls && env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls #&& dot -Tpdf /tmp/ex1.dot -o /tmp/ex1.pdf
 # cp include/sl.h /tmp/foo; clang-format -i include/sl.h
+# clear; rm ./examples/ex2_sl ./examples/ex2_sl.c ex2_sl.o; make examples/ex2_sl && env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/ex2_sl && dot -Tpdf /tmp/ex2.dot -o /tmp/ex2.pdf

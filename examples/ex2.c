@@ -495,7 +495,7 @@ main()
 
     for (size_t i = 0; i < 1000000; i++) {
         for (size_t j = 0, k = api_skip_length_ex(list); j < k; j++) {
-            int n = xorshift32() % api_skip_length_ex(list);
+            int n = xorshift32() % (api_skip_length_ex(list) - 1);
             api_skip_contains_ex(list, array[n]);
             CHECK;
         }
