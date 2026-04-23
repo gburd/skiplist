@@ -6,17 +6,17 @@ SHARED_LIB =
 # https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
 #CFLAGS = -Wall -Wextra -Wpedantic -Of -std=c99 -Iinclude/ -fPIC
 #CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined -fsanitize-address-use-after-scope -std=c99 -Iinclude/ -fPIC
+CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined -fsanitize-address-use-after-scope -std=c11 -Iinclude/ -fPIC
 #CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=all -fhardened -std=c99 -Iinclude/ -fPIC
 #env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls
 
-TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC
+TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC -DSKIPLIST_SPLAY_REBALANCE
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
 EXAMPLES = examples/ex1 examples/ex2
 
-.PHONY: all shared static clean test examples mls
+.PHONY: all shared static clean test examples mls coverage bench
 
 all: static shared
 
@@ -41,13 +41,34 @@ test: $(TESTS)
 tests/test: $(TEST_OBJS) $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
+COV_CFLAGS = -Wall -Wextra -Wpedantic -O0 -g --coverage -std=c11 -Iinclude/ -fPIC
+BENCH_CFLAGS = -Wall -Wextra -Wpedantic -O2 -std=c11 -Iinclude/ -fPIC -DNDEBUG
+
+coverage:
+	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
+	rm -f tests/*.gcda tests/*.gcno
+	$(CC) $(COV_CFLAGS) -c -o tests/test_cov.o tests/test.c
+	$(CC) $(COV_CFLAGS) -c -o tests/munit_cov.o tests/munit.c
+	$(CC) tests/test_cov.o tests/munit_cov.o -o tests/test_cov $(COV_CFLAGS) $(TEST_FLAGS) -lm -pthread
+	./tests/test_cov
+	gcov -r -b tests/test_cov.gcda 2>/dev/null | grep -A1 "^File.*sl\.h"
+
+bench: bench/bench
+	./bench/bench
+
+bench/bench: bench/bench.c include/sl.h
+	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm
+
 clean:
-	rm -f $(OBJS) munit.o test.o
+	rm -f $(OBJS) $(TEST_OBJS)
 	rm -f examples/mls.c
 	rm -f $(STATIC_LIB)
 	rm -f $(SHARED_LIB)
 	rm -f $(TESTS)
 	rm -f $(EXAMPLES)
+	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
+	rm -f tests/*.gcda tests/*.gcno *.gcov
+	rm -f bench/bench
 
 format:
 	clang-format -i include/*.h src/*.c tests/*.c tests/*.h examples/*.c
@@ -57,6 +78,12 @@ format:
 
 tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
+
+examples/ex1: examples/ex1.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+
+examples/ex2: examples/ex2.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
 
 examples/%.o: examples/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^

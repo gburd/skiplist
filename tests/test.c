@@ -488,6 +488,197 @@ test_memory_management(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Regression: skip_tail_ with 0, 1, 2 elements */
+static MunitResult
+test_tail_regression(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Empty list: tail should be NULL */
+    assert_null(api_skip_tail_test(list));
+
+    /* Single element: tail should be that element */
+    test_node_t *node1;
+    api_skip_alloc_node_test(&node1);
+    node1->key = 10;
+    node1->value = make_test_value(10);
+    api_skip_insert_test(list, node1);
+
+    test_node_t *tail = api_skip_tail_test(list);
+    assert_not_null(tail);
+    assert_int(tail->key, ==, 10);
+
+    /* Two elements: tail should be the largest */
+    test_node_t *node2;
+    api_skip_alloc_node_test(&node2);
+    node2->key = 20;
+    node2->value = make_test_value(20);
+    api_skip_insert_test(list, node2);
+
+    tail = api_skip_tail_test(list);
+    assert_not_null(tail);
+    assert_int(tail->key, ==, 20);
+
+    /* Head should be the smallest */
+    test_node_t *head = api_skip_head_test(list);
+    assert_not_null(head);
+    assert_int(head->key, ==, 10);
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Regression: head height must stay >= 1 after deleting last element */
+static MunitResult
+test_delete_last_element(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Insert then delete a single element */
+    char *value = make_test_value(42);
+    int rc = api_skip_put_test(list, 42, value);
+    assert_int(rc, ==, 0);
+    assert_int(api_skip_length_test(list), ==, 1);
+
+    rc = api_skip_del_test(list, 42);
+    assert_int(rc, ==, 0);
+    assert_int(api_skip_length_test(list), ==, 0);
+
+    /* List should be usable after deleting last element */
+    assert_null(api_skip_head_test(list));
+    assert_null(api_skip_tail_test(list));
+    assert_false(api_skip_contains_test(list, 42));
+
+    /* Should be able to insert again */
+    char *value2 = make_test_value(99);
+    rc = api_skip_put_test(list, 99, value2);
+    assert_int(rc, ==, 0);
+    assert_int(api_skip_length_test(list), ==, 1);
+    assert_true(api_skip_contains_test(list, 99));
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test position variants (gte, gt, lte, lt) */
+static MunitResult
+test_position_variants(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Insert 10, 20, 30, 40, 50 */
+    for (int i = 1; i <= 5; i++) {
+        test_node_t *node;
+        api_skip_alloc_node_test(&node);
+        node->key = i * 10;
+        node->value = make_test_value(i * 10);
+        api_skip_insert_test(list, node);
+    }
+
+    /* GTE: find >= 25 should return 30 */
+    test_node_t *found = api_skip_pos_test(list, SKIP_GTE, 25);
+    assert_not_null(found);
+    assert_int(found->key, ==, 30);
+
+    /* GTE: find >= 30 should return 30 */
+    found = api_skip_pos_test(list, SKIP_GTE, 30);
+    assert_not_null(found);
+    assert_int(found->key, ==, 30);
+
+    /* GT: find > 30 should return 40 */
+    found = api_skip_pos_test(list, SKIP_GT, 30);
+    assert_not_null(found);
+    assert_int(found->key, ==, 40);
+
+    /* LTE: find <= 25 should return 20 */
+    found = api_skip_pos_test(list, SKIP_LTE, 25);
+    assert_not_null(found);
+    assert_int(found->key, ==, 20);
+
+    /* LTE: find <= 30 should return 30 */
+    found = api_skip_pos_test(list, SKIP_LTE, 30);
+    assert_not_null(found);
+    assert_int(found->key, ==, 30);
+
+    /* LT: find < 30 should return 20 */
+    found = api_skip_pos_test(list, SKIP_LT, 30);
+    assert_not_null(found);
+    assert_int(found->key, ==, 20);
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Stress test: insert 1000, remove odds, verify evens */
+static MunitResult
+test_stress_insert_remove(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Insert 1000 elements */
+    for (int i = 0; i < 1000; i++) {
+        char *value = make_test_value(i);
+        api_skip_put_test(list, i, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 1000);
+
+    /* Remove odd elements */
+    for (int i = 1; i < 1000; i += 2) {
+        api_skip_del_test(list, i);
+    }
+    assert_int(api_skip_length_test(list), ==, 500);
+
+    /* Verify even elements remain */
+    for (int i = 0; i < 1000; i += 2) {
+        assert_true(api_skip_contains_test(list, i));
+    }
+
+    /* Verify odd elements are gone */
+    for (int i = 1; i < 1000; i += 2) {
+        assert_false(api_skip_contains_test(list, i));
+    }
+
+    /* Verify ordering */
+    test_node_t *current = api_skip_head_test(list);
+    int prev_key = -1;
+    int count = 0;
+    while (current) {
+        assert_int(current->key, >, prev_key);
+        assert_int(current->key % 2, ==, 0);
+        prev_key = current->key;
+        count++;
+        current = api_skip_next_node_test(list, current);
+    }
+    assert_int(count, ==, 500);
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -499,6 +690,10 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/edge_cases", test_edge_cases, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/splay_behavior", test_splay_behavior, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/memory_management", test_memory_management, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/tail_regression", test_tail_regression, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/delete_last_element", test_delete_last_element, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/position_variants", test_position_variants, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/stress_insert_remove", test_stress_insert_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };

@@ -41,7 +41,9 @@
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
+#include <stdalign.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -254,6 +256,22 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     for (decl##_node_t *elm = node->field.sle_levels[level].next->field.sle_prev; elm != node->field.sle_prev; elm = elm->field.sle_prev)
 
 /*
+ * Splay rebalancing: opt-in via -DSKIPLIST_SPLAY_REBALANCE at compile time.
+ * When enabled, node heights adapt based on access frequency. When disabled
+ * (default), the skiplist uses standard randomized heights with no rebalancing.
+ */
+#ifdef SKIPLIST_SPLAY_REBALANCE
+#define SKIPLIST_SPLAY_IMPL(decl, slist, len, path) __fix_skip_rebalance_##decl(slist, len, path)
+#else
+#define SKIPLIST_SPLAY_IMPL(decl, slist, len, path) \
+    do {                                            \
+        (void)(slist);                              \
+        (void)(len);                                \
+        (void)(path);                               \
+    } while (0)
+#endif
+
+/*
  * Skiplist declarations and access methods.
  */
 #define SKIPLIST_DECL(decl, prefix, field, compare_entries_blk, free_entry_blk, update_entry_blk, archive_entry_blk, sizeof_entry_blk)   \
@@ -271,7 +289,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     struct decl {                                                                                                                        \
         size_t slh_length;                                                                                                               \
         void *slh_aux;                                                                                                                   \
-        int slh_prng_state;                                                                                                              \
+        uint32_t slh_prng_state;                                                                                                          \
         decl##_node_t *slh_head;                                                                                                         \
         decl##_node_t *slh_tail;                                                                                                         \
         struct {                                                                                                                         \
@@ -299,7 +317,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     } __skiplist_path_##decl##_t;                                                                                                        \
                                                                                                                                          \
     /* Xorshift algorithm for PRNG */                                                                                                    \
-    static uint32_t __##decl##_xorshift32(int *state)                                                                                    \
+    static uint32_t __##decl##_xorshift32(uint32_t *state)                                                                               \
     {                                                                                                                                    \
         uint32_t x = *state;                                                                                                             \
         if (x == 0)                                                                                                                      \
@@ -461,18 +479,20 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (rc)                                                                                                                          \
             goto fail;                                                                                                                   \
                                                                                                                                          \
-        /* Initial height at head is 0 (meaning 0 sub-lists), all next point to tail */                                                  \
+        /* Initial height is 1 (level 0 active). Initialize ALL levels so that                                                             \
+           head->next[i] = tail for every i. This ensures the delete shrinkage                                                            \
+           loop (which scans for head->next[i] != tail) terminates correctly. */                                                          \
         slist->slh_head->field.sle_height = 1;                                                                                           \
-        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                      \
+        for (i = 0; i < SKIPLIST_MAX_HEIGHT; i++)                                                                                        \
             slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                                 \
         slist->slh_head->field.sle_prev = NULL;                                                                                          \
                                                                                                                                          \
-        /* Initial height at tail is also 0 and all next point to tail */                                                                \
+        /* Tail: all next pointers are NULL */                                                                                           \
         slist->slh_tail->field.sle_height = slist->slh_head->field.sle_height;                                                           \
-        for (i = 0; i < slist->slh_head->field.sle_height + 1; i++)                                                                      \
+        for (i = 0; i < SKIPLIST_MAX_HEIGHT; i++)                                                                                        \
             slist->slh_tail->field.sle_levels[i].next = NULL;                                                                            \
         slist->slh_tail->field.sle_prev = slist->slh_head;                                                                               \
-        slist->slh_prng_state = ((unsigned int)time(NULL) ^ getpid());                                                                   \
+        slist->slh_prng_state = ((uint32_t)time(NULL) ^ (uint32_t)getpid());                                                              \
     fail:;                                                                                                                               \
         return rc;                                                                                                                       \
     }                                                                                                                                    \
@@ -532,7 +552,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     {                                                                                                                                    \
         if (slist == NULL)                                                                                                               \
             return NULL;                                                                                                                 \
-        return slist->slh_tail->field.sle_prev == slist->slh_head->field.sle_levels[0].next ? NULL : slist->slh_tail->field.sle_prev;    \
+        return slist->slh_tail->field.sle_prev == slist->slh_head ? NULL : slist->slh_tail->field.sle_prev;                              \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -616,16 +636,35 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
-     * -- __skip_adjust_hit_counts_ TODO                                                                                                 \
+     * -- __skip_adjust_hit_counts_                                                                                                      \
      *                                                                                                                                   \
-     * On delete we check the hit counts across all nodes and next[] pointers                                                            \
-     * and find the smallest counter then subtract that + 1 from all hit                                                                 \
-     * counters.                                                                                                                         \
-     *                                                                                                                                   \
+     * When the total hit count (stored at slh_head's top+1 level) exceeds                                                               \
+     * SIZE_MAX / 2, halve all hit counters across all nodes to prevent                                                                  \
+     * overflow while preserving relative ordering.                                                                                      \
      */                                                                                                                                  \
     static void __skip_adjust_hit_counts_##decl(decl##_t *slist)                                                                         \
     {                                                                                                                                    \
-        ((void)slist);                                                                                                                   \
+        size_t total_hits, lvl, nth;                                                                                                     \
+        decl##_node_t *node;                                                                                                             \
+                                                                                                                                         \
+        if (slist == NULL)                                                                                                               \
+            return;                                                                                                                      \
+                                                                                                                                         \
+        total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                          \
+        if (total_hits < SIZE_MAX / 2)                                                                                                   \
+            return;                                                                                                                      \
+                                                                                                                                         \
+        /* Halve all hit counters on every node at every level. */                                                                       \
+        node = slist->slh_head;                                                                                                          \
+        for (lvl = 0; lvl <= node->field.sle_height; lvl++)                                                                              \
+            node->field.sle_levels[lvl].hits = (node->field.sle_levels[lvl].hits + 1) / 2;                                               \
+                                                                                                                                         \
+        SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, nth)                                                                      \
+        {                                                                                                                                \
+            (void)nth;                                                                                                                   \
+            for (lvl = 0; lvl <= node->field.sle_height; lvl++)                                                                          \
+                node->field.sle_levels[lvl].hits = (node->field.sle_levels[lvl].hits + 1) / 2;                                           \
+        }                                                                                                                                \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -911,10 +950,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
                                                                                                                                          \
     static void __skip_rebalance_##decl(decl##_t *slist, size_t len, __skiplist_path_##decl##_t path[])                                  \
     {                                                                                                                                    \
-        __fix_skip_rebalance_##decl(slist, len, path);                                                                                   \
-        return;                                                                                                                          \
-        __man_skip_rebalance_##decl(slist, len, path);                                                                                   \
-        __llm_skip_rebalance_##decl(slist, len, path);                                                                                   \
+        SKIPLIST_SPLAY_IMPL(decl, slist, len, path);                                                                                     \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -971,7 +1007,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *new, int flags)                                                      \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         int rc = 0;                                                                                                                      \
         size_t i, len, loc = 0, current_height, new_height;                                                                              \
         decl##_node_t *node;                                                                                                             \
@@ -980,7 +1016,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (slist == NULL || new == NULL)                                                                                                \
             return ENOENT;                                                                                                               \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                  \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         len = __skip_locate_##decl(slist, new, path);                                                                                    \
@@ -993,17 +1029,38 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
                                                                                                                                          \
             current_height = slist->slh_head->field.sle_height - 1;                                                                      \
                                                                                                                                          \
-            /* Coin toss to determine level of this new node [0, current max height) */                                                  \
-            new_height = __skip_toss_##decl(slist, current_height);                                                                      \
+            /* Coin toss to determine level of this new node [0, current max height + 1).                                                \
+               Allow growth by one level beyond the current height so the list can                                                        \
+               organically grow taller as more elements are inserted. */                                                                  \
+            {                                                                                                                            \
+                /* Max node height is SKIPLIST_MAX_HEIGHT - 2 because head height = node_height + 1,                                     \
+                   and head uses level [sle_height] for hit counting, so head height must stay                                           \
+                   <= SKIPLIST_MAX_HEIGHT - 1 to keep sle_levels[sle_height] in bounds. */                                               \
+                size_t toss_max = current_height + 1;                                                                                    \
+                if (toss_max > SKIPLIST_MAX_HEIGHT - 2)                                                                                  \
+                    toss_max = SKIPLIST_MAX_HEIGHT - 2;                                                                                  \
+                new_height = __skip_toss_##decl(slist, toss_max);                                                                        \
+            }                                                                                                                            \
             new->field.sle_height = new_height;                                                                                          \
-            /* Trim the path to at most the new height for the new node. */                                                              \
+                                                                                                                                         \
+            /* If the new node is taller than the current list, grow the head/tail. */                                                   \
+            if (new_height > current_height) {                                                                                           \
+                for (i = current_height + 1; i <= new_height; i++) {                                                                     \
+                    slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                         \
+                    slist->slh_head->field.sle_levels[i].hits = 0;                                                                       \
+                    slist->slh_tail->field.sle_levels[i].next = NULL;                                                                    \
+                }                                                                                                                        \
+                slist->slh_head->field.sle_height = new_height + 1;                                                                      \
+                slist->slh_tail->field.sle_height = new_height + 1;                                                                      \
+            }                                                                                                                            \
+                                                                                                                                         \
+            /* Fill in path entries for levels above what locate saw. */                                                                 \
             for (i = current_height + 1; i <= new_height; i++) {                                                                         \
-                path[i + 1].node = slist->slh_tail;                                                                                      \
+                path[i + 1].node = slist->slh_head;                                                                                      \
             }                                                                                                                            \
             /* Ensure all next[] point to tail. */                                                                                       \
-            __SKIP_ALL_ENTRIES_B2T(field, new)                                                                                           \
-            {                                                                                                                            \
-                new->field.sle_levels[lvl].next = slist->slh_tail;                                                                       \
+            for (i = 0; i <= new_height; i++) {                                                                                          \
+                new->field.sle_levels[i].next = slist->slh_tail;                                                                         \
             }                                                                                                                            \
             /* Adjust all forward pointers for each element in the path. */                                                              \
             for (i = 0; i <= new_height; i++) {                                                                                          \
@@ -1033,9 +1090,6 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             new->field.sle_levels[new_height].hits = 1;                                                                                  \
             /* Increase our list length (aka. size, count, etc.) by one. */                                                              \
             slist->slh_length++;                                                                                                         \
-                                                                                                                                         \
-            if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                \
-                free(path);                                                                                                              \
         }                                                                                                                                \
         return rc;                                                                                                                       \
     }                                                                                                                                    \
@@ -1069,17 +1123,15 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_eq_##decl(decl##_t *slist, decl##_node_t *query)                                                \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         decl##_node_t *node = NULL;                                                                                                      \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
         node = path[0].node;                                                                                                             \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         return node;                                                                                                                     \
     }                                                                                                                                    \
@@ -1093,12 +1145,12 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_gte_##decl(decl##_t *slist, decl##_node_t *query)                                               \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         int cmp;                                                                                                                         \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
@@ -1107,8 +1159,6 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             node = node->field.sle_levels[0].next;                                                                                       \
             cmp = __skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                       \
         } while (cmp < 0);                                                                                                               \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         return node;                                                                                                                     \
     }                                                                                                                                    \
@@ -1122,12 +1172,12 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_gt_##decl(decl##_t *slist, decl##_node_t *query)                                                \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         int cmp;                                                                                                                         \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
@@ -1139,8 +1189,6 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             cmp = __skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                       \
         } while (cmp <= 0 && node != slist->slh_tail);                                                                                   \
     done:;                                                                                                                               \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         return node;                                                                                                                     \
     }                                                                                                                                    \
@@ -1154,11 +1202,11 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_lte_##decl(decl##_t *slist, decl##_node_t *query)                                               \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
@@ -1167,8 +1215,6 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             goto done;                                                                                                                   \
         node = path[1].node;                                                                                                             \
     done:;                                                                                                                               \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         return node;                                                                                                                     \
     }                                                                                                                                    \
@@ -1181,17 +1227,15 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_lt_##decl(decl##_t *slist, decl##_node_t *query)                                                \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
         node = path[1].node;                                                                                                             \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         return node;                                                                                                                     \
     }                                                                                                                                    \
@@ -1237,7 +1281,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     int prefix##skip_update_##decl(decl##_t *slist, decl##_node_t *query, void *value)                                                   \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         int rc = 0, np;                                                                                                                  \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
@@ -1245,13 +1289,10 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (slist == NULL)                                                                                                               \
             return -1;                                                                                                                   \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         __skip_locate_##decl(slist, query, path);                                                                                        \
         node = path[0].node;                                                                                                             \
-                                                                                                                                         \
-        if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                    \
-            free(path);                                                                                                                  \
                                                                                                                                          \
         if (node == NULL)                                                                                                                \
             return -1;                                                                                                                   \
@@ -1281,7 +1322,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *query)                                                           \
     {                                                                                                                                    \
-        static __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
         int np = 0;                                                                                                                      \
         size_t i, len, height;                                                                                                           \
         decl##_node_t *node;                                                                                                             \
@@ -1292,7 +1333,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (slist->slh_length == 0)                                                                                                      \
             return 0;                                                                                                                    \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * SKIPLIST_MAX_HEIGHT + 1);                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
                                                                                                                                          \
         /* Attempt to locate the node in the list. */                                                                                    \
         len = __skip_locate_##decl(slist, query, path);                                                                                  \
@@ -1329,19 +1370,16 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             }                                                                                                                            \
             /* Account for delete at tail. */                                                                                            \
             if (node->field.sle_levels[0].next == slist->slh_tail) {                                                                     \
-                slist->slh_tail->field.sle_prev = query->field.sle_prev;                                                                 \
+                slist->slh_tail->field.sle_prev = node->field.sle_prev;                                                                  \
             }                                                                                                                            \
-                                                                                                                                         \
-            if (SKIPLIST_MAX_HEIGHT == 1)                                                                                                \
-                free(path);                                                                                                              \
                                                                                                                                          \
             slist->slh_fns.free_entry(node);                                                                                             \
             free(node);                                                                                                                  \
                                                                                                                                          \
-            /* Reduce the height of the head/tail nodes. */                                                                              \
+            /* Reduce the height of the head/tail nodes (minimum height is 1). */                                                         \
             for (i = 0; slist->slh_head->field.sle_levels[i].next != slist->slh_tail && i < SKIPLIST_MAX_HEIGHT; i++)                    \
                 ;                                                                                                                        \
-            slist->slh_head->field.sle_height = slist->slh_tail->field.sle_height = i;                                                   \
+            slist->slh_head->field.sle_height = slist->slh_tail->field.sle_height = (i > 0 ? i : 1);                                    \
                                                                                                                                          \
             slist->slh_length--;                                                                                                         \
             __skip_adjust_hit_counts_##decl(slist);                                                                                      \
@@ -1520,8 +1558,8 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                          \
     decl##_t *prefix##skip_restore_snapshot_##decl(decl##_t *slist, size_t era)                                  \
     {                                                                                                            \
-        size_t i, cur_era;                                                                                       \
-        decl##_node_t *node, *prev;                                                                              \
+        size_t i, cur_era, n_remove = 0, n_discard = 0, n_restore = 0;                                          \
+        decl##_node_t *node, *next_node;                                                                         \
                                                                                                                  \
         if (slist == NULL)                                                                                       \
             return NULL;                                                                                         \
@@ -1534,62 +1572,114 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
                                                                                                                  \
         cur_era = slist->slh_snap.cur_era;                                                                       \
                                                                                                                  \
-        /* (a) remove and free nodes from slist that are newer than era */                                       \
+        /* (a) Collect nodes to remove from the active list (era > target).                                      \
+           We decouple iteration from mutation to avoid use-after-free. */                                       \
+        decl##_node_t **to_remove = NULL;                                                                        \
+        size_t cap_remove = 16;                                                                                  \
+        to_remove = (decl##_node_t **)malloc(sizeof(decl##_node_t *) * cap_remove);                              \
+        if (to_remove == NULL)                                                                                   \
+            return NULL;                                                                                         \
+                                                                                                                 \
         SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                                                \
         {                                                                                                        \
-            ((void)i);                                                                                           \
+            (void)i;                                                                                             \
             if (node->field.sle_era > era) {                                                                     \
-                prefix##skip_remove_node_##decl(slist, node);                                                    \
+                if (n_remove >= cap_remove) {                                                                    \
+                    cap_remove *= 2;                                                                             \
+                    decl##_node_t **tmp = (decl##_node_t **)realloc(                                             \
+                        to_remove, sizeof(decl##_node_t *) * cap_remove);                                        \
+                    if (tmp == NULL) {                                                                           \
+                        free(to_remove);                                                                         \
+                        return NULL;                                                                             \
+                    }                                                                                            \
+                    to_remove = tmp;                                                                             \
+                }                                                                                                \
+                to_remove[n_remove++] = node;                                                                    \
             }                                                                                                    \
         }                                                                                                        \
                                                                                                                  \
-        prev = NULL;                                                                                             \
+        /* Now remove them. */                                                                                   \
+        for (i = 0; i < n_remove; i++)                                                                           \
+            prefix##skip_remove_node_##decl(slist, to_remove[i]);                                                \
+        free(to_remove);                                                                                         \
+                                                                                                                 \
+        /* (b) & (c) Walk the preserved list, collecting nodes to discard                                        \
+           (era > target) and nodes to restore (era == target). */                                               \
+        decl##_node_t **to_discard = NULL;                                                                       \
+        decl##_node_t **to_restore = NULL;                                                                       \
+        size_t cap_discard = 16, cap_restore = 16;                                                               \
+        to_discard = (decl##_node_t **)malloc(sizeof(decl##_node_t *) * cap_discard);                            \
+        to_restore = (decl##_node_t **)malloc(sizeof(decl##_node_t *) * cap_restore);                            \
+        if (to_discard == NULL || to_restore == NULL) {                                                          \
+            free(to_discard);                                                                                    \
+            free(to_restore);                                                                                    \
+            return NULL;                                                                                         \
+        }                                                                                                        \
+                                                                                                                 \
         node = slist->slh_snap.pres;                                                                             \
         while (node) {                                                                                           \
-            /* (b) remove nodes from slh_pres that are newer than era */                                         \
+            next_node = node->field.sle_levels[0].next;                                                          \
             if (node->field.sle_era > era) {                                                                     \
-                /* remove node from slh_snap.pres list */                                                        \
-                if (slist->slh_snap.pres == node)                                                                \
-                    slist->slh_snap.pres = node->field.sle_levels[0].next;                                       \
-                else {                                                                                           \
-                    if (node->field.sle_levels[0].next == NULL)                                                  \
-                        if (node == slist->slh_snap.pres)                                                        \
-                            slist->slh_snap.pres = NULL;                                                         \
-                        else                                                                                     \
-                            prev->field.sle_levels[0].next = NULL;                                               \
-                    else                                                                                         \
-                        prev->field.sle_levels[0].next = node->field.sle_levels[0].next;                         \
+                if (n_discard >= cap_discard) {                                                                  \
+                    cap_discard *= 2;                                                                            \
+                    decl##_node_t **tmp = (decl##_node_t **)realloc(                                             \
+                        to_discard, sizeof(decl##_node_t *) * cap_discard);                                      \
+                    if (tmp == NULL) {                                                                           \
+                        free(to_discard);                                                                        \
+                        free(to_restore);                                                                        \
+                        return NULL;                                                                             \
+                    }                                                                                            \
+                    to_discard = tmp;                                                                            \
                 }                                                                                                \
-                prefix##skip_free_node_##decl(slist, node);                                                      \
+                to_discard[n_discard++] = node;                                                                  \
+            } else if (node->field.sle_era == era) {                                                             \
+                if (n_restore >= cap_restore) {                                                                  \
+                    cap_restore *= 2;                                                                            \
+                    decl##_node_t **tmp = (decl##_node_t **)realloc(                                             \
+                        to_restore, sizeof(decl##_node_t *) * cap_restore);                                      \
+                    if (tmp == NULL) {                                                                           \
+                        free(to_discard);                                                                        \
+                        free(to_restore);                                                                        \
+                        return NULL;                                                                             \
+                    }                                                                                            \
+                    to_restore = tmp;                                                                            \
+                }                                                                                                \
+                to_restore[n_restore++] = node;                                                                  \
             }                                                                                                    \
-                                                                                                                 \
-            /* (c) restore nodes from slh_pres that match the era */                                             \
-            prev = NULL;                                                                                         \
-            if (node->field.sle_era == era) {                                                                    \
-                /* remove node from slh_snap.pres list */                                                        \
-                if (slist->slh_snap.pres == node)                                                                \
-                    slist->slh_snap.pres = node->field.sle_levels[0].next;                                       \
-                else {                                                                                           \
-                    if (node->field.sle_levels[0].next == NULL)                                                  \
-                        if (node == slist->slh_snap.pres)                                                        \
-                            slist->slh_snap.pres = NULL;                                                         \
-                        else                                                                                     \
-                            prev->field.sle_levels[0].next = NULL;                                               \
-                    else                                                                                         \
-                        prev->field.sle_levels[0].next = node->field.sle_levels[0].next;                         \
-                }                                                                                                \
-                                                                                                                 \
-                node->field.sle_prev = NULL;                                                                     \
-                if (node->field.sle_levels[1].next != 0) {                                                       \
-                    node->field.sle_levels[1].next = NULL;                                                       \
-                    prefix##skip_insert_dup_##decl(slist, node);                                                 \
-                } else {                                                                                         \
-                    prefix##skip_insert_##decl(slist, node);                                                     \
-                }                                                                                                \
-            }                                                                                                    \
-            prev = node;                                                                                         \
-            node = node->field.sle_levels[0].next;                                                               \
+            node = next_node;                                                                                    \
         }                                                                                                        \
+                                                                                                                 \
+        /* (b) Remove and free preserved nodes newer than era. */                                                \
+        for (i = 0; i < n_discard; i++) {                                                                        \
+            /* Unlink from the preserved singly-linked list. */                                                  \
+            decl##_node_t **pp = &slist->slh_snap.pres;                                                          \
+            while (*pp && *pp != to_discard[i])                                                                  \
+                pp = &(*pp)->field.sle_levels[0].next;                                                           \
+            if (*pp)                                                                                             \
+                *pp = to_discard[i]->field.sle_levels[0].next;                                                   \
+            prefix##skip_free_node_##decl(slist, to_discard[i]);                                                 \
+        }                                                                                                        \
+        free(to_discard);                                                                                        \
+                                                                                                                 \
+        /* (c) Restore preserved nodes matching era. */                                                          \
+        for (i = 0; i < n_restore; i++) {                                                                        \
+            /* Unlink from the preserved singly-linked list. */                                                  \
+            decl##_node_t **pp = &slist->slh_snap.pres;                                                          \
+            while (*pp && *pp != to_restore[i])                                                                  \
+                pp = &(*pp)->field.sle_levels[0].next;                                                           \
+            if (*pp)                                                                                             \
+                *pp = to_restore[i]->field.sle_levels[0].next;                                                   \
+                                                                                                                 \
+            node = to_restore[i];                                                                                \
+            node->field.sle_prev = NULL;                                                                         \
+            if (node->field.sle_levels[1].next != 0) {                                                           \
+                node->field.sle_levels[1].next = NULL;                                                           \
+                prefix##skip_insert_dup_##decl(slist, node);                                                     \
+            } else {                                                                                             \
+                prefix##skip_insert_##decl(slist, node);                                                         \
+            }                                                                                                    \
+        }                                                                                                        \
+        free(to_restore);                                                                                        \
                                                                                                                  \
         /* (d) set list's era */                                                                                 \
         slist->slh_snap.pres_era = slist->slh_snap.pres == NULL ? 0 : cur_era;                                   \
