@@ -10,7 +10,7 @@ CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,poi
 #CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=all -fhardened -std=c99 -Iinclude/ -fPIC
 #env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls
 
-TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC -DSKIPLIST_SPLAY_REBALANCE
+TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC
 
 TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
@@ -77,7 +77,7 @@ format:
 	$(CC) $(CFLAGS) -c -o $@ $^
 
 tests/%.o: tests/%.c
-	$(CC) $(CFLAGS) -c -o $@ $^
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $^
 
 examples/ex1: examples/ex1.o
 	$(CC) $^ -o $@ $(CFLAGS) -lm
