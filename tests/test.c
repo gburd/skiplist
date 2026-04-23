@@ -2,9 +2,6 @@
 #pragma GCC push_options
 #pragma GCC optimize("O0")
 
-#define DEBUG
-#define SKIPLIST_DIAGNOSTIC
-
 #include <string.h>
 
 #include "munit.h"
@@ -423,8 +420,8 @@ test_splay_behavior(const MunitParameter params[], void *data)
     api_skip_init_test(list);
     list->slh_prng_state = 12345; /* Fixed seed for reproducible tests */
 
-    /* Insert multiple elements */
-    for (int i = 1; i <= 10; i++) {
+    /* Insert enough elements to create a multi-level skiplist */
+    for (int i = 1; i <= 50; i++) {
         test_node_t *node;
         api_skip_alloc_node_test(&node);
         node->key = i;
@@ -432,18 +429,59 @@ test_splay_behavior(const MunitParameter params[], void *data)
         api_skip_insert_test(list, node);
     }
 
-    /* Access some elements multiple times to trigger rebalancing */
-    for (int i = 0; i < 100; i++) {
-        api_skip_contains_test(list, 5); /* Frequently accessed */
-        if (i % 10 == 0) {
-            api_skip_contains_test(list, 1); /* Less frequently accessed */
-        }
+    /* Find the hot key node and record its initial height */
+    test_node_t query;
+    query.key = 25;
+    test_node_t *hot_node = api_skip_position_eq_test(list, &query);
+    assert_not_null(hot_node);
+    size_t initial_height = hot_node->entries.sle_height;
+
+    /* Find a cold key node and record its initial height */
+    query.key = 1;
+    test_node_t *cold_node = api_skip_position_eq_test(list, &query);
+    assert_not_null(cold_node);
+    size_t cold_initial_height = cold_node->entries.sle_height;
+
+    /* Hammer the hot key with many accesses to trigger rebalancing */
+    for (int i = 0; i < 500; i++) {
+        api_skip_contains_test(list, 25); /* Frequently accessed */
     }
 
-    /* Verify list is still functional */
-    assert_int(api_skip_length_test(list), ==, 10);
-    assert_true(api_skip_contains_test(list, 5));
+    /* Verify list is still functional and correctly ordered */
+    assert_int(api_skip_length_test(list), ==, 50);
+    assert_true(api_skip_contains_test(list, 25));
     assert_true(api_skip_contains_test(list, 1));
+    assert_true(api_skip_contains_test(list, 50));
+
+    /* Verify forward traversal still works */
+    test_node_t *current = api_skip_head_test(list);
+    int count = 0;
+    int prev_key = 0;
+    while (current) {
+        assert_int(current->key, >, prev_key);
+        prev_key = current->key;
+        count++;
+        current = api_skip_next_node_test(list, current);
+    }
+    assert_int(count, ==, 50);
+
+#ifdef SKIPLIST_SPLAY_REBALANCE
+    /* With splay rebalancing, the hot key should have been promoted
+       to a higher level than where it started */
+    {
+        size_t final_height = hot_node->entries.sle_height;
+        /* Hot key must have been promoted above its initial height */
+        assert_size(final_height, >, initial_height);
+        (void)cold_node;
+        (void)cold_initial_height;
+    }
+#else
+    /* Without splay, heights don't change — just suppress warnings */
+    (void)hot_node;
+    (void)cold_node;
+    (void)initial_height;
+    (void)cold_initial_height;
+#endif
 
     api_skip_free_test(list);
     free(list);
