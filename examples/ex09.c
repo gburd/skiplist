@@ -13,6 +13,7 @@
  * "generation" is a subgraph showing the skiplist state at that
  * point in time.
  */
+#define _GNU_SOURCE
 #define SKIPLIST_DIAGNOSTIC
 #include "sl.h"
 

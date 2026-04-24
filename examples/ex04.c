@@ -8,6 +8,7 @@
  *   - skip_next_node / skip_prev_node: step forward/backward
  *   - skip_pos with SKIP_GTE, SKIP_GT, SKIP_LTE, SKIP_LT: cursor
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 struct iter_node {

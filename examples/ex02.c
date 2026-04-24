@@ -12,6 +12,7 @@
  *
  * This example uses int keys and heap-allocated string values.
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 struct kv_node {

@@ -33,14 +33,9 @@
  *      Zhipeng Li <zhpeng.is@gmail.com>
  */
 
+#pragma once
 #ifndef _SKIPLIST_H_
 #define _SKIPLIST_H_
-
-/* Platform detection */
-#ifndef _WIN32
-#define _GNU_SOURCE
-#endif
-#define _USE_MATH_DEFINES
 
 /* Standard includes */
 #ifdef __GNUC__
@@ -61,6 +56,10 @@
 #pragma GCC diagnostic pop
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* getpid() portability */
 #ifdef _WIN32
 #include <process.h>
@@ -77,7 +76,9 @@
 #define _SKIP_PRINTF_ATTR(fmt, args)
 #endif
 
-/* __typeof__ portability (MSVC lacks it in C mode) */
+/* __typeof__ portability (MSVC lacks it in C mode).
+ * On MSVC, marked-pointer macros (_SKIP_MARK / _SKIP_UNMARK) return void *,
+ * which is harmless since C implicitly converts void * on assignment. */
 #ifndef _MSC_VER
 #define _SKIP_TYPEOF(x) __typeof__(x)
 #else
@@ -371,7 +372,9 @@ void _SKIP_PRINTF_ATTR(4, 5) _skip_diag_(const char *file, int line, const char 
  * to this size.  The default of 64 supports lists of up to ~2^64 elements.
  *
  * Must be <= 64 to avoid stack overflow from path arrays used during
- * locate/insert/remove operations.
+ * locate/insert/remove operations.  Each search/insert/remove allocates
+ * ~2 KB on the stack at the default height of 64; reduce in
+ * stack-constrained environments (e.g. embedded, deep recursion).
  *
  * Usage:
  *   #define SKIPLIST_MAX_HEIGHT 32   // before including sl.h
@@ -495,9 +498,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
          ((elm) = _skip_atomic_load(&(elm)->field.sle_prev, memory_order_acquire)) != (list)->slh_head; iter--)
 
 /* Iterate over the next pointers in a node from bottom to top (B2T) or top to bottom (T2B). */
-#define _SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_head->field.sle_height - 1; lvl != (size_t) - 1; lvl--)
-#define _SKIP_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle_height; lvl != (size_t) - 1; lvl--)
-#define _SKIP_ENTRIES_T2B_FROM(field, elm, off) for (size_t lvl = off; lvl != (size_t) - 1; lvl--)
+#define _SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_head->field.sle_height - 1; lvl != SIZE_MAX; lvl--)
+#define _SKIP_ENTRIES_T2B(field, elm) for (size_t lvl = elm->field.sle_height; lvl != SIZE_MAX; lvl--)
+#define _SKIP_ENTRIES_T2B_FROM(field, elm, off) for (size_t lvl = off; lvl != SIZE_MAX; lvl--)
 #define _SKIP_IS_LAST_ENTRY_T2B() if (lvl == 0)
 
 #define _SKIP_ALL_ENTRIES_B2T(field, elm) for (size_t lvl = 0; lvl < slist->slh_head->field.sle_height - 1; lvl++)
@@ -853,7 +856,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         for (i = 0; i < SKIPLIST_MAX_HEIGHT; i++)                                                                                                            \
             slist->slh_tail->field.sle_levels[i].next = NULL;                                                                                                \
         slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                   \
-        slist->slh_prng_state = ((uint32_t)time(NULL) ^ (uint32_t)_skip_getpid());                                                                           \
+        slist->slh_prng_state = ((uint32_t)time(NULL) ^ ((uint32_t)_skip_getpid() << 16) ^ (uint32_t)(uintptr_t)slist);                                      \
         slist->slh_splay_counter = 0;                                                                                                                        \
     fail:;                                                                                                                                                   \
         return rc;                                                                                                                                           \
@@ -1065,6 +1068,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      * SIZE_MAX / 2, halve all hit counters across all nodes to prevent                                                                                      \
      * overflow while preserving relative ordering.                                                                                                          \
      */                                                                                                                                                      \
+    /* Thread safety: safe under EBR (deferred nodes remain valid);                                                                                          \
+       concurrent use without EBR is not supported for deletion. */                                                                                          \
     static void _skip_adjust_hit_counts_##decl(decl##_t *slist)                                                                                              \
     {                                                                                                                                                        \
         size_t total_hits, lvl, nth;                                                                                                                         \
@@ -1495,7 +1500,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
         if (slist == NULL || new == NULL)                                                                                                                    \
-            return ENOENT;                                                                                                                                   \
+            return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
         _skip_insert_retry_##decl : memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                          \
                                                                                                                                                              \
@@ -1506,7 +1511,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         /* Reject duplicates unless flags is set. */                                                                                                         \
         if (path[0].node != NULL && flags == 0) {                                                                                                            \
-            return -1;                                                                                                                                       \
+            return EEXIST;                                                                                                                                   \
         }                                                                                                                                                    \
                                                                                                                                                              \
         /* Phase 2: Determine the new node's height via coin toss.                                                                                           \
@@ -1603,7 +1608,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             }                                                                                                                                                \
         }                                                                                                                                                    \
                                                                                                                                                              \
-        /* Record era for snapshot support. */                                                                                                               \
+        /* Record era for snapshot support.                                                                                                                  \
+           Non-atomic: snapshots are single-threaded only (see SKIPLIST_DECL_SNAPSHOTS). */                                                                  \
         if (slist->slh_snap.pres_era > 0) {                                                                                                                  \
             new->field.sle_era = slist->slh_snap.cur_era++;                                                                                                  \
         }                                                                                                                                                    \
@@ -1683,6 +1689,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             cmp = _skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                                            \
         } while (cmp < 0);                                                                                                                                   \
                                                                                                                                                              \
+        if (node == slist->slh_tail)                                                                                                                         \
+            return NULL;                                                                                                                                     \
         return node;                                                                                                                                         \
     }                                                                                                                                                        \
                                                                                                                                                              \
@@ -1713,7 +1721,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         } while (cmp <= 0 && node != slist->slh_tail);                                                                                                       \
     done:;                                                                                                                                                   \
                                                                                                                                                              \
-        return node;                                                                                                                                         \
+        return (node == slist->slh_tail) ? NULL : node;                                                                                                      \
     }                                                                                                                                                        \
                                                                                                                                                              \
     /**                                                                                                                                                      \
@@ -1810,7 +1818,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
         if (slist == NULL)                                                                                                                                   \
-            return -1;                                                                                                                                       \
+            return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
         memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
                                                                                                                                                              \
@@ -1818,7 +1826,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         node = path[0].node;                                                                                                                                 \
                                                                                                                                                              \
         if (node == NULL)                                                                                                                                    \
-            return -1;                                                                                                                                       \
+            return ENOENT;                                                                                                                                   \
                                                                                                                                                              \
         /* If the optional snapshots feature is configured, use it now.                                                                                      \
            Snapshots preserve the node if it is older than our snapshot                                                                                      \
@@ -1855,7 +1863,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         int ok;                                                                                                                                              \
                                                                                                                                                              \
         if (slist == NULL || query == NULL)                                                                                                                  \
-            return -1;                                                                                                                                       \
+            return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
         memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
                                                                                                                                                              \
@@ -1863,10 +1871,11 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
         if (node == NULL) {                                                                                                                                  \
-            return 0;                                                                                                                                        \
+            return ENOENT;                                                                                                                                   \
         }                                                                                                                                                    \
                                                                                                                                                              \
-        /* Snapshot preservation (single-threaded feature). */                                                                                               \
+        /* Snapshot preservation (single-threaded feature).                                                                                                  \
+           Non-atomic: snapshots are single-threaded only (see SKIPLIST_DECL_SNAPSHOTS). */                                                                  \
         if (slist->slh_snap.pres_era > 0) {                                                                                                                  \
             np = slist->slh_fns.snapshot_preserve_node(slist, node, NULL);                                                                                   \
             if (np > 0)                                                                                                                                      \
@@ -1935,6 +1944,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 if (top_next != slist->slh_tail)                                                                                                             \
                     break;                                                                                                                                   \
                 if (_skip_atomic_cas_weak(&slist->slh_head->field.sle_height, &h, h - 1, memory_order_release, memory_order_acquire)) {                      \
+                    _skip_atomic_store(&slist->slh_tail->field.sle_height, h - 1, memory_order_release);                                                     \
                     h = h - 1;                                                                                                                               \
                 }                                                                                                                                            \
             }                                                                                                                                                \
@@ -2085,7 +2095,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_ATOMIC(int) retire_locks[3];                                                                                   \
     } _skip_ebr_##decl##_t;                                                                                                  \
                                                                                                                              \
-    /* Spinlock helpers for retire list access. */                                                                           \
+    /* Spinlock helpers for retire list access.                                                                              \
+       NOTE: The retire path is NOT lock-free; a per-thread Treiber stack                                                    \
+       would eliminate this bottleneck under high contention. */                                                             \
     static void _skip_ebr_lock_##decl(_SKIP_ATOMIC(int) * lock)                                                              \
     {                                                                                                                        \
         while (_skip_atomic_exchange(lock, 1, memory_order_acquire) != 0) {                                                  \
@@ -2420,7 +2432,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             return 0;                                                                                                   \
                                                                                                                         \
         /* (a) alloc, ... */                                                                                            \
-        size_t sle_arr_sz = sizeof(struct _skiplist_##decl##_level) * slist->slh_head->field.sle_height - 1;            \
+        size_t sle_arr_sz = sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT;                              \
         rc = prefix##skip_alloc_node_##decl(&dest);                                                                     \
         if (rc)                                                                                                         \
             return rc;                                                                                                  \
@@ -2449,7 +2461,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             dest->field.sle_levels[lvl].next = NULL;                                                                    \
         }                                                                                                               \
                                                                                                                         \
-        /* (f) set duplicate flag */                                                                                    \
+        /* (f) set duplicate flag — reuses sle_levels[1].next as a boolean;                                           \
+           safe because all nodes are allocated with SKIPLIST_MAX_HEIGHT levels. */                                     \
         dest->field.sle_levels[1].next = is_dup;                                                                        \
                                                                                                                         \
         /* (g) insert node into slh_pres list at head */                                                                \
@@ -2677,105 +2690,164 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *         -- Deserialize from fp into slist (must be initialized and empty).
  *            Returns 0 on success, errno on failure.
  */
-#define SKIPLIST_DECL_ARCHIVE(decl, prefix, field, write_entry_blk, read_entry_blk)             \
-                                                                                                \
-    int prefix##skip_serialize_##decl(decl##_t *slist, FILE *fp)                                \
-    {                                                                                           \
-        if (slist == NULL || fp == NULL)                                                        \
-            return EINVAL;                                                                      \
-                                                                                                \
-        /* Magic */                                                                             \
-        if (fwrite("SKPL", 1, 4, fp) != 4)                                                      \
-            return EIO;                                                                         \
-                                                                                                \
-        /* Version */                                                                           \
-        uint32_t version = 1;                                                                   \
-        if (fwrite(&version, sizeof(version), 1, fp) != 1)                                      \
-            return EIO;                                                                         \
-                                                                                                \
-        /* Node count */                                                                        \
-        uint64_t count = (uint64_t)_skip_atomic_load(&slist->slh_length, memory_order_relaxed); \
-        if (fwrite(&count, sizeof(count), 1, fp) != 1)                                          \
-            return EIO;                                                                         \
-                                                                                                \
-        /* Per-node data */                                                                     \
-        decl##_node_t *node;                                                                    \
-        size_t i;                                                                               \
-        uint8_t entry_buf[4096];                                                                \
-        SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                               \
-        {                                                                                       \
-            (void)i;                                                                            \
-            uint8_t *buf = entry_buf;                                                           \
-            uint64_t bytes = 0;                                                                 \
-            write_entry_blk;                                                                    \
-            if (fwrite(&bytes, sizeof(bytes), 1, fp) != 1)                                      \
-                return EIO;                                                                     \
-            if (bytes > 0 && fwrite(buf, 1, (size_t)bytes, fp) != (size_t)bytes)                \
-                return EIO;                                                                     \
-        }                                                                                       \
-                                                                                                \
-        return 0;                                                                               \
-    }                                                                                           \
-                                                                                                \
-    int prefix##skip_deserialize_##decl(decl##_t *slist, FILE *fp)                              \
-    {                                                                                           \
-        if (slist == NULL || fp == NULL)                                                        \
-            return EINVAL;                                                                      \
-                                                                                                \
-        /* Magic */                                                                             \
-        char magic[4];                                                                          \
-        if (fread(magic, 1, 4, fp) != 4)                                                        \
-            return EIO;                                                                         \
-        if (memcmp(magic, "SKPL", 4) != 0)                                                      \
-            return EINVAL;                                                                      \
-                                                                                                \
-        /* Version */                                                                           \
-        uint32_t version;                                                                       \
-        if (fread(&version, sizeof(version), 1, fp) != 1)                                       \
-            return EIO;                                                                         \
-        if (version != 1)                                                                       \
-            return EINVAL;                                                                      \
-                                                                                                \
-        /* Node count */                                                                        \
-        uint64_t count;                                                                         \
-        if (fread(&count, sizeof(count), 1, fp) != 1)                                           \
-            return EIO;                                                                         \
-                                                                                                \
-        /* Per-node data */                                                                     \
-        for (uint64_t n = 0; n < count; n++) {                                                  \
-            uint64_t bytes;                                                                     \
-            if (fread(&bytes, sizeof(bytes), 1, fp) != 1)                                       \
-                return EIO;                                                                     \
-                                                                                                \
-            uint8_t *buf = NULL;                                                                \
-            if (bytes > 0) {                                                                    \
-                buf = (uint8_t *)malloc((size_t)bytes);                                         \
-                if (buf == NULL)                                                                \
-                    return ENOMEM;                                                              \
-                if (fread(buf, 1, (size_t)bytes, fp) != (size_t)bytes) {                        \
-                    free(buf);                                                                  \
-                    return EIO;                                                                 \
-                }                                                                               \
-            }                                                                                   \
-                                                                                                \
-            decl##_node_t *node;                                                                \
-            int rc = prefix##skip_alloc_node_##decl(&node);                                     \
-            if (rc) {                                                                           \
-                free(buf);                                                                      \
-                return rc;                                                                      \
-            }                                                                                   \
-                                                                                                \
-            read_entry_blk;                                                                     \
-            free(buf);                                                                          \
-                                                                                                \
-            rc = prefix##skip_insert_##decl(slist, node);                                       \
-            if (rc) {                                                                           \
-                prefix##skip_free_node_##decl(slist, node);                                     \
-                return rc;                                                                      \
-            }                                                                                   \
-        }                                                                                       \
-                                                                                                \
-        return 0;                                                                               \
+/* Byte-order helpers for portable archive serialization (little-endian on wire). */
+static inline void
+_skip_write_le32(uint8_t *dst, uint32_t v)
+{
+    dst[0] = (uint8_t)(v);
+    dst[1] = (uint8_t)(v >> 8);
+    dst[2] = (uint8_t)(v >> 16);
+    dst[3] = (uint8_t)(v >> 24);
+}
+static inline void
+_skip_write_le64(uint8_t *dst, uint64_t v)
+{
+    dst[0] = (uint8_t)(v);
+    dst[1] = (uint8_t)(v >> 8);
+    dst[2] = (uint8_t)(v >> 16);
+    dst[3] = (uint8_t)(v >> 24);
+    dst[4] = (uint8_t)(v >> 32);
+    dst[5] = (uint8_t)(v >> 40);
+    dst[6] = (uint8_t)(v >> 48);
+    dst[7] = (uint8_t)(v >> 56);
+}
+static inline uint32_t
+_skip_read_le32(const uint8_t *src)
+{
+    return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+}
+static inline uint64_t
+_skip_read_le64(const uint8_t *src)
+{
+    return (uint64_t)src[0] | ((uint64_t)src[1] << 8) | ((uint64_t)src[2] << 16) | ((uint64_t)src[3] << 24) | ((uint64_t)src[4] << 32) |
+        ((uint64_t)src[5] << 40) | ((uint64_t)src[6] << 48) | ((uint64_t)src[7] << 56);
+}
+
+#define SKIPLIST_DECL_ARCHIVE(decl, prefix, field, write_entry_blk, read_entry_blk)                 \
+                                                                                                    \
+    int prefix##skip_serialize_##decl(decl##_t *slist, FILE *fp)                                    \
+    {                                                                                               \
+        if (slist == NULL || fp == NULL)                                                            \
+            return EINVAL;                                                                          \
+                                                                                                    \
+        /* Magic */                                                                                 \
+        if (fwrite("SKPL", 1, 4, fp) != 4)                                                          \
+            return EIO;                                                                             \
+                                                                                                    \
+        /* Version (little-endian) */                                                               \
+        {                                                                                           \
+            uint8_t vbuf[4];                                                                        \
+            _skip_write_le32(vbuf, 1);                                                              \
+            if (fwrite(vbuf, 1, 4, fp) != 4)                                                        \
+                return EIO;                                                                         \
+        }                                                                                           \
+                                                                                                    \
+        /* Node count (little-endian) */                                                            \
+        {                                                                                           \
+            uint8_t cbuf[8];                                                                        \
+            uint64_t count = (uint64_t)_skip_atomic_load(&slist->slh_length, memory_order_relaxed); \
+            _skip_write_le64(cbuf, count);                                                          \
+            if (fwrite(cbuf, 1, 8, fp) != 8)                                                        \
+                return EIO;                                                                         \
+        }                                                                                           \
+                                                                                                    \
+        /* Per-node data */                                                                         \
+        decl##_node_t *node;                                                                        \
+        size_t i;                                                                                   \
+        uint8_t entry_buf[4096];                                                                    \
+        SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                                   \
+        {                                                                                           \
+            (void)i;                                                                                \
+            uint8_t *buf = entry_buf;                                                               \
+            uint64_t bytes = 0;                                                                     \
+            const uint64_t bufsize = sizeof(entry_buf);                                             \
+            (void)bufsize;                                                                          \
+            write_entry_blk;                                                                        \
+            if (bytes > sizeof(entry_buf))                                                          \
+                return EOVERFLOW;                                                                   \
+            {                                                                                       \
+                uint8_t bbuf[8];                                                                    \
+                _skip_write_le64(bbuf, bytes);                                                      \
+                if (fwrite(bbuf, 1, 8, fp) != 8)                                                    \
+                    return EIO;                                                                     \
+            }                                                                                       \
+            if (bytes > 0 && fwrite(buf, 1, (size_t)bytes, fp) != (size_t)bytes)                    \
+                return EIO;                                                                         \
+        }                                                                                           \
+                                                                                                    \
+        return 0;                                                                                   \
+    }                                                                                               \
+                                                                                                    \
+    int prefix##skip_deserialize_##decl(decl##_t *slist, FILE *fp)                                  \
+    {                                                                                               \
+        if (slist == NULL || fp == NULL)                                                            \
+            return EINVAL;                                                                          \
+                                                                                                    \
+        /* Magic */                                                                                 \
+        char magic[4];                                                                              \
+        if (fread(magic, 1, 4, fp) != 4)                                                            \
+            return EIO;                                                                             \
+        if (memcmp(magic, "SKPL", 4) != 0)                                                          \
+            return EINVAL;                                                                          \
+                                                                                                    \
+        /* Version (little-endian) */                                                               \
+        {                                                                                           \
+            uint8_t vbuf[4];                                                                        \
+            if (fread(vbuf, 1, 4, fp) != 4)                                                         \
+                return EIO;                                                                         \
+            uint32_t version = _skip_read_le32(vbuf);                                               \
+            if (version != 1)                                                                       \
+                return EINVAL;                                                                      \
+        }                                                                                           \
+                                                                                                    \
+        /* Node count (little-endian) */                                                            \
+        uint64_t count;                                                                             \
+        {                                                                                           \
+            uint8_t cbuf[8];                                                                        \
+            if (fread(cbuf, 1, 8, fp) != 8)                                                         \
+                return EIO;                                                                         \
+            count = _skip_read_le64(cbuf);                                                          \
+        }                                                                                           \
+                                                                                                    \
+        /* Per-node data */                                                                         \
+        for (uint64_t n = 0; n < count; n++) {                                                      \
+            uint64_t bytes;                                                                         \
+            {                                                                                       \
+                uint8_t bbuf[8];                                                                    \
+                if (fread(bbuf, 1, 8, fp) != 8)                                                     \
+                    return EIO;                                                                     \
+                bytes = _skip_read_le64(bbuf);                                                      \
+            }                                                                                       \
+                                                                                                    \
+            uint8_t *buf = NULL;                                                                    \
+            if (bytes > 0) {                                                                        \
+                buf = (uint8_t *)malloc((size_t)bytes);                                             \
+                if (buf == NULL)                                                                    \
+                    return ENOMEM;                                                                  \
+                if (fread(buf, 1, (size_t)bytes, fp) != (size_t)bytes) {                            \
+                    free(buf);                                                                      \
+                    return EIO;                                                                     \
+                }                                                                                   \
+            }                                                                                       \
+                                                                                                    \
+            decl##_node_t *node;                                                                    \
+            int rc = prefix##skip_alloc_node_##decl(&node);                                         \
+            if (rc) {                                                                               \
+                free(buf);                                                                          \
+                return rc;                                                                          \
+            }                                                                                       \
+                                                                                                    \
+            read_entry_blk;                                                                         \
+            free(buf);                                                                              \
+                                                                                                    \
+            rc = prefix##skip_insert_##decl(slist, node);                                           \
+            if (rc) {                                                                               \
+                prefix##skip_free_node_##decl(slist, node);                                         \
+                return rc;                                                                          \
+            }                                                                                       \
+        }                                                                                           \
+                                                                                                    \
+        return 0;                                                                                   \
     }
 
 /**
@@ -3120,7 +3192,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 return n_err;                                                                                                                            \
         }                                                                                                                                                \
                                                                                                                                                          \
-        return 0;                                                                                                                                        \
+        return n_err;                                                                                                                                    \
     }
 
 /**
@@ -3287,7 +3359,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
     {                                                                                        \
         decl##_node_t node;                                                                  \
         node.key = key;                                                                      \
-        return prefix##skip_update_##decl(slist, &node, (void *)value);                      \
+        return prefix##skip_update_##decl(slist, &node, (void *)(uintptr_t)value);           \
     }                                                                                        \
                                                                                              \
     /**                                                                                      \
@@ -3365,12 +3437,15 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
     {                                                                                                                                      \
         size_t w = 1;                                                                                                                      \
         decl##_node_t *n = to;                                                                                                             \
+        size_t max_w = _skip_atomic_load(&slist->slh_length, memory_order_relaxed) + 2;                                                    \
                                                                                                                                            \
         if (from == NULL || to == NULL)                                                                                                    \
             return 0;                                                                                                                      \
                                                                                                                                            \
         while (_SKIP_UNMARK(_skip_atomic_load(&n->field.sle_prev, memory_order_acquire)) != from) {                                        \
             w++;                                                                                                                           \
+            if (w > max_w)                                                                                                                 \
+                return w;                                                                                                                  \
             n = prefix##skip_prev_node_##decl(slist, n);                                                                                   \
         }                                                                                                                                  \
                                                                                                                                            \
@@ -3403,11 +3478,10 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skip_dot_write_node_##decl(os, nsg, node);                                                                                        \
         fprintf(os, " [label = \"");                                                                                                       \
         fflush(os);                                                                                                                        \
-        for (size_t lvl = node_height; lvl != (size_t) - 1; lvl--) {                                                                       \
+        for (size_t lvl = node_height; lvl != SIZE_MAX; lvl--) {                                                                           \
             raw_next = _skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire);                                         \
             next = _SKIP_UNMARK(raw_next);                                                                                                 \
             next = (next == slist->slh_tail) ? NULL : next;                                                                                \
-            (void)_skip_dot_width_##decl;                                                                                                  \
             size_t hits = _skip_atomic_load(&node->field.sle_levels[lvl].hits, memory_order_relaxed);                                      \
             fprintf(os, " { <w%lu> %lu | <f%lu> ", lvl, hits, lvl);                                                                        \
             if (_SKIP_IS_MARKED(raw_next))                                                                                                 \
@@ -3487,7 +3561,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      */                                                                                                                                    \
     int prefix##skip_dot_##decl(FILE *os, decl##_t *slist, size_t nsg, char *msg, skip_sprintf_node_##decl##_t fn)                         \
     {                                                                                                                                      \
-        int letitgo = 0;                                                                                                                   \
+        int has_content = 0;                                                                                                               \
         size_t i;                                                                                                                          \
         decl##_node_t *node, *next;                                                                                                        \
                                                                                                                                            \
@@ -3514,12 +3588,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                            \
         decl##_node_t *head_lvl0_next = _SKIP_UNMARK(_skip_atomic_load(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire)); \
         if (dot_head_height || head_lvl0_next != slist->slh_tail)                                                                          \
-            letitgo = 1;                                                                                                                   \
+            has_content = 1;                                                                                                               \
                                                                                                                                            \
         /* Write out the head node fields */                                                                                               \
         node = slist->slh_head;                                                                                                            \
-        if (letitgo) {                                                                                                                     \
-            for (size_t lvl = dot_head_height; lvl != (size_t) - 1; lvl--) {                                                               \
+        if (has_content) {                                                                                                                 \
+            for (size_t lvl = dot_head_height; lvl != SIZE_MAX; lvl--) {                                                                   \
                 decl##_node_t *raw = _skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire);                           \
                 next = _SKIP_UNMARK(raw);                                                                                                  \
                 next = (next == slist->slh_tail) ? NULL : next;                                                                            \
@@ -3543,7 +3617,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                            \
         /* Edges for head node */                                                                                                          \
         node = slist->slh_head;                                                                                                            \
-        if (letitgo) {                                                                                                                     \
+        if (has_content) {                                                                                                                 \
             node = slist->slh_head;                                                                                                        \
             for (size_t lvl = 0; lvl <= dot_head_height; lvl++) {                                                                          \
                 decl##_node_t *raw = _skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire);                           \
@@ -3563,7 +3637,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                            \
         /* Now all nodes via level 0, if non-empty */                                                                                      \
         node = slist->slh_head;                                                                                                            \
-        if (letitgo) {                                                                                                                     \
+        if (has_content) {                                                                                                                 \
             SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, next, i)                                                                      \
             {                                                                                                                              \
                 ((void)i);                                                                                                                 \
@@ -3575,12 +3649,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         fflush(os);                                                                                                                        \
                                                                                                                                            \
         /* The tail, sentinel node */                                                                                                      \
-        if (letitgo) {                                                                                                                     \
+        if (has_content) {                                                                                                                 \
             _skip_dot_write_node_##decl(os, nsg, NULL);                                                                                    \
             fprintf(os, " [label = \"");                                                                                                   \
             node = slist->slh_tail;                                                                                                        \
             size_t th = dot_head_height;                                                                                                   \
-            for (size_t lvl = th; lvl != (size_t) - 1; lvl--) {                                                                            \
+            for (size_t lvl = th; lvl != SIZE_MAX; lvl--) {                                                                                \
                 decl##_node_t *raw = _skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire);                           \
                 (void)raw; /* tail next pointers are unused in display */                                                                  \
                 fprintf(os, "<w%lu> 0x0", lvl);                                                                                            \
@@ -3845,5 +3919,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             free(node);                                                                                              \
         }                                                                                                            \
     }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SKIPLIST_H_ */

@@ -14,6 +14,7 @@
  * NOTE: Snapshot restore is being refined on this branch.  This
  * example demonstrates the full snapshot lifecycle.
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 struct snap_node {

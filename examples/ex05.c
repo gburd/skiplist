@@ -8,6 +8,7 @@
  * Duplicates are stored adjacent in the list, so iterating over
  * them is straightforward.
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 struct dup_node {

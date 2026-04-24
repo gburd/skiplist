@@ -208,7 +208,7 @@ test_insert_duplicate(const MunitParameter params[], void *data)
     node2->key = 10;
     node2->value = make_test_value(10);
     int rc = api_skip_insert_test(list, node2);
-    assert_int(rc, ==, -1);
+    assert_int(rc, ==, EEXIST);
 
     /* Length should still be 1 */
     assert_int(api_skip_length_test(list), ==, 1);
@@ -340,7 +340,7 @@ test_remove(const MunitParameter params[], void *data)
     /* Remove non-existent element */
     query.key = 10;
     rc = api_skip_remove_node_test(list, &query);
-    assert_int(rc, ==, 0); /* Should not error */
+    assert_int(rc, ==, ENOENT); /* Not found */
     assert_int(api_skip_length_test(list), ==, 4);
 
     api_skip_free_test(list);
@@ -448,11 +448,11 @@ test_edge_cases(const MunitParameter params[], void *data)
     /* Test operations on empty list */
     assert_null(api_skip_get_test(list, 1));
     assert_false(api_skip_contains_test(list, 1));
-    assert_int(api_skip_del_test(list, 1), ==, 0);
+    assert_int(api_skip_del_test(list, 1), ==, ENOENT);
 
     /* Test NULL parameter handling */
-    assert_int(api_skip_insert_test(NULL, NULL), ==, ENOENT);
-    assert_int(api_skip_remove_node_test(NULL, NULL), ==, -1);
+    assert_int(api_skip_insert_test(NULL, NULL), ==, EINVAL);
+    assert_int(api_skip_remove_node_test(NULL, NULL), ==, EINVAL);
 
     api_skip_free_test(list);
     free(list);

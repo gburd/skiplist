@@ -8,6 +8,7 @@
  *
  * The skiplist maps integer keys to string values.
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 /* Step 1: Define your node structure.

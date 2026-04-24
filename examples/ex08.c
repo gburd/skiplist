@@ -15,6 +15,7 @@
  *   [4 bytes magic "SKPL"] [4 bytes version] [8 bytes node count]
  *   For each node: [8 bytes entry_size] [entry_size bytes of data]
  */
+#define _GNU_SOURCE
 #include "sl.h"
 
 struct arc_node {
