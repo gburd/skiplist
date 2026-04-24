@@ -208,6 +208,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
 #ifndef SKIPLIST_MAX_HEIGHT
 #define SKIPLIST_MAX_HEIGHT 64
 #endif
+_Static_assert(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks stack overflow from path arrays");
 
 #ifndef SKIPLIST_SPLAY_INTERVAL
 #define SKIPLIST_SPLAY_INTERVAL 64
@@ -619,6 +620,63 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (prev == slist->slh_head)                                                                                                                           \
             return NULL;                                                                                                                                       \
         return prev;                                                                                                                                           \
+    }                                                                                                                                                          \
+                                                                                                                                                               \
+    /**                                                                                                                                                        \
+     * -- skip_prev_validated_                                                                                                                                 \
+     *                                                                                                                                                         \
+     * Validated backward traversal.  The sle_prev hint may be stale under                                                                                     \
+     * concurrency, so this function validates it and falls back to a forward                                                                                  \
+     * scan from the head if the hint is incorrect.                                                                                                            \
+     */                                                                                                                                                        \
+    decl##_node_t *prefix##skip_prev_validated_##decl(decl##_t *slist, decl##_node_t *node)                                                                    \
+    {                                                                                                                                                          \
+        if (slist == NULL || node == NULL)                                                                                                                     \
+            return NULL;                                                                                                                                       \
+        if (node == slist->slh_head)                                                                                                                           \
+            return NULL;                                                                                                                                       \
+                                                                                                                                                               \
+        /* Read the advisory prev hint. */                                                                                                                     \
+        decl##_node_t *prev = atomic_load_explicit(&node->field.sle_prev, memory_order_acquire);                                                               \
+                                                                                                                                                               \
+        /* If prev is head, that is always valid. */                                                                                                           \
+        if (prev == slist->slh_head) {                                                                                                                         \
+            decl##_node_t *head_next = atomic_load_explicit(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire);                                 \
+            if (!__SKIP_IS_MARKED(head_next) && head_next == node)                                                                                             \
+                return NULL;                                                                                                                                   \
+        }                                                                                                                                                      \
+                                                                                                                                                               \
+        /* Validate: prev->next[0] should be node (unmarked). */                                                                                               \
+        if (prev != NULL && prev != slist->slh_tail) {                                                                                                         \
+            decl##_node_t *prev_next = atomic_load_explicit(&prev->field.sle_levels[0].next, memory_order_acquire);                                            \
+            if (!__SKIP_IS_MARKED(prev_next) && prev_next == node) {                                                                                           \
+                /* Hint was valid. */                                                                                                                          \
+                return (prev == slist->slh_head) ? NULL : prev;                                                                                                \
+            }                                                                                                                                                  \
+        }                                                                                                                                                      \
+                                                                                                                                                               \
+        /* Hint was stale; scan forward from head at level 0. */                                                                                               \
+        decl##_node_t *scan = slist->slh_head;                                                                                                                 \
+        decl##_node_t *found_prev = slist->slh_head;                                                                                                           \
+        for (;;) {                                                                                                                                             \
+            decl##_node_t *next = atomic_load_explicit(&scan->field.sle_levels[0].next, memory_order_acquire);                                                 \
+            if (__SKIP_IS_MARKED(next)) {                                                                                                                      \
+                next = __SKIP_UNMARK(next);                                                                                                                    \
+            }                                                                                                                                                  \
+            if (next == slist->slh_tail || next == NULL)                                                                                                       \
+                break;                                                                                                                                         \
+            if (next == node) {                                                                                                                                \
+                found_prev = scan;                                                                                                                             \
+                break;                                                                                                                                         \
+            }                                                                                                                                                  \
+            scan = next;                                                                                                                                       \
+        }                                                                                                                                                      \
+                                                                                                                                                               \
+        /* Best-effort CAS to update the stale hint. */                                                                                                        \
+        decl##_node_t *expected_prev = prev;                                                                                                                   \
+        atomic_compare_exchange_strong_explicit(&node->field.sle_prev, &expected_prev, found_prev, memory_order_release, memory_order_relaxed);                \
+                                                                                                                                                               \
+        return (found_prev == slist->slh_head) ? NULL : found_prev;                                                                                            \
     }                                                                                                                                                          \
                                                                                                                                                                \
     /**                                                                                                                                                        \
@@ -1549,6 +1607,19 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
                                                                                                                                                                \
         /* Decrement list length. */                                                                                                                           \
         atomic_fetch_sub_explicit(&slist->slh_length, 1, memory_order_relaxed);                                                                                \
+                                                                                                                                                               \
+        /* Shrink head height if top levels are now empty. */                                                                                                  \
+        {                                                                                                                                                      \
+            size_t h = atomic_load_explicit(&slist->slh_head->field.sle_height, memory_order_acquire);                                                         \
+            while (h > 1) {                                                                                                                                    \
+                decl##_node_t *top_next = atomic_load_explicit(&slist->slh_head->field.sle_levels[h - 1].next, memory_order_acquire);                          \
+                if (top_next != slist->slh_tail)                                                                                                               \
+                    break;                                                                                                                                     \
+                if (atomic_compare_exchange_weak_explicit(&slist->slh_head->field.sle_height, &h, h - 1, memory_order_release, memory_order_acquire)) {        \
+                    h = h - 1;                                                                                                                                 \
+                }                                                                                                                                              \
+            }                                                                                                                                                  \
+        }                                                                                                                                                      \
                                                                                                                                                                \
         /* Free the node.  When EBR is attached, defer freeing via the                                                                                         \
            retire list; otherwise free immediately (single-threaded). */                                                                                       \

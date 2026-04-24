@@ -53,7 +53,7 @@ test_tsan: tests/test_concurrent_tsan
 tests/test_concurrent_tsan: tests/test_concurrent.c tests/munit.c include/sl.h
 	$(CC) $(TSAN_CFLAGS) $(TEST_FLAGS) -o $@ tests/test_concurrent.c tests/munit.c -lm -pthread
 
-test_all: test test_concurrent
+test_all: test test_concurrent test_tsan
 
 COV_CFLAGS = -Wall -Wextra -Wpedantic -O0 -g --coverage -std=c11 -Iinclude/ -fPIC
 BENCH_CFLAGS = -Wall -Wextra -Wpedantic -O2 -std=c11 -Iinclude/ -fPIC -DNDEBUG
@@ -97,7 +97,7 @@ tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $^
 
 examples/ex1: examples/ex1.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
+	$(CC) $^ -o $@ $(CFLAGS) -lm -pthread
 
 examples/ex2: examples/ex2.o
 	$(CC) $^ -o $@ $(CFLAGS) -lm

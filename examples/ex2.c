@@ -1,3 +1,9 @@
+/*
+ * Single-threaded skiplist example.
+ *
+ * This demonstrates the basic skiplist API without concurrency.
+ * For a concurrent/lock-free usage example with EBR, see ex1.c.
+ */
 #pragma GCC push_options
 #pragma GCC optimize("O0")
 

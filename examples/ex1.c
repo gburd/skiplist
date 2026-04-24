@@ -8,6 +8,8 @@
 
 // Include our monolithic ADT, the Skiplist!
 // ---------------------------------------------------------------------------
+#include <pthread.h>
+
 #include "../include/sl.h"
 
 // Local demo application OPTIONS:
@@ -175,6 +177,16 @@ SKIPLIST_DECL_VALIDATE(ex, api_, entries)
  */
 SKIPLIST_DECL_DOT(ex, api_, entries)
 
+/*
+ * Optional: Epoch-Based Reclamation (EBR) for lock-free concurrent access
+ *
+ * Generates EBR functions that allow multiple threads to safely read and
+ * modify the skiplist concurrently.  Threads "pin" before accessing the
+ * list and "unpin" when done; nodes removed while readers are pinned
+ * are deferred until all readers have advanced past that epoch.
+ */
+SKIPLIST_DECL_EBR(ex, api_)
+
 static void
 sprintf_ex_node(ex_node_t *node, char *buf)
 {
@@ -237,6 +249,151 @@ typedef struct {
 /* The head node's height is always 1 more than the tallest node, that location
    is where we store the total hits, or "m". */
 #define splay_list_m(m) list->slh_head->entries.sle_levels[list->slh_head->entries.sle_height].hits
+
+// ---------------------------------------------------------------------------
+// Concurrent demo: demonstrates the lock-free API with EBR
+// ---------------------------------------------------------------------------
+
+#define CONC_NUM_THREADS 4
+#define CONC_KEYS_PER_THREAD 100
+
+typedef struct {
+    ex_t *list;
+    __skip_ebr_ex_t *ebr;
+    int thread_id;
+    int ebr_tid;
+    int result;
+} conc_thread_ctx_t;
+
+/* Each thread inserts a disjoint range of keys, then searches for them. */
+static void *
+conc_thread_worker(void *arg)
+{
+    conc_thread_ctx_t *ctx = (conc_thread_ctx_t *)arg;
+    int start = ctx->thread_id * CONC_KEYS_PER_THREAD;
+    int end = start + CONC_KEYS_PER_THREAD;
+
+    /* Phase 1: Insert keys. */
+    for (int k = start; k < end; k++) {
+        ex_node_t *node;
+        int rc = api_skip_alloc_node_ex(&node);
+        if (rc != 0) {
+            ctx->result = -1;
+            return NULL;
+        }
+        node->key = k;
+        node->value = int_to_roman_numeral(k);
+
+        api_skip_ebr_pin_ex(ctx->ebr, ctx->ebr_tid);
+        rc = api_skip_insert_ex(ctx->list, node);
+        api_skip_ebr_unpin_ex(ctx->ebr, ctx->ebr_tid);
+
+        if (rc != 0) {
+            free(node->value);
+            api_skip_free_node_ex(ctx->list, node);
+            free(node);
+            ctx->result = -1;
+            return NULL;
+        }
+    }
+
+    /* Phase 2: Search for the keys we just inserted. */
+    for (int k = start; k < end; k++) {
+        ex_node_t query;
+        memset(&query, 0, sizeof(query));
+        query.key = k;
+
+        api_skip_ebr_pin_ex(ctx->ebr, ctx->ebr_tid);
+        ex_node_t *found = api_skip_position_eq_ex(ctx->list, &query);
+        api_skip_ebr_unpin_ex(ctx->ebr, ctx->ebr_tid);
+
+        if (found == NULL || found->key != k) {
+            fprintf(stderr, "Thread %d: key %d not found!\n", ctx->thread_id, k);
+            ctx->result = -1;
+            return NULL;
+        }
+    }
+
+    ctx->result = 0;
+    return NULL;
+}
+
+static int
+concurrent_demo(void)
+{
+    printf("\n--- Concurrent Demo: %d threads, %d keys each ---\n", CONC_NUM_THREADS, CONC_KEYS_PER_THREAD);
+
+    /* Allocate and initialize a skiplist for concurrent use. */
+    ex_t *list = (ex_t *)malloc(sizeof(ex_t));
+    if (list == NULL)
+        return ENOMEM;
+    int rc = api_skip_init_ex(list);
+    if (rc) {
+        free(list);
+        return rc;
+    }
+
+    /* Set up Epoch-Based Reclamation (EBR). */
+    __skip_ebr_ex_t *ebr = (__skip_ebr_ex_t *)malloc(sizeof(__skip_ebr_ex_t));
+    if (ebr == NULL) {
+        api_skip_free_ex(list);
+        free(list);
+        return ENOMEM;
+    }
+    api_skip_ebr_init_ex(ebr);
+    api_skip_ebr_attach_ex(list, ebr);
+
+    /* Spawn threads. */
+    pthread_t threads[CONC_NUM_THREADS];
+    conc_thread_ctx_t ctxs[CONC_NUM_THREADS];
+
+    for (int i = 0; i < CONC_NUM_THREADS; i++) {
+        ctxs[i].list = list;
+        ctxs[i].ebr = ebr;
+        ctxs[i].thread_id = i;
+        ctxs[i].ebr_tid = api_skip_ebr_register_ex(ebr);
+        ctxs[i].result = -1;
+        if (ctxs[i].ebr_tid < 0) {
+            fprintf(stderr, "Failed to register EBR thread %d\n", i);
+            api_skip_ebr_drain_ex(ebr);
+            api_skip_free_ex(list);
+            free(list);
+            free(ebr);
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < CONC_NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, conc_thread_worker, &ctxs[i]);
+    for (int i = 0; i < CONC_NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+
+    /* Check results. */
+    int failed = 0;
+    for (int i = 0; i < CONC_NUM_THREADS; i++) {
+        if (ctxs[i].result != 0) {
+            fprintf(stderr, "Thread %d failed!\n", i);
+            failed = 1;
+        }
+    }
+
+    size_t total = (size_t)CONC_NUM_THREADS * CONC_KEYS_PER_THREAD;
+    printf("List length after concurrent inserts: %zu (expected %zu)\n", api_skip_length_ex(list), total);
+
+    if (api_skip_length_ex(list) != total)
+        failed = 1;
+
+    /* Clean up: drain EBR deferred frees, then free the list. */
+    api_skip_ebr_drain_ex(ebr);
+    api_skip_free_ex(list);
+    free(list);
+    free(ebr);
+
+    printf("Concurrent demo %s.\n", failed ? "FAILED" : "passed");
+    return failed ? -1 : 0;
+}
+
+// ---------------------------------------------------------------------------
 
 int
 main()
@@ -382,6 +539,12 @@ main()
 #endif
     api_skip_free_ex(list);
     free(list);
+
+    /* Run the concurrent lock-free demo. */
+    int conc_rc = concurrent_demo();
+    if (conc_rc != 0)
+        return conc_rc;
+
     return rc;
 }
 #pragma GCC pop_options

@@ -74,6 +74,9 @@ SKIPLIST_DECL_VALIDATE(test, api_, entries)
 /* Generate EBR functions */
 SKIPLIST_DECL_EBR(test, api_)
 
+/* Generate snapshot functions */
+SKIPLIST_DECL_SNAPSHOTS(test, api_, entries)
+
 /* Generate pool allocator functions */
 SKIPLIST_DECL_POOL(test, api_, entries, 256)
 
@@ -1048,6 +1051,293 @@ test_stress_100k(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Test snapshot: basic insert, snapshot, insert more, restore */
+static MunitResult
+test_snapshot_basic(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+
+    /* Insert initial nodes: 10, 20, 30 */
+    for (int i = 1; i <= 3; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 3);
+
+    /* Take a snapshot */
+    uint64_t era = api_skip_snapshot_test(list);
+    assert_uint64(era, >, 0);
+
+    /* Insert more nodes: 40, 50 */
+    for (int i = 4; i <= 5; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 5);
+    assert_true(api_skip_contains_test(list, 40));
+    assert_true(api_skip_contains_test(list, 50));
+
+    /* Restore to the snapshot era */
+    test_t *restored = api_skip_restore_snapshot_test(list, era);
+    assert_not_null(restored);
+
+    /* After restore, only original 3 nodes should remain */
+    assert_int(api_skip_length_test(list), ==, 3);
+    assert_true(api_skip_contains_test(list, 10));
+    assert_true(api_skip_contains_test(list, 20));
+    assert_true(api_skip_contains_test(list, 30));
+    assert_false(api_skip_contains_test(list, 40));
+    assert_false(api_skip_contains_test(list, 50));
+
+    api_skip_release_snapshots_test(list);
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test snapshot: insert, snapshot, delete, restore brings deleted nodes back */
+static MunitResult
+test_snapshot_with_deletes(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+
+    /* Insert nodes: 10, 20, 30, 40, 50 */
+    for (int i = 1; i <= 5; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 5);
+
+    /* Take a snapshot */
+    uint64_t era = api_skip_snapshot_test(list);
+    assert_uint64(era, >, 0);
+
+    /* Delete nodes 20 and 40 */
+    api_skip_del_test(list, 20);
+    api_skip_del_test(list, 40);
+    assert_int(api_skip_length_test(list), ==, 3);
+    assert_false(api_skip_contains_test(list, 20));
+    assert_false(api_skip_contains_test(list, 40));
+
+    /* Restore to snapshot */
+    test_t *restored = api_skip_restore_snapshot_test(list, era);
+    assert_not_null(restored);
+
+    /* Deleted nodes should be back */
+    assert_int(api_skip_length_test(list), ==, 5);
+    assert_true(api_skip_contains_test(list, 10));
+    assert_true(api_skip_contains_test(list, 20));
+    assert_true(api_skip_contains_test(list, 30));
+    assert_true(api_skip_contains_test(list, 40));
+    assert_true(api_skip_contains_test(list, 50));
+
+    /* Verify ordering is still correct */
+    test_node_t *current = api_skip_head_test(list);
+    int prev_key = 0;
+    int count = 0;
+    while (current) {
+        assert_int(current->key, >, prev_key);
+        prev_key = current->key;
+        count++;
+        current = api_skip_next_node_test(list, current);
+    }
+    assert_int(count, ==, 5);
+
+    api_skip_release_snapshots_test(list);
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test snapshot: multiple eras, restore to each */
+static MunitResult
+test_snapshot_multiple_eras(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+
+    /* Insert 10, 20 */
+    for (int i = 1; i <= 2; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 2);
+
+    /* Snapshot era1: state = {10, 20} */
+    uint64_t era1 = api_skip_snapshot_test(list);
+
+    /* Insert 30 */
+    {
+        char *value = make_test_value(30);
+        api_skip_put_test(list, 30, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 3);
+
+    /* Snapshot era2: state = {10, 20, 30} */
+    uint64_t era2 = api_skip_snapshot_test(list);
+    assert_uint64(era2, >, era1);
+
+    /* Insert 40, 50 */
+    for (int i = 4; i <= 5; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 5);
+
+    /* Restore to era2: should have {10, 20, 30} */
+    test_t *restored = api_skip_restore_snapshot_test(list, era2);
+    assert_not_null(restored);
+    assert_int(api_skip_length_test(list), ==, 3);
+    assert_true(api_skip_contains_test(list, 10));
+    assert_true(api_skip_contains_test(list, 20));
+    assert_true(api_skip_contains_test(list, 30));
+    assert_false(api_skip_contains_test(list, 40));
+    assert_false(api_skip_contains_test(list, 50));
+
+    /* Restore to era1: should have {10, 20} */
+    restored = api_skip_restore_snapshot_test(list, era1);
+    assert_not_null(restored);
+    assert_int(api_skip_length_test(list), ==, 2);
+    assert_true(api_skip_contains_test(list, 10));
+    assert_true(api_skip_contains_test(list, 20));
+    assert_false(api_skip_contains_test(list, 30));
+
+    api_skip_release_snapshots_test(list);
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test snapshot: release frees preserved nodes (ASan will catch leaks) */
+static MunitResult
+test_snapshot_release(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+
+    /* Insert nodes */
+    for (int i = 1; i <= 10; i++) {
+        char *value = make_test_value(i);
+        api_skip_put_test(list, i, value);
+    }
+
+    /* Take snapshot */
+    uint64_t era = api_skip_snapshot_test(list);
+    (void)era;
+
+    /* Mutate: delete some, insert some */
+    api_skip_del_test(list, 3);
+    api_skip_del_test(list, 7);
+    {
+        char *value = make_test_value(11);
+        api_skip_put_test(list, 11, value);
+    }
+
+    /* Release all snapshots without restoring -- this should free preserved nodes */
+    api_skip_release_snapshots_test(list);
+
+    /* List should still be functional with post-snapshot state */
+    assert_int(api_skip_length_test(list), ==, 9);
+    assert_false(api_skip_contains_test(list, 3));
+    assert_false(api_skip_contains_test(list, 7));
+    assert_true(api_skip_contains_test(list, 11));
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test snapshot: restore then continue mutating */
+static MunitResult
+test_snapshot_restore_then_continue(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+
+    /* Insert 10, 20, 30 */
+    for (int i = 1; i <= 3; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+
+    /* Snapshot */
+    uint64_t era = api_skip_snapshot_test(list);
+
+    /* Insert 40, 50 */
+    for (int i = 4; i <= 5; i++) {
+        char *value = make_test_value(i * 10);
+        api_skip_put_test(list, i * 10, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 5);
+
+    /* Restore */
+    test_t *restored = api_skip_restore_snapshot_test(list, era);
+    assert_not_null(restored);
+    assert_int(api_skip_length_test(list), ==, 3);
+
+    /* Continue using the list: insert new nodes */
+    {
+        char *value = make_test_value(100);
+        api_skip_put_test(list, 100, value);
+    }
+    assert_int(api_skip_length_test(list), ==, 4);
+    assert_true(api_skip_contains_test(list, 100));
+
+    /* Delete a node */
+    api_skip_del_test(list, 20);
+    assert_int(api_skip_length_test(list), ==, 3);
+    assert_false(api_skip_contains_test(list, 20));
+
+    /* Verify full ordering */
+    test_node_t *current = api_skip_head_test(list);
+    int prev_key = 0;
+    int count = 0;
+    while (current) {
+        assert_int(current->key, >, prev_key);
+        prev_key = current->key;
+        count++;
+        current = api_skip_next_node_test(list, current);
+    }
+    assert_int(count, ==, 3);
+
+    /* Verify expected keys: 10, 30, 100 */
+    assert_true(api_skip_contains_test(list, 10));
+    assert_true(api_skip_contains_test(list, 30));
+    assert_true(api_skip_contains_test(list, 100));
+
+    api_skip_release_snapshots_test(list);
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -1067,7 +1357,13 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/ebr_basic", test_ebr_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validation", test_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/head_height_growth_shrinkage", test_head_height_growth_shrinkage, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *)"/stress_100k", test_stress_100k, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }, { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
+    { (char *)"/stress_100k", test_stress_100k, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/snapshot_basic", test_snapshot_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/snapshot_with_deletes", test_snapshot_with_deletes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/snapshot_multiple_eras", test_snapshot_multiple_eras, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/snapshot_release", test_snapshot_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/snapshot_restore_then_continue", test_snapshot_restore_then_continue, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };
 
