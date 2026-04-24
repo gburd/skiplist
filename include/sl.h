@@ -3731,10 +3731,11 @@ _skip_read_le64(const uint8_t *src)
     /* Pool type definition                                                */                                        \
     /* ------------------------------------------------------------------ */                                         \
     typedef struct _skip_pool_##decl {                                                                               \
-        size_t capacity;                 /* total number of slots */                                                 \
-        size_t slot_size;                /* bytes per slot (aligned to 64) */                                        \
-        _SKIP_ALIGNAS(64) char *slots;   /* contiguous allocation for all slots */                                   \
-        _SKIP_ATOMIC(int32_t) free_head; /* index of first free slot, -1 = empty */                                  \
+        size_t capacity;                   /* total number of slots */                                               \
+        size_t slot_size;                  /* bytes per slot (aligned to 64) */                                      \
+        _SKIP_ALIGNAS(64) char *slots;     /* contiguous allocation for all slots */                                 \
+        _SKIP_ATOMIC(int32_t) free_head;   /* index of first free slot, -1 = empty */                                \
+        _SKIP_ATOMIC(int32_t) * next_free; /* per-slot free-list links (separate from slot data) */                  \
     } _skip_pool_##decl##_t;                                                                                         \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
@@ -3746,19 +3747,19 @@ _skip_read_le64(const uint8_t *src)
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
-    /* _skip_pool_next_free_ -- Read/write the next-free index stored in */                                          \
-    /*   the first bytes of a free slot.                                   */                                        \
+    /* _skip_pool_next_free_ -- Read/write the next-free index for a     */                                          \
+    /*   slot.  Stored in a separate atomic array (not in the slot       */                                          \
+    /*   itself) to avoid data races between speculative free-list       */                                          \
+    /*   reads and concurrent node-data writes after CAS.                */                                          \
     /* ------------------------------------------------------------------ */                                         \
     static inline int32_t _skip_pool_get_next_free_##decl(_skip_pool_##decl##_t *pool, int32_t i)                    \
     {                                                                                                                \
-        int32_t next;                                                                                                \
-        memcpy(&next, _skip_pool_slot_ptr_##decl(pool, i), sizeof(int32_t));                                         \
-        return next;                                                                                                 \
+        return _skip_atomic_load(&pool->next_free[i], memory_order_relaxed);                                         \
     }                                                                                                                \
                                                                                                                      \
     static inline void _skip_pool_set_next_free_##decl(_skip_pool_##decl##_t *pool, int32_t i, int32_t next)         \
     {                                                                                                                \
-        memcpy(_skip_pool_slot_ptr_##decl(pool, i), &next, sizeof(int32_t));                                         \
+        _skip_atomic_store(&pool->next_free[i], next, memory_order_relaxed);                                         \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
@@ -3791,11 +3792,6 @@ _skip_read_le64(const uint8_t *src)
         /* Compute raw slot size: node struct + levels array */                                                      \
         size_t raw_size = sizeof(decl##_node_t) + sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT;     \
                                                                                                                      \
-        /* Ensure each slot is at least large enough to hold an int32_t   */                                         \
-        /* for the free-list link (it always will be, but be safe).       */                                         \
-        if (raw_size < sizeof(int32_t))                                                                              \
-            raw_size = sizeof(int32_t);                                                                              \
-                                                                                                                     \
         /* Round up to next multiple of 64 for cache-line alignment */                                               \
         size_t slot_size = (raw_size + 63u) & ~(size_t)63u;                                                          \
                                                                                                                      \
@@ -3806,6 +3802,14 @@ _skip_read_le64(const uint8_t *src)
         pool->slots = (char *)_skip_aligned_alloc(64, slot_size * capacity);                                         \
         if (pool->slots == NULL)                                                                                     \
             return ENOMEM;                                                                                           \
+                                                                                                                     \
+        /* Allocate the separate free-list link array */                                                             \
+        pool->next_free = (_SKIP_ATOMIC(int32_t) *)calloc(capacity, sizeof(_SKIP_ATOMIC(int32_t)));                  \
+        if (pool->next_free == NULL) {                                                                               \
+            _skip_aligned_free(pool->slots);                                                                         \
+            pool->slots = NULL;                                                                                      \
+            return ENOMEM;                                                                                           \
+        }                                                                                                            \
                                                                                                                      \
         /* Zero the entire slab */                                                                                   \
         memset(pool->slots, 0, slot_size *capacity);                                                                 \
@@ -3882,6 +3886,8 @@ _skip_read_le64(const uint8_t *src)
             return;                                                                                                  \
         _skip_aligned_free(pool->slots);                                                                             \
         pool->slots = NULL;                                                                                          \
+        free(pool->next_free);                                                                                       \
+        pool->next_free = NULL;                                                                                      \
         pool->capacity = 0;                                                                                          \
         _skip_atomic_store(&pool->free_head, -1, memory_order_release);                                              \
     }                                                                                                                \
