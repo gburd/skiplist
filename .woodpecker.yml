@@ -1,0 +1,17 @@
+steps:
+  test-gcc:
+    image: gcc:latest
+    commands:
+      - make test
+      - make test_concurrent
+      - make test_tsan
+      - make examples
+      - make bench
+
+  test-clang:
+    image: silkeh/clang:latest
+    commands:
+      - make CC=clang test
+      - make CC=clang test_concurrent
+      - make CC=clang examples
+      - make CC=clang bench

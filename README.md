@@ -1,141 +1,259 @@
 # Skiplist
 
-This project defines [a skiplist data structure written in
-C](https://git.burd.me/greg/skiplist/src/branch/main/include/sl.h).  Implemented
-as using macros this code provides a way to essentially "template" (as in C++)
-and emit code with types and functions specific to your use case.  You can apply
-these macros multiple times safely in your code, once for each application.
+A header-only C library implementing a splay-list -- a skiplist with adaptive
+rebalancing.  The entire implementation lives in preprocessor macros
+(`include/sl.h`) that generate type-specific code at compile time, similar to
+C++ templates.
 
-While there are lock-free implementations of a skiplist, this implementation is
-not (yet) lock-free or designed to manage concurrent access in any way.  Use a
-mutex or some other method to serialize access to the API ([until I finish the
-lock-free
-variant](https://git.burd.me/greg/skiplist/src/branch/gburd/lock-free)).
+Lock-free concurrent operations are supported by default using C11 atomics.
+Define `SKIPLIST_SINGLE_THREADED` to strip all atomic overhead for
+single-threaded use.
 
-Study the [example
-code](https://git.burd.me/greg/skiplist/src/branch/main/examples/ex1.c) to see
-how this works in practice.
+## Features
 
-## Overview
-A skiplist is a sorted list with O(log(n)) on average for most operations.  It
-is a probabilistic datastructure, meaning that it does not guarantee O(log(n))
-it approximates it over time.  This implementation includes improves the
-probability by integrating the splay list algorithm for re-balancing trading off
-a bit of computational overhead and code complexity for a nearly always optimal,
-or "perfect" skiplist.
+- **Lock-free concurrent operations** -- default mode using C11 atomics and
+  marked pointers for logical deletion
+- **Single-threaded mode** -- define `SKIPLIST_SINGLE_THREADED` to eliminate
+  all atomic overhead
+- **Splay rebalancing** -- node heights adapt based on access frequency;
+  popular elements are promoted, rarely-accessed elements are demoted
+  (opt-in via `-DSKIPLIST_SPLAY_REBALANCE`)
+- **MVCC point-in-time snapshots** with restore (`SKIPLIST_DECL_SNAPSHOTS`)
+- **Epoch-based reclamation (EBR)** for safe concurrent memory reclamation
+  (`SKIPLIST_DECL_EBR`)
+- **Fixed-capacity pool allocator** with cache-line-aligned slots
+  (`SKIPLIST_DECL_POOL`)
+- **Binary serialization/deserialization** (`SKIPLIST_DECL_ARCHIVE`)
+- **Key/value access API** -- `get`, `put`, `del`, `contains`
+  (`SKIPLIST_DECL_ACCESS`)
+- **Duplicate key support** -- `insert_dup` and `dup` operations
+- **Runtime integrity validation** (`SKIPLIST_DECL_VALIDATE`)
+- **GraphViz DOT visualization** (`SKIPLIST_DECL_DOT`)
+- **Doubly-linked bottom layer** with head/tail guard nodes for efficient
+  bidirectional iteration
+- **Portable** -- compiles with GCC, Clang, and MSVC; supports C11 (C99 in
+  single-threaded mode)
 
-Conceptually, the arrangement of a skiplist appears as follows:
+## Quick Start
 
+```c
+#include "sl.h"
+
+/* 1. Define your node type */
+struct ex_node {
+    int key;
+    char *value;
+    SKIPLIST_ENTRY(ex) entries;
+};
+
+/* 2. Generate the skiplist implementation */
+SKIPLIST_DECL(ex, api_, entries,
+    /* compare */  { (void)list; (void)aux; return (a->key > b->key) - (a->key < b->key); },
+    /* free */     { free(node->value); },
+    /* update */   { (void)value; rc = 0; },
+    /* archive */  { (void)node; (void)buf; *bytes = 0; },
+    /* sizeof */   { (void)node; *s = sizeof(struct ex_node); }
+);
+
+int main(void)
+{
+    ex_t list;
+    api_skip_init_ex(&list);
+
+    /* Allocate and insert a node */
+    struct ex_node *n = api_skip_alloc_node_ex(&list);
+    n->key = 42;
+    n->value = strdup("forty-two");
+    api_skip_insert_ex(&list, n);
+
+    /* Search */
+    struct ex_node query = { .key = 42 };
+    struct ex_node *found = api_skip_contains_ex(&list, &query);
+
+    /* Cleanup */
+    api_skip_destroy_ex(&list);
+    return 0;
+}
 ```
-<head> ----------> [2] --------------------------------------------------> [9] ---------->
-<head> ----------> [2] ------------------------------------[7] ----------> [9] ---------->
-<head> ----------> [2] ----------> [4] ------------------> [7] ----------> [9] --> [10] ->
-<head> --> [1] --> [2] --> [3] --> [4] --> [5] --> [6] --> [7] --> [8] --> [9] --> [10] ->
+
+## Installation
+
+This is a header-only library.  Copy `include/sl.h` into your project, or
+install system-wide:
+
+```bash
+make install              # installs to /usr/local/include by default
+make install PREFIX=/opt  # custom prefix
 ```
 
-Each node contains at the very least a link to the next element in the list
-(corresponding to the lowest level in the above diagram), but it can randomly
-contain more links which skip further down the list (the towers in the above
-diagram). This allows for the algorithm to move down the list faster than
-having to visit every element.
+A `pkg-config` file (`skiplist.pc`) is generated and installed alongside the
+header.
 
-Conceptually, the skiplist can be thought of as a stack of linked lists. At
-the very bottom is the full linked list with every element, and each layer
-above corresponds to a linked list containing a random subset of the elements
-from the layer immediately below it. The probability distribution that
-determines this random subset can be customized, but typically a layer will
-contain half the nodes from the layer below.
+To uninstall:
 
-This implementation maintains a doubly-linked list at the bottom layer to
-support efficient iteration in either direction.  There is also a guard
-node at the tail rather than simply pointing to NULL.
-
-```
-<head> <-> [1] <-> [2] <-> [3] <-> [4] <-> [5] <-> [6] <-> [7] <-> <tail>
+```bash
+make uninstall
 ```
 
-## Safety:
+## Examples
 
-The ordered skiplist relies on a well-behaved comparison
-function. Specifically, given some ordering function f(a, b), it must satisfy
-the following properties:
+| Example | Description | Key macros |
+|---------|-------------|------------|
+| `ex01` | Minimal skiplist | `SKIPLIST_ENTRY`, `SKIPLIST_DECL` |
+| `ex02` | Key/value API | `SKIPLIST_DECL_ACCESS` |
+| `ex03` | Custom struct types | Custom comparison |
+| `ex04` | Iteration and positioning | `SKIPLIST_FOREACH_H2T`, `position_*` |
+| `ex05` | Duplicate keys | `insert_dup`, `dup` |
+| `ex06` | Snapshots | `SKIPLIST_DECL_SNAPSHOTS` |
+| `ex07` | Pool allocator | `SKIPLIST_DECL_POOL` |
+| `ex08` | Serialization | `SKIPLIST_DECL_ARCHIVE` |
+| `ex09` | Validation and DOT output | `SKIPLIST_DECL_VALIDATE`, `SKIPLIST_DECL_DOT` |
+| `ex10` | Concurrent with EBR | `SKIPLIST_DECL_EBR` |
 
-1) Be well-defined: f(a, b) should always return the same value
-2) Be antisymmetric: f(a, b) == Greater if and only if f(b, a) == Less, and
-   f(a, b) == Equal == f(b, a).
-3) Be transitive: If f(a, b) == Greater and f(b, c) == Greater than f(a, c)
-   == Greater.
+Build and run all examples:
 
-Failure to satisfy these properties can result in unexpected behavior at
-best, and at worst will cause a segfault, null deref, or some other bad
+```bash
+make examples
+./examples/ex01
+```
+
+## Build
+
+```bash
+make test              # Build and run the test suite
+make test_concurrent   # Build and run concurrency tests
+make test_tsan         # Build and run ThreadSanitizer tests
+make test_all          # Run all test suites
+make examples          # Build all examples (ex01 through ex10)
+make bench             # Build and run benchmarks
+make coverage          # Build with gcov and report coverage
+make format            # Run clang-format on all source files
+make clean             # Remove build artifacts
+```
+
+Running examples with leak detection:
+
+```bash
+env ASAN_OPTIONS=detect_leaks=1 ./examples/ex01
+```
+
+Generating a DOT visualization:
+
+```bash
+dot -Tpdf /tmp/ex09.dot -o /tmp/ex09.pdf
+```
+
+## Single-Threaded Mode
+
+By default the library uses C11 `<stdatomic.h>` for lock-free concurrent
+access.  If your application is single-threaded, define
+`SKIPLIST_SINGLE_THREADED` before including `sl.h` to replace all atomic
+operations with plain loads and stores:
+
+```c
+#define SKIPLIST_SINGLE_THREADED
+#include "sl.h"
+```
+
+This eliminates the dependency on `<stdatomic.h>` and `<stdalign.h>`, reduces
+code size, and improves performance when concurrency is not needed.
+
+Note: `SKIPLIST_DECL_EBR` is not available in single-threaded mode and will
+produce a compile-time error if both are used together.
+
+## Compile-Time Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `SKIPLIST_SINGLE_THREADED` | *(not defined)* | Replace C11 atomics with plain operations |
+| `SKIPLIST_SPLAY_REBALANCE` | *(not defined)* | Enable adaptive splay rebalancing |
+| `SKIPLIST_MAX_HEIGHT` | `64` | Maximum skiplist height (must be <= 64) |
+| `SKIPLIST_SPLAY_INTERVAL` | `64` | Number of accesses between rebalance passes |
+| `SKIPLIST_EBR_MAX_THREADS` | `128` | Maximum threads that can register with EBR |
+| `SKIPLIST_DIAGNOSTIC` | *(not defined)* | Enable diagnostic/validation macros |
+| `DEBUG` | *(not defined)* | Enable debug output |
+
+## API Overview
+
+The library is organized as a set of macro layers.  Each macro generates a
+family of functions named `prefix_skip_<operation>_decl()`.
+
+| Macro | Purpose |
+|-------|---------|
+| `SKIPLIST_ENTRY(decl)` | Embed in your node struct to add skiplist metadata |
+| `SKIPLIST_DECL(decl, prefix, field, cmp, free, update, archive, sizeof)` | Core skiplist: init, destroy, insert, remove, search, traversal |
+| `SKIPLIST_DECL_ACCESS(decl, prefix, key, ktype, value, vtype, qblk, rblk)` | High-level key/value API: `get`, `put`, `del`, `contains` |
+| `SKIPLIST_DECL_SNAPSHOTS(decl, prefix, field)` | MVCC point-in-time snapshots with restore |
+| `SKIPLIST_DECL_EBR(decl, prefix)` | Epoch-based reclamation for concurrent memory safety |
+| `SKIPLIST_DECL_POOL(decl, prefix, field, capacity)` | Fixed-capacity pool allocator |
+| `SKIPLIST_DECL_ARCHIVE(decl, prefix, field, write_blk, read_blk)` | Binary serialization/deserialization |
+| `SKIPLIST_DECL_VALIDATE(decl, prefix, field)` | Runtime integrity checking |
+| `SKIPLIST_DECL_DOT(decl, prefix, field)` | GraphViz DOT visualization output |
+
+Iteration macros:
+
+| Macro | Description |
+|-------|-------------|
+| `SKIPLIST_FOREACH_H2T(decl, prefix, field, list, elm, iter)` | Iterate head to tail |
+| `SKIPLIST_FOREACH_T2H(decl, prefix, field, list, elm, iter)` | Iterate tail to head |
+
+## License
+
+SPDX-License-Identifier: `ISC OR MIT`
+
+Copyright (c) 2024 Gregory Burd <greg@burd.me>.  All rights reserved.
+
+Dual-licensed under the ISC License and the MIT License.  See the header of
+`include/sl.h` for the full license text.
+
+## Safety
+
+The ordered skiplist relies on a well-behaved comparison function.
+Specifically, given some ordering function `f(a, b)`, it must satisfy the
+following properties:
+
+1. **Well-defined**: `f(a, b)` should always return the same value.
+2. **Antisymmetric**: `f(a, b) == Greater` if and only if `f(b, a) == Less`,
+   and `f(a, b) == Equal == f(b, a)`.
+3. **Transitive**: If `f(a, b) == Greater` and `f(b, c) == Greater` then
+   `f(a, c) == Greater`.
+
+Failure to satisfy these properties can result in unexpected behavior at best,
+and at worst will cause a segfault, null dereference, or other undefined
 behavior.
 
-## References:
+## References
+
 Sources of information most helpful for this implementation include, but are
 not limited to:
 
- - Skip lists: a probabilistic alternative to balanced trees
-   ```@article{10.1145/78973.78977,
-     author = {Pugh, William},
-     title = {Skip lists: a probabilistic alternative to balanced trees},
-     year = {1990}, issue_date = {June 1990},
-     publisher = {Association for Computing Machinery},
-     address = {New York, NY, USA},
-     volume = {33}, number = {6}, issn = {0001-0782},
-     url = {https://doi.org/10.1145/78973.78977},
-     doi = {10.1145/78973.78977},
-     journal = {Commun. ACM}, month = {jun}, pages = {668-676}, numpages = {9},
-     keywords = {trees, searching, data structures},
-     download = {https://www.cl.cam.ac.uk/teaching/2005/Algorithms/skiplists.pdf}
-   }```
+- **Skip lists: a probabilistic alternative to balanced trees**
+  William Pugh, 1990.
+  *Communications of the ACM*, 33(6), 668--676.
+  [DOI](https://doi.org/10.1145/78973.78977) |
+  [PDF](https://www.cl.cam.ac.uk/teaching/2005/Algorithms/skiplists.pdf)
 
- - Tutorial: The Ubiquitous Skiplist, its Variants, and Applications in Modern Big Data Systems
-   ```@article{Vadrevu2023TutorialTU,
-     title={Tutorial: The Ubiquitous Skiplist, its Variants, and Applications in Modern Big Data Systems},
-     author={Venkata Sai Pavan Kumar Vadrevu and Lu Xing and Walid G. Aref},
-     journal={ArXiv},
-     year={2023},
-     volume={abs/2304.09983},
-     url={https://api.semanticscholar.org/CorpusID:258236678},
-     download={https://arxiv.org/pdf/2304.09983.pdf}
-   }```
+- **Tutorial: The Ubiquitous Skiplist, its Variants, and Applications in Modern Big Data Systems**
+  Venkata Sai Pavan Kumar Vadrevu, Lu Xing, Walid G. Aref, 2023.
+  *arXiv:2304.09983*.
+  [PDF](https://arxiv.org/pdf/2304.09983.pdf)
 
- - The Splay-List: A Distribution-Adaptive Concurrent Skip-List
-   ```@misc{aksenov2020splaylist,
-     title={The Splay-List: A Distribution-Adaptive Concurrent Skip-List},
-     author={Vitaly Aksenov and Dan Alistarh and Alexandra Drozdova and Amirkeivan Mohtashami},
-     year={2020},
-     eprint={2008.01009},
-     archivePrefix={arXiv},
-     primaryClass={cs.DC},
-     download={https://arxiv.org/pdf/2008.01009.pdf}
-   }```
+- **The Splay-List: A Distribution-Adaptive Concurrent Skip-List**
+  Vitaly Aksenov, Dan Alistarh, Alexandra Drozdova, Amirkeivan Mohtashami, 2020.
+  *arXiv:2008.01009*.
+  [PDF](https://arxiv.org/pdf/2008.01009.pdf)
 
- - JellyFish: A Fast Skip List with MVCC},
-   ```@article{Yeon2020JellyFishAF,
-     title={JellyFish: A Fast Skip List with MVCC},
-     author={Jeseong Yeon and Leeju Kim and Youil Han and Hyeon Gyu Lee and Eunji Lee and Bryan Suk Joon Kim},
-     journal={Proceedings of the 21st International Middleware Conference},
-     year={2020},
-     url={https://api.semanticscholar.org/CorpusID:228086012}
-   }```
+- **JellyFish: A Fast Skip List with MVCC**
+  Jeseong Yeon, Leeju Kim, Youil Han, Hyeon Gyu Lee, Eunji Lee, Bryan Suk Joon Kim, 2020.
+  *Proceedings of the 21st International Middleware Conference*.
 
-## Open Source
-I'd like to thank others for thoughtfully licensing their work, the
-community of software engineers succeeds when we work together.
+## Acknowledgments
 
 Portions of this code are derived from other copyrighted works:
 
- - _MIT License_
-   - https://github.com/greensky00/skiplist
-     - 2017-2024 Jung-Sang Ahn <jungsang.ahn@gmail.com>
-   - https://github.com/paulross/skiplist
-     - Copyright (c) 2017-2023 Paul Ross <paulross@uky.edu>
-   - https://github.com/JP-Ellis/rust-skiplist
-     - Copyright (c) 2015 Joshua Ellis <github@jpellis.me>
- - _Public Domain_
-   - https://gist.github.com/zhpengg/2873424
-     - Zhipeng Li <zhpeng.is@gmail.com>
-
-### TODO:
- * The concurrent, lock-free version of this (see [gburd/lock-free](https://git.burd.me/greg/skiplist/src/branch/gburd/lock-free) branch for WIP).
+- *MIT License*
+  - [greensky00/skiplist](https://github.com/greensky00/skiplist) -- Jung-Sang Ahn
+  - [paulross/skiplist](https://github.com/paulross/skiplist) -- Paul Ross
+  - [JP-Ellis/rust-skiplist](https://github.com/JP-Ellis/rust-skiplist) -- Joshua Ellis
+- *Public Domain*
+  - [zhpengg/skiplist](https://gist.github.com/zhpengg/2873424) -- Zhipeng Li

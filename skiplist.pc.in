@@ -1,0 +1,7 @@
+prefix=@PREFIX@
+includedir=@INCLUDEDIR@
+
+Name: skiplist
+Description: Header-only C splay-list with lock-free concurrency
+Version: 1.0.0
+Cflags: -I${includedir}

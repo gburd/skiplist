@@ -80,6 +80,45 @@ SKIPLIST_DECL_SNAPSHOTS(test, api_, entries)
 /* Generate pool allocator functions */
 SKIPLIST_DECL_POOL(test, api_, entries, 256)
 
+/* Generate archive functions */
+SKIPLIST_DECL_ARCHIVE(
+    test, api_, entries,
+    /* write_entry_blk */
+    {
+        /* Write key */
+        memcpy(buf, &node->key, sizeof(node->key));
+        uint64_t off = sizeof(node->key);
+        /* Write value string length + data (or 0 if NULL) */
+        if (node->value) {
+            uint32_t slen = (uint32_t)strlen(node->value);
+            memcpy(buf + off, &slen, sizeof(slen));
+            off += sizeof(slen);
+            memcpy(buf + off, node->value, slen);
+            off += slen;
+        } else {
+            uint32_t slen = 0;
+            memcpy(buf + off, &slen, sizeof(slen));
+            off += sizeof(slen);
+        }
+        bytes = off;
+    },
+    /* read_entry_blk */
+    {
+        uint64_t off = 0;
+        memcpy(&node->key, buf + off, sizeof(node->key));
+        off += sizeof(node->key);
+        uint32_t slen;
+        memcpy(&slen, buf + off, sizeof(slen));
+        off += sizeof(slen);
+        if (slen > 0) {
+            node->value = (char *)malloc(slen + 1);
+            memcpy(node->value, buf + off, slen);
+            node->value[slen] = '\0';
+        } else {
+            node->value = NULL;
+        }
+    })
+
 /* Helper function to create test value */
 static char *
 make_test_value(int key)
@@ -736,7 +775,7 @@ test_pool_allocator(const MunitParameter params[], void *data)
     (void)params;
     (void)data;
 
-    __skip_pool_test_t pool;
+    _skip_pool_test_t pool;
     int rc = api_skip_pool_init_test(&pool, 8);
     assert_int(rc, ==, 0);
 
@@ -791,7 +830,7 @@ test_pool_allocator(const MunitParameter params[], void *data)
     api_skip_pool_free_test(&pool, wrapper_node);
 
     /* Test invalid init parameters */
-    __skip_pool_test_t bad_pool;
+    _skip_pool_test_t bad_pool;
     rc = api_skip_pool_init_test(NULL, 8);
     assert_int(rc, ==, EINVAL);
     rc = api_skip_pool_init_test(&bad_pool, 0);
@@ -810,7 +849,7 @@ test_ebr_basic(const MunitParameter params[], void *data)
     (void)data;
 
     /* Initialize EBR */
-    __skip_ebr_test_t ebr;
+    _skip_ebr_test_t ebr;
     api_skip_ebr_init_test(&ebr);
 
     /* Verify initial state */
@@ -885,7 +924,7 @@ test_validation(const MunitParameter params[], void *data)
     api_skip_init_test(list);
 
     /* Validate empty list (single-threaded mode, flags=1) */
-    int errors = __skip_integrity_check_test(list, 1);
+    int errors = _skip_integrity_check_test(list, 1);
     assert_int(errors, ==, 0);
 
     /* Insert elements */
@@ -899,11 +938,11 @@ test_validation(const MunitParameter params[], void *data)
     assert_int(api_skip_length_test(list), ==, 20);
 
     /* Validate with single-threaded mode (flags=1, skip concurrent checks) */
-    errors = __skip_integrity_check_test(list, 1);
+    errors = _skip_integrity_check_test(list, 1);
     assert_int(errors, ==, 0);
 
     /* Validate with concurrent mode (flags=0, includes forward-chain checks) */
-    errors = __skip_integrity_check_test(list, 0);
+    errors = _skip_integrity_check_test(list, 0);
     assert_int(errors, ==, 0);
 
     /* Remove some elements and validate again */
@@ -912,18 +951,18 @@ test_validation(const MunitParameter params[], void *data)
     }
     assert_int(api_skip_length_test(list), ==, 10);
 
-    errors = __skip_integrity_check_test(list, 1);
+    errors = _skip_integrity_check_test(list, 1);
     assert_int(errors, ==, 0);
 
-    errors = __skip_integrity_check_test(list, 0);
+    errors = _skip_integrity_check_test(list, 0);
     assert_int(errors, ==, 0);
 
     /* Validate with early-exit flag (flags=3 = single-threaded + early-exit) */
-    errors = __skip_integrity_check_test(list, 3);
+    errors = _skip_integrity_check_test(list, 3);
     assert_int(errors, ==, 0);
 
     /* Validate NULL list returns error */
-    errors = __skip_integrity_check_test(NULL, 1);
+    errors = _skip_integrity_check_test(NULL, 1);
     assert_int(errors, >, 0);
 
     api_skip_free_test(list);
@@ -1042,7 +1081,7 @@ test_stress_100k(const MunitParameter params[], void *data)
     assert_int(count, ==, n / 2);
 
     /* Validate integrity after stress */
-    int errors = __skip_integrity_check_test(list, 1);
+    int errors = _skip_integrity_check_test(list, 1);
     assert_int(errors, ==, 0);
 
     api_skip_free_test(list);
@@ -1338,6 +1377,161 @@ test_snapshot_restore_then_continue(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Test archive basic: serialize, deserialize, verify contents */
+static MunitResult
+test_archive_basic(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    api_skip_init_test(list);
+
+    /* Insert some values */
+    for (int i = 1; i <= 10; i++) {
+        int rc = api_skip_put_test(list, i, make_test_value(i));
+        assert_int(rc, ==, 0);
+    }
+
+    /* Serialize to tmpfile */
+    FILE *fp = tmpfile();
+    assert_not_null(fp);
+    int rc = api_skip_serialize_test(list, fp);
+    assert_int(rc, ==, 0);
+
+    /* Rewind and deserialize into a fresh list */
+    rewind(fp);
+    test_t *list2 = malloc(sizeof(test_t));
+    assert_not_null(list2);
+    api_skip_init_test(list2);
+
+    rc = api_skip_deserialize_test(list2, fp);
+    assert_int(rc, ==, 0);
+    fclose(fp);
+
+    /* Verify contents match */
+    for (int i = 1; i <= 10; i++) {
+        assert_true(api_skip_contains_test(list2, i));
+        char *v = api_skip_get_test(list2, i);
+        assert_not_null(v);
+        char expected[32];
+        snprintf(expected, 32, "value_%d", i);
+        assert_string_equal(v, expected);
+    }
+
+    api_skip_free_test(list);
+    free(list);
+    api_skip_free_test(list2);
+    free(list2);
+
+    return MUNIT_OK;
+}
+
+/* Test archive empty list */
+static MunitResult
+test_archive_empty(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    api_skip_init_test(list);
+
+    /* Serialize empty list */
+    FILE *fp = tmpfile();
+    assert_not_null(fp);
+    int rc = api_skip_serialize_test(list, fp);
+    assert_int(rc, ==, 0);
+
+    /* Deserialize into fresh list */
+    rewind(fp);
+    test_t *list2 = malloc(sizeof(test_t));
+    assert_not_null(list2);
+    api_skip_init_test(list2);
+
+    rc = api_skip_deserialize_test(list2, fp);
+    assert_int(rc, ==, 0);
+    fclose(fp);
+
+    /* Verify empty */
+    assert_int((int)api_skip_length_test(list2), ==, 0);
+
+    api_skip_free_test(list);
+    free(list);
+    api_skip_free_test(list2);
+    free(list2);
+
+    return MUNIT_OK;
+}
+
+/* Test archive roundtrip: serialize, deserialize, re-serialize, binary compare */
+static MunitResult
+test_archive_roundtrip(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    api_skip_init_test(list);
+
+    for (int i = 1; i <= 20; i++) {
+        int rc = api_skip_put_test(list, i, make_test_value(i));
+        assert_int(rc, ==, 0);
+    }
+
+    /* First serialization */
+    FILE *fp1 = tmpfile();
+    assert_not_null(fp1);
+    int rc = api_skip_serialize_test(list, fp1);
+    assert_int(rc, ==, 0);
+
+    /* Deserialize into list2 */
+    rewind(fp1);
+    test_t *list2 = malloc(sizeof(test_t));
+    assert_not_null(list2);
+    api_skip_init_test(list2);
+
+    rc = api_skip_deserialize_test(list2, fp1);
+    assert_int(rc, ==, 0);
+
+    /* Re-serialize list2 */
+    FILE *fp2 = tmpfile();
+    assert_not_null(fp2);
+    rc = api_skip_serialize_test(list2, fp2);
+    assert_int(rc, ==, 0);
+
+    /* Compare the two serialized files byte-by-byte */
+    long len1 = ftell(fp1);
+    long len2 = ftell(fp2);
+
+    /* Get sizes: both should start from the written position */
+    fseek(fp1, 0, SEEK_END);
+    len1 = ftell(fp1);
+    fseek(fp2, 0, SEEK_END);
+    len2 = ftell(fp2);
+    assert_long(len1, ==, len2);
+
+    rewind(fp1);
+    rewind(fp2);
+    for (long i = 0; i < len1; i++) {
+        int c1 = fgetc(fp1);
+        int c2 = fgetc(fp2);
+        assert_int(c1, ==, c2);
+    }
+
+    fclose(fp1);
+    fclose(fp2);
+    api_skip_free_test(list);
+    free(list);
+    api_skip_free_test(list2);
+    free(list2);
+
+    return MUNIT_OK;
+}
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -1363,6 +1557,9 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/snapshot_multiple_eras", test_snapshot_multiple_eras, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/snapshot_release", test_snapshot_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/snapshot_restore_then_continue", test_snapshot_restore_then_continue, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/archive_basic", test_archive_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/archive_empty", test_archive_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/archive_roundtrip", test_archive_roundtrip, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };

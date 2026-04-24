@@ -1,0 +1,23 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        env:
+          CC: ${{ matrix.cc }}
+        run: |
+          make test
+          make test_concurrent
+          make examples
+          make bench
+      - name: TSAN
+        if: matrix.cc == 'gcc'
+        env:
+          CC: gcc
+        run: make test_tsan

@@ -10,7 +10,7 @@
  *   ./tests/test_concurrent --no-fork
  *
  * Known issue: concurrent delete and mixed workload tests may intermittently
- * segfault without sanitizers due to a race in __skip_adjust_hit_counts_,
+ * segfault without sanitizers due to a race in _skip_adjust_hit_counts_,
  * which traverses the list (SKIPLIST_FOREACH_H2T) after retiring a node.
  * Under ASan the tests pass reliably because freed memory is quarantined.
  * Compile with -fsanitize=address for stable runs until the library's
@@ -78,7 +78,7 @@ SKIPLIST_DECL_POOL(conc, ct_, entries, 1024)
  * ---------------------------------------------------------------------------*/
 typedef struct {
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     int thread_id; /* logical thread index 0..NUM_THREADS-1 */
     int ebr_tid;   /* EBR-registered thread id */
     int result;    /* 0 = success */
@@ -88,14 +88,14 @@ typedef struct {
  * Helper: allocate and init a list + EBR, returning them through pointers.
  * ---------------------------------------------------------------------------*/
 static void
-setup_list_and_ebr(conc_t **list_out, __skip_ebr_conc_t **ebr_out)
+setup_list_and_ebr(conc_t **list_out, _skip_ebr_conc_t **ebr_out)
 {
     conc_t *list = (conc_t *)calloc(1, sizeof(conc_t));
     munit_assert_not_null(list);
     int rc = ct_skip_init_conc(list);
     munit_assert_int(rc, ==, 0);
 
-    __skip_ebr_conc_t *ebr = (__skip_ebr_conc_t *)calloc(1, sizeof(__skip_ebr_conc_t));
+    _skip_ebr_conc_t *ebr = (_skip_ebr_conc_t *)calloc(1, sizeof(_skip_ebr_conc_t));
     munit_assert_not_null(ebr);
     ct_skip_ebr_init_conc(ebr);
     ct_skip_ebr_attach_conc(list, ebr);
@@ -125,7 +125,7 @@ prefill_list(conc_t *list, int start, int end)
  * Helper: tear down list + EBR.
  * ---------------------------------------------------------------------------*/
 static void
-teardown_list_and_ebr(conc_t *list, __skip_ebr_conc_t *ebr)
+teardown_list_and_ebr(conc_t *list, _skip_ebr_conc_t *ebr)
 {
     ct_skip_ebr_drain_conc(ebr);
     ct_skip_free_conc(list);
@@ -179,7 +179,7 @@ test_concurrent_insert(const MunitParameter params[], void *data)
     (void)data;
 
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     setup_list_and_ebr(&list, &ebr);
 
     pthread_t threads[NUM_THREADS];
@@ -259,7 +259,7 @@ test_concurrent_search(const MunitParameter params[], void *data)
     (void)data;
 
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     setup_list_and_ebr(&list, &ebr);
 
     int total_keys = NUM_THREADS * KEYS_PER_THREAD;
@@ -325,7 +325,7 @@ test_concurrent_delete(const MunitParameter params[], void *data)
     (void)data;
 
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     setup_list_and_ebr(&list, &ebr);
 
     int total_keys = NUM_THREADS * KEYS_PER_THREAD;
@@ -447,7 +447,7 @@ test_mixed_workload(const MunitParameter params[], void *data)
     (void)data;
 
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     setup_list_and_ebr(&list, &ebr);
 
     prefill_list(list, 0, MIXED_PREFILL);
@@ -568,7 +568,7 @@ test_ebr_correctness(const MunitParameter params[], void *data)
     (void)data;
 
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
+    _skip_ebr_conc_t *ebr;
     setup_list_and_ebr(&list, &ebr);
 
     pthread_t threads[NUM_THREADS];
@@ -649,7 +649,7 @@ test_ebr_correctness(const MunitParameter params[], void *data)
 #define POOL_INSERT_PER_THREAD 200
 
 typedef struct {
-    __skip_pool_conc_t *pool;
+    _skip_pool_conc_t *pool;
     int thread_id;
     int result;
     int alloc_failures; /* count of ENOMEM returns across all cycles */
@@ -657,8 +657,8 @@ typedef struct {
 
 typedef struct {
     conc_t *list;
-    __skip_ebr_conc_t *ebr;
-    __skip_pool_conc_t *pool;
+    _skip_ebr_conc_t *ebr;
+    _skip_pool_conc_t *pool;
     int thread_id;
     int ebr_tid;
     int result;
@@ -787,7 +787,7 @@ test_pool_contention(const MunitParameter params[], void *data)
     /* ---------------------------------------------------------------
      * Phase 1: Pure pool alloc/free cycling under contention.
      * ---------------------------------------------------------------*/
-    __skip_pool_conc_t pool;
+    _skip_pool_conc_t pool;
     int rc = ct_skip_pool_init_conc(&pool, POOL_CAPACITY);
     munit_assert_int(rc, ==, 0);
 
@@ -840,7 +840,7 @@ test_pool_contention(const MunitParameter params[], void *data)
     rc = ct_skip_init_conc(list);
     munit_assert_int(rc, ==, 0);
 
-    __skip_ebr_conc_t *ebr = (__skip_ebr_conc_t *)calloc(1, sizeof(__skip_ebr_conc_t));
+    _skip_ebr_conc_t *ebr = (_skip_ebr_conc_t *)calloc(1, sizeof(_skip_ebr_conc_t));
     munit_assert_not_null(ebr);
     ct_skip_ebr_init_conc(ebr);
     ct_skip_ebr_attach_conc(list, ebr);

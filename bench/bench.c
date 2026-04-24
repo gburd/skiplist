@@ -461,7 +461,7 @@ thread_rng_next(thread_rng_t *rng)
 /* Shared context for concurrent insert benchmark. */
 typedef struct {
     bench_t *list;
-    __skip_ebr_bench_t *ebr;
+    _skip_ebr_bench_t *ebr;
     pthread_barrier_t *barrier;
     int thread_id;
     int num_threads;
@@ -499,7 +499,7 @@ bench_concurrent_insert(int n, int num_threads)
     bench_t *list = malloc(sizeof(bench_t));
     api_skip_init_bench(list);
 
-    __skip_ebr_bench_t ebr;
+    _skip_ebr_bench_t ebr;
     api_skip_ebr_init_bench(&ebr);
     api_skip_ebr_attach_bench(list, &ebr);
 
@@ -549,7 +549,7 @@ bench_concurrent_insert(int n, int num_threads)
 /* Shared context for concurrent search benchmark. */
 typedef struct {
     bench_t *list;
-    __skip_ebr_bench_t *ebr;
+    _skip_ebr_bench_t *ebr;
     pthread_barrier_t *barrier;
     int ops_per_thread;
     int max_key;
@@ -584,7 +584,7 @@ bench_concurrent_search(int n, int num_threads)
 {
     bench_t *list = build_list(n);
 
-    __skip_ebr_bench_t ebr;
+    _skip_ebr_bench_t ebr;
     api_skip_ebr_init_bench(&ebr);
     api_skip_ebr_attach_bench(list, &ebr);
 
@@ -624,7 +624,7 @@ bench_concurrent_search(int n, int num_threads)
 /* Shared context for mixed workload benchmark. */
 typedef struct {
     bench_t *list;
-    __skip_ebr_bench_t *ebr;
+    _skip_ebr_bench_t *ebr;
     pthread_barrier_t *barrier;
     int thread_id;
     int ops_per_thread;
@@ -675,7 +675,7 @@ bench_concurrent_mixed(int n, int num_threads)
     int base = n / 2;
     bench_t *list = build_list(base);
 
-    __skip_ebr_bench_t ebr;
+    _skip_ebr_bench_t ebr;
     api_skip_ebr_init_bench(&ebr);
     api_skip_ebr_attach_bench(list, &ebr);
 
@@ -725,7 +725,7 @@ bench_pool_insert(int n)
     bench_t *list = malloc(sizeof(bench_t));
     api_skip_init_bench(list);
 
-    __skip_pool_bench_t pool;
+    _skip_pool_bench_t pool;
     api_skip_pool_init_bench(&pool, (size_t)n);
 
     uint64_t start = now_ns();
