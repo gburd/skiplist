@@ -16,7 +16,7 @@ TESTS = tests/test
 TEST_OBJS = tests/test.o tests/munit.o
 EXAMPLES = examples/ex1 examples/ex2
 
-.PHONY: all shared static clean test examples mls coverage bench
+.PHONY: all shared static clean test test_concurrent test_tsan test_all examples mls coverage bench
 
 all: static shared
 
@@ -41,8 +41,23 @@ test: $(TESTS)
 tests/test: $(TEST_OBJS) $(STATIC_LIB)
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
+test_concurrent: tests/test_concurrent
+	./tests/test_concurrent
+
+tests/test_concurrent: tests/test_concurrent.o tests/munit.o $(STATIC_LIB)
+	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
+
+test_tsan: tests/test_concurrent_tsan
+	./tests/test_concurrent_tsan
+
+tests/test_concurrent_tsan: tests/test_concurrent.c tests/munit.c include/sl.h
+	$(CC) $(TSAN_CFLAGS) $(TEST_FLAGS) -o $@ tests/test_concurrent.c tests/munit.c -lm -pthread
+
+test_all: test test_concurrent
+
 COV_CFLAGS = -Wall -Wextra -Wpedantic -O0 -g --coverage -std=c11 -Iinclude/ -fPIC
 BENCH_CFLAGS = -Wall -Wextra -Wpedantic -O2 -std=c11 -Iinclude/ -fPIC -DNDEBUG
+TSAN_CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=thread -std=c11 -Iinclude/ -fPIC
 
 coverage:
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
@@ -57,7 +72,7 @@ bench: bench/bench
 	./bench/bench
 
 bench/bench: bench/bench.c include/sl.h
-	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm
+	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm -pthread
 
 clean:
 	rm -f $(OBJS) $(TEST_OBJS)
@@ -68,10 +83,12 @@ clean:
 	rm -f $(EXAMPLES)
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/*.gcda tests/*.gcno *.gcov
+	rm -f tests/test_concurrent tests/test_concurrent.o
+	rm -f tests/test_concurrent_tsan tests/test_concurrent_tsan.o tests/munit_tsan.o
 	rm -f bench/bench
 
 format:
-	clang-format -i include/*.h src/*.c tests/*.c tests/*.h examples/*.c
+	clang-format -i include/*.h tests/*.c tests/*.h examples/*.c bench/*.c
 
 %.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
