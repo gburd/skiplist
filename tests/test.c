@@ -1067,8 +1067,7 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/ebr_basic", test_ebr_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validation", test_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/head_height_growth_shrinkage", test_head_height_growth_shrinkage, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *)"/stress_100k", test_stress_100k, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
+    { (char *)"/stress_100k", test_stress_100k, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }, { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };
 

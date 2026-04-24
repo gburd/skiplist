@@ -72,7 +72,7 @@ bench: bench/bench
 	./bench/bench
 
 bench/bench: bench/bench.c include/sl.h
-	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm
+	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm -pthread
 
 clean:
 	rm -f $(OBJS) $(TEST_OBJS)
@@ -88,7 +88,7 @@ clean:
 	rm -f bench/bench
 
 format:
-	clang-format -i include/*.h src/*.c tests/*.c tests/*.h examples/*.c
+	clang-format -i include/*.h tests/*.c tests/*.h examples/*.c bench/*.c
 
 %.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^

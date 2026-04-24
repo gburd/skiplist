@@ -53,9 +53,7 @@ SKIPLIST_DECL(
         return 0;
     },
     /* free entry */
-    {
-        (void)node;
-    },
+    { (void)node; },
     /* update entry */
     {
         (void)node;
@@ -67,12 +65,13 @@ SKIPLIST_DECL(
         (void)src;
     },
     /* sizeof entry */
-    {
-        bytes = sizeof(struct conc_node);
-    })
+    { bytes = sizeof(struct conc_node); })
 
 /* Generate EBR functions for the "conc" type. */
 SKIPLIST_DECL_EBR(conc, ct_)
+
+/* Generate pool allocator functions for the "conc" type. */
+SKIPLIST_DECL_POOL(conc, ct_, entries, 1024)
 
 /* ---------------------------------------------------------------------------
  * Shared test context passed to each thread.
@@ -80,9 +79,9 @@ SKIPLIST_DECL_EBR(conc, ct_)
 typedef struct {
     conc_t *list;
     __skip_ebr_conc_t *ebr;
-    int thread_id;       /* logical thread index 0..NUM_THREADS-1 */
-    int ebr_tid;         /* EBR-registered thread id */
-    int result;          /* 0 = success */
+    int thread_id; /* logical thread index 0..NUM_THREADS-1 */
+    int ebr_tid;   /* EBR-registered thread id */
+    int result;    /* 0 = success */
 } thread_ctx_t;
 
 /* ---------------------------------------------------------------------------
@@ -624,6 +623,290 @@ test_ebr_correctness(const MunitParameter params[], void *data)
 }
 
 /* ===========================================================================
+ * Test F: Pool allocator contention
+ *
+ * Exercise the lock-free pool allocator under multi-threaded contention.
+ * Two phases:
+ *
+ * Phase 1 (alloc/free cycling): A pool with limited capacity is shared
+ * across N threads.  Each thread repeatedly allocates a batch of nodes from
+ * the pool, verifies they are valid and unique, then frees them all back.
+ * This stresses the CAS-based free-list under contention and tests ENOMEM
+ * handling when the pool is exhausted.
+ *
+ * Phase 2 (pool + list operations): Each thread allocates from the pool,
+ * inserts into a shared skiplist, and searches for the inserted keys.
+ * Nodes remain in the list (no remove, since EBR reclamation uses free()
+ * which is incompatible with pool-allocated memory).  After all threads
+ * join, we verify every key is present and the count is correct.  Teardown
+ * walks the list to free only heap-fallback nodes, then destroys the pool
+ * slab.
+ * ===========================================================================*/
+
+#define POOL_CAPACITY 1000
+#define POOL_ALLOC_BATCH 50
+#define POOL_CYCLES 20
+#define POOL_INSERT_PER_THREAD 200
+
+typedef struct {
+    __skip_pool_conc_t *pool;
+    int thread_id;
+    int result;
+    int alloc_failures; /* count of ENOMEM returns across all cycles */
+} pool_cycle_ctx_t;
+
+typedef struct {
+    conc_t *list;
+    __skip_ebr_conc_t *ebr;
+    __skip_pool_conc_t *pool;
+    int thread_id;
+    int ebr_tid;
+    int result;
+    int alloc_failures;
+} pool_insert_ctx_t;
+
+/* Phase 1 thread: alloc/free cycling on the pool. */
+static void *
+thread_pool_cycle(void *arg)
+{
+    pool_cycle_ctx_t *ctx = (pool_cycle_ctx_t *)arg;
+    conc_node_t *batch[POOL_ALLOC_BATCH];
+    int alloc_failures = 0;
+
+    for (int cycle = 0; cycle < POOL_CYCLES; cycle++) {
+        int allocated = 0;
+
+        /* Allocate a batch from the pool. */
+        for (int i = 0; i < POOL_ALLOC_BATCH; i++) {
+            conc_node_t *node = NULL;
+            int rc = ct_skip_pool_alloc_node_conc(ctx->pool, &node);
+            if (rc == ENOMEM) {
+                alloc_failures++;
+                break; /* Pool exhausted -- expected under contention. */
+            }
+            if (rc != 0) {
+                ctx->result = -1;
+                for (int j = 0; j < allocated; j++)
+                    ct_skip_pool_free_conc(ctx->pool, batch[j]);
+                return NULL;
+            }
+            /* Write a pattern to detect corruption. */
+            node->key = ctx->thread_id * 100000 + cycle * 1000 + i;
+            node->value = node->key;
+            batch[allocated++] = node;
+        }
+
+        /* Verify each node's data is intact (no cross-thread corruption). */
+        for (int i = 0; i < allocated; i++) {
+            int expected_key = ctx->thread_id * 100000 + cycle * 1000 + i;
+            if (batch[i]->key != expected_key || batch[i]->value != expected_key) {
+                ctx->result = -1;
+                for (int j = 0; j < allocated; j++)
+                    ct_skip_pool_free_conc(ctx->pool, batch[j]);
+                return NULL;
+            }
+        }
+
+        /* Free all nodes back to the pool. */
+        for (int i = 0; i < allocated; i++)
+            ct_skip_pool_free_conc(ctx->pool, batch[i]);
+    }
+
+    ctx->alloc_failures = alloc_failures;
+    ctx->result = 0;
+    return NULL;
+}
+
+/* Phase 2 thread: pool alloc -> list insert -> search. */
+static void *
+thread_pool_insert(void *arg)
+{
+    pool_insert_ctx_t *ctx = (pool_insert_ctx_t *)arg;
+    int tid = ctx->thread_id;
+    int start = tid * POOL_INSERT_PER_THREAD;
+    int alloc_failures = 0;
+
+    for (int i = 0; i < POOL_INSERT_PER_THREAD; i++) {
+        int key = start + i;
+
+        /* Allocate from pool, fall back to heap on ENOMEM. */
+        conc_node_t *node = NULL;
+        int rc = ct_skip_pool_alloc_node_conc(ctx->pool, &node);
+        if (rc == ENOMEM) {
+            alloc_failures++;
+            rc = ct_skip_alloc_node_conc(&node);
+            if (rc != 0) {
+                ctx->result = -1;
+                return NULL;
+            }
+        } else if (rc != 0) {
+            ctx->result = -1;
+            return NULL;
+        }
+
+        node->key = key;
+        node->value = key * 10;
+
+        /* Insert into the list. */
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        rc = ct_skip_insert_conc(ctx->list, node);
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+        if (rc != 0) {
+            if (ct_skip_pool_is_from_conc(ctx->pool, node))
+                ct_skip_pool_free_conc(ctx->pool, node);
+            else
+                free(node);
+            ctx->result = -1;
+            return NULL;
+        }
+
+        /* Search for the key we just inserted. */
+        conc_node_t query;
+        memset(&query, 0, sizeof(query));
+        query.key = key;
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        conc_node_t *found = ct_skip_position_eq_conc(ctx->list, &query);
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+        if (found == NULL || found->key != key) {
+            ctx->result = -1;
+            return NULL;
+        }
+    }
+
+    ctx->alloc_failures = alloc_failures;
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_pool_contention(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    /* ---------------------------------------------------------------
+     * Phase 1: Pure pool alloc/free cycling under contention.
+     * ---------------------------------------------------------------*/
+    __skip_pool_conc_t pool;
+    int rc = ct_skip_pool_init_conc(&pool, POOL_CAPACITY);
+    munit_assert_int(rc, ==, 0);
+
+    {
+        pthread_t threads[NUM_THREADS];
+        pool_cycle_ctx_t ctxs[NUM_THREADS];
+
+        for (int i = 0; i < NUM_THREADS; i++) {
+            ctxs[i].pool = &pool;
+            ctxs[i].thread_id = i;
+            ctxs[i].result = -1;
+            ctxs[i].alloc_failures = 0;
+        }
+
+        for (int i = 0; i < NUM_THREADS; i++)
+            pthread_create(&threads[i], NULL, thread_pool_cycle, &ctxs[i]);
+        for (int i = 0; i < NUM_THREADS; i++)
+            pthread_join(threads[i], NULL);
+
+        for (int i = 0; i < NUM_THREADS; i++)
+            munit_assert_int(ctxs[i].result, ==, 0);
+
+        /* After all cycles complete, every slot should be back on the
+           free list.  Verify by allocating all POOL_CAPACITY slots. */
+        int count = 0;
+        conc_node_t *verify_nodes[POOL_CAPACITY];
+        while (count < (int)POOL_CAPACITY) {
+            conc_node_t *n = ct_skip_pool_alloc_conc(&pool);
+            if (n == NULL)
+                break;
+            verify_nodes[count++] = n;
+        }
+        munit_assert_int(count, ==, (int)POOL_CAPACITY);
+        /* Free them all back. */
+        for (int i = 0; i < count; i++)
+            ct_skip_pool_free_conc(&pool, verify_nodes[i]);
+    }
+
+    /* ---------------------------------------------------------------
+     * Phase 2: Pool alloc -> list insert -> search under contention.
+     *
+     * Nodes allocated from the pool are inserted into the skiplist.
+     * We do NOT remove them via the list (EBR reclaim calls free(),
+     * which is incompatible with pool memory).  At teardown we walk
+     * the list manually, freeing only heap-fallback nodes.  Pool
+     * nodes are released when the pool slab is destroyed.
+     * ---------------------------------------------------------------*/
+    conc_t *list = (conc_t *)calloc(1, sizeof(conc_t));
+    munit_assert_not_null(list);
+    rc = ct_skip_init_conc(list);
+    munit_assert_int(rc, ==, 0);
+
+    __skip_ebr_conc_t *ebr = (__skip_ebr_conc_t *)calloc(1, sizeof(__skip_ebr_conc_t));
+    munit_assert_not_null(ebr);
+    ct_skip_ebr_init_conc(ebr);
+    ct_skip_ebr_attach_conc(list, ebr);
+
+    {
+        pthread_t threads[NUM_THREADS];
+        pool_insert_ctx_t ctxs[NUM_THREADS];
+
+        for (int i = 0; i < NUM_THREADS; i++) {
+            ctxs[i].list = list;
+            ctxs[i].ebr = ebr;
+            ctxs[i].pool = &pool;
+            ctxs[i].thread_id = i;
+            ctxs[i].ebr_tid = ct_skip_ebr_register_conc(ebr);
+            munit_assert_int(ctxs[i].ebr_tid, >=, 0);
+            ctxs[i].result = -1;
+            ctxs[i].alloc_failures = 0;
+        }
+
+        for (int i = 0; i < NUM_THREADS; i++)
+            pthread_create(&threads[i], NULL, thread_pool_insert, &ctxs[i]);
+        for (int i = 0; i < NUM_THREADS; i++)
+            pthread_join(threads[i], NULL);
+
+        for (int i = 0; i < NUM_THREADS; i++)
+            munit_assert_int(ctxs[i].result, ==, 0);
+    }
+
+    /* Verify total count. */
+    size_t expected = (size_t)NUM_THREADS * POOL_INSERT_PER_THREAD;
+    munit_assert_size(ct_skip_length_conc(list), ==, expected);
+
+    /* Verify every key is present. */
+    for (int k = 0; k < NUM_THREADS * POOL_INSERT_PER_THREAD; k++) {
+        conc_node_t query;
+        memset(&query, 0, sizeof(query));
+        query.key = k;
+        conc_node_t *found = ct_skip_position_eq_conc(list, &query);
+        munit_assert_not_null(found);
+        munit_assert_int(found->key, ==, k);
+    }
+
+    /* Tear down: walk the data nodes (between head and tail), freeing
+       only those that were allocated from the heap (not from the pool).
+       Pool-allocated nodes live in the contiguous slab freed by
+       ct_skip_pool_destroy_conc below. */
+    ct_skip_ebr_drain_conc(ebr);
+    {
+        conc_node_t *cur = ct_skip_head_conc(list);
+        while (cur != NULL) {
+            conc_node_t *next = ct_skip_next_node_conc(list, cur);
+            if (!ct_skip_pool_is_from_conc(&pool, cur))
+                free(cur);
+            cur = next;
+        }
+    }
+    free(list->slh_head);
+    free(list->slh_tail);
+    free(list);
+    free(ebr);
+
+    ct_skip_pool_destroy_conc(&pool);
+    return MUNIT_OK;
+}
+
+/* ===========================================================================
  * Test suite registration
  * ===========================================================================*/
 
@@ -633,6 +916,7 @@ static MunitTest conc_test_suite_tests[] = {
     { (char *)"/concurrent_delete", test_concurrent_delete, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/mixed_workload", test_mixed_workload, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/ebr_correctness", test_ebr_correctness, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_contention", test_pool_contention, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 };
 
