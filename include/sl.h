@@ -1923,7 +1923,9 @@ _Static_assert(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks stack 
         if (slist == NULL)                                                                                              \
             return 0;                                                                                                   \
                                                                                                                         \
-        return ++slist->slh_snap.pres_era;                                                                              \
+        slist->slh_snap.pres_era = ++slist->slh_snap.cur_era;                                                           \
+        slist->slh_snap.cur_era++;                                                                                      \
+        return slist->slh_snap.pres_era;                                                                                \
     }                                                                                                                   \
                                                                                                                         \
     /**                                                                                                                 \
@@ -2066,10 +2068,7 @@ _Static_assert(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks stack 
         if (slist == NULL)                                                                                              \
             return NULL;                                                                                                \
                                                                                                                         \
-        if (slist->slh_snap.pres_era == 0)                                                                              \
-            return NULL;                                                                                                \
-                                                                                                                        \
-        if (era >= slist->slh_snap.cur_era || slist->slh_snap.pres == NULL)                                             \
+        if (era == 0 || era >= slist->slh_snap.cur_era)                                                                 \
             return slist;                                                                                               \
                                                                                                                         \
         cur_era = slist->slh_snap.cur_era;                                                                              \
@@ -2132,7 +2131,7 @@ _Static_assert(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks stack 
                     to_discard = tmp;                                                                                   \
                 }                                                                                                       \
                 to_discard[n_discard++] = node;                                                                         \
-            } else if (node->field.sle_era == era) {                                                                    \
+            } else if (node->field.sle_era <= era) {                                                                    \
                 if (n_restore >= cap_restore) {                                                                         \
                     cap_restore *= 2;                                                                                   \
                     decl##_node_t **tmp = (decl##_node_t **)realloc(to_restore, sizeof(decl##_node_t *) * cap_restore); \
