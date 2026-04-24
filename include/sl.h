@@ -1032,8 +1032,13 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         for (size_t __lvl = atomic_load_explicit(&slist->slh_head->field.sle_height, memory_order_acquire); __lvl > 0; __lvl--) {                              \
             size_t i = __lvl - 1; /* current level index */                                                                                                    \
                                                                                                                                                                \
-            /* Read pred's next pointer at this level. */                                                                                                      \
+            /* Read pred's next pointer at this level.  If pred was                                                                                            \
+               concurrently logically deleted, its stored next pointers                                                                                        \
+               are marked — restart from the top in that case. */                                                                                            \
             curr = atomic_load_explicit(&pred->field.sle_levels[i].next, memory_order_acquire);                                                                \
+            if (__SKIP_IS_MARKED(curr)) {                                                                                                                      \
+                goto __skip_locate_retry_##decl;                                                                                                               \
+            }                                                                                                                                                  \
                                                                                                                                                                \
             for (;;) {                                                                                                                                         \
                 /* Read curr's next pointer.  Tail's next is always NULL. */                                                                                   \
@@ -1104,7 +1109,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     {                                                                                                                                                          \
         __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                                             \
         int rc = 0;                                                                                                                                            \
-        size_t i, len, current_height, new_height, old_head_height;                                                                                            \
+        size_t i, len, current_height, new_height;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                                              \
                                                                                                                                                                \
         if (slist == NULL || new == NULL)                                                                                                                      \
@@ -1122,9 +1127,11 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             return -1;                                                                                                                                         \
         }                                                                                                                                                      \
                                                                                                                                                                \
-        /* Phase 2: Determine the new node's height via coin toss. */                                                                                          \
-        old_head_height = atomic_load_explicit(&slist->slh_head->field.sle_height, memory_order_acquire);                                                      \
-        current_height = old_head_height - 1;                                                                                                                  \
+        /* Phase 2: Determine the new node's height via coin toss.                                                                                             \
+           Use `len` (levels locate actually traversed) rather than a                                                                                          \
+           fresh read of sle_height: another thread may have grown the                                                                                         \
+           head between our locate and now, leaving a gap in path[]. */                                                                                        \
+        current_height = len - 1;                                                                                                                              \
                                                                                                                                                                \
         {                                                                                                                                                      \
             size_t toss_max = current_height + 1;                                                                                                              \
@@ -1147,8 +1154,8 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             }                                                                                                                                                  \
         }                                                                                                                                                      \
                                                                                                                                                                \
-        /* Fill path entries for levels above what locate saw. */                                                                                              \
-        for (i = old_head_height; i <= new_height; i++) {                                                                                                      \
+        /* Fill path entries for levels above what locate traversed. */                                                                                        \
+        for (i = len; i <= new_height; i++) {                                                                                                                  \
             path[i + 1].node = slist->slh_head;                                                                                                                \
             path[i + 1].succ = slist->slh_tail;                                                                                                                \
         }                                                                                                                                                      \
@@ -1680,12 +1687,16 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                      \
     void prefix##skip_ebr_pin_##decl(__skip_ebr_##decl##_t *ebr, int tid)                                                                    \
     {                                                                                                                                        \
-        uint64_t ge = atomic_load_explicit(&ebr->global_epoch, memory_order_acquire);                                                        \
-        atomic_store_explicit(&ebr->threads[tid].local_epoch, ge, memory_order_relaxed);                                                     \
-        atomic_store_explicit(&ebr->threads[tid].active, 1, memory_order_release);                                                           \
-        /* Re-read global epoch after publishing active, ensuring we                                                                         \
-           observe any epoch advance that happened concurrently. */                                                                          \
-        ge = atomic_load_explicit(&ebr->global_epoch, memory_order_acquire);                                                                 \
+        /* Announce active BEFORE reading global_epoch.  The seq_cst                                                                         \
+           fence pairs with the fence in try_advance() so that: if                                                                           \
+           try_advance reads active==0 and skips us, it committed                                                                            \
+           its epoch load before our fence, and our subsequent epoch                                                                         \
+           load will see that committed value (or later).  This is                                                                           \
+           the crossbeam-epoch pattern that prevents premature                                                                               \
+           reclamation. */                                                                                                                   \
+        atomic_store_explicit(&ebr->threads[tid].active, 1, memory_order_relaxed);                                                           \
+        atomic_thread_fence(memory_order_seq_cst);                                                                                           \
+        uint64_t ge = atomic_load_explicit(&ebr->global_epoch, memory_order_relaxed);                                                        \
         atomic_store_explicit(&ebr->threads[tid].local_epoch, ge, memory_order_release);                                                     \
     }                                                                                                                                        \
                                                                                                                                              \
@@ -1737,6 +1748,10 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     static void __skip_ebr_try_advance_##decl(__skip_ebr_##decl##_t *ebr)                                                                    \
     {                                                                                                                                        \
         uint64_t cur_epoch = atomic_load_explicit(&ebr->global_epoch, memory_order_acquire);                                                 \
+        /* Pair with the seq_cst fence in pin(): guarantees that if a                                                                        \
+           thread stored active=1 and then read global_epoch <=                                                                              \
+           cur_epoch, we will observe its active flag below. */                                                                              \
+        atomic_thread_fence(memory_order_seq_cst);                                                                                           \
         int tc = atomic_load_explicit(&ebr->thread_count, memory_order_acquire);                                                             \
                                                                                                                                              \
         /* Check: every active thread must have local_epoch >= cur_epoch. */                                                                 \
