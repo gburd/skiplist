@@ -217,23 +217,28 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
  * zero-based count of levels, so a height of `0` means one (1) level and a
  * height of `4` means five (5) forward pointers (levels) in the node, [0-4).
  */
-#define SKIPLIST_ENTRY(decl)               \
-    struct __skiplist_##decl##_entry {     \
-        size_t sle_era;                    \
-        size_t sle_height;                 \
-        struct decl##_node *sle_prev;      \
-        struct __skiplist_##decl##_level { \
-            struct decl##_node *next;      \
-            size_t hits;                   \
-        } *sle_levels;                     \
+#define SKIPLIST_ENTRY(decl)                          \
+    struct __skiplist_##decl##_entry {                \
+        size_t sle_era;                               \
+        _Atomic(size_t) sle_height;                   \
+        _Atomic(struct decl##_node *) sle_prev;       \
+        struct __skiplist_##decl##_level {            \
+            _Atomic(struct decl##_node *) next;       \
+            _Atomic(size_t) hits;                     \
+        } *sle_levels;                                \
     }
 
 #define SKIPLIST_FOREACH_H2T(decl, prefix, field, list, elm, iter) \
-    for (iter = 0, (elm) = (list)->slh_head; ((elm) = (elm)->field.sle_levels[0].next) != (list)->slh_tail; iter++)
+    for (iter = 0, (elm) = (list)->slh_head; \
+         ((elm) = atomic_load_explicit(&(elm)->field.sle_levels[0].next, memory_order_acquire)) != (list)->slh_tail; \
+         iter++)
 
 /* Iterate from tail to head over the nodes. */
 #define SKIPLIST_FOREACH_T2H(decl, prefix, field, list, elm, iter) \
-    for (iter = (list)->slh_length, (elm) = (list)->slh_tail; ((elm) = (elm)->field.sle_prev) != (list)->slh_head; iter--)
+    for (iter = atomic_load_explicit(&(list)->slh_length, memory_order_relaxed), \
+         (elm) = (list)->slh_tail; \
+         ((elm) = atomic_load_explicit(&(elm)->field.sle_prev, memory_order_acquire)) != (list)->slh_head; \
+         iter--)
 
 /* Iterate over the next pointers in a node from bottom to top (B2T) or top to bottom (T2B). */
 #define __SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_head->field.sle_height - 1; lvl != (size_t) - 1; lvl--)
@@ -254,6 +259,16 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
 /* Iterate over a subtree starting at provided path element, u = path.in */
 #define __SKIP_SUBTREE_CHux(decl, field, list, node, level) \
     for (decl##_node_t *elm = node->field.sle_levels[level].next->field.sle_prev; elm != node->field.sle_prev; elm = elm->field.sle_prev)
+
+/*
+ * Marked pointer support for lock-free operations.
+ * Uses the low bit of node pointers as a logical deletion flag.
+ * Nodes are heap-allocated with >= 8-byte alignment, so the low bit
+ * is always 0 for valid unmarked pointers.
+ */
+#define __SKIP_IS_MARKED(p) ((uintptr_t)(p) & 1)
+#define __SKIP_MARK(p) ((__typeof__(p))((uintptr_t)(p) | 1))
+#define __SKIP_UNMARK(p) ((__typeof__(p))((uintptr_t)(p) & ~(uintptr_t)1))
 
 /*
  * Splay rebalancing: opt-in via -DSKIPLIST_SPLAY_REBALANCE at compile time.
@@ -287,9 +302,9 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
                                                                                                                                          \
     /* Skiplist structure */                                                                                                             \
     struct decl {                                                                                                                        \
-        size_t slh_length;                                                                                                               \
+        _Atomic(size_t) slh_length;                                                                                                      \
         void *slh_aux;                                                                                                                   \
-        uint32_t slh_prng_state;                                                                                                          \
+        _Atomic(uint32_t) slh_prng_state;                                                                                                 \
         decl##_node_t *slh_head;                                                                                                         \
         decl##_node_t *slh_tail;                                                                                                         \
         struct {                                                                                                                         \
@@ -311,22 +326,27 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     };                                                                                                                                   \
                                                                                                                                          \
     typedef struct __skiplist_path_##decl {                                                                                              \
-        decl##_node_t *node; /* node traversed in the act of location */                                                                 \
+        decl##_node_t *node; /* predecessor node traversed during location */                                                             \
+        decl##_node_t *succ; /* successor node at this level (for lock-free CAS) */                                                       \
         size_t in;           /* level at which the node was intersected */                                                               \
         size_t pu;           /* see "partial sums trick" */                                                                              \
     } __skiplist_path_##decl##_t;                                                                                                        \
                                                                                                                                          \
-    /* Xorshift algorithm for PRNG */                                                                                                    \
-    static uint32_t __##decl##_xorshift32(uint32_t *state)                                                                               \
+    /* Xorshift algorithm for PRNG (lock-free via CAS loop) */                                                                            \
+    static uint32_t __##decl##_xorshift32(_Atomic(uint32_t) *state)                                                                      \
     {                                                                                                                                    \
-        uint32_t x = *state;                                                                                                             \
-        if (x == 0)                                                                                                                      \
-            x = 123456789;                                                                                                               \
-        x ^= x << 13;                                                                                                                    \
-        x ^= x >> 17;                                                                                                                    \
-        x ^= x << 5;                                                                                                                     \
-        *state = x;                                                                                                                      \
-        return x;                                                                                                                        \
+        uint32_t old_state, new_state;                                                                                                   \
+        do {                                                                                                                             \
+            old_state = atomic_load_explicit(state, memory_order_relaxed);                                                               \
+            if (old_state == 0)                                                                                                          \
+                old_state = 123456789;                                                                                                   \
+            new_state = old_state;                                                                                                       \
+            new_state ^= new_state << 13;                                                                                                \
+            new_state ^= new_state >> 17;                                                                                                \
+            new_state ^= new_state << 5;                                                                                                 \
+        } while (!atomic_compare_exchange_weak_explicit(state, &old_state, new_state,                                                    \
+                     memory_order_relaxed, memory_order_relaxed));                                                                        \
+        return new_state;                                                                                                                \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -518,7 +538,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     size_t prefix##skip_length_##decl(decl##_t *slist)                                                                                   \
     {                                                                                                                                    \
-        return slist->slh_length;                                                                                                        \
+        return atomic_load_explicit(&slist->slh_length, memory_order_relaxed);                                                           \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -528,7 +548,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     int prefix##skip_is_empty_##decl(decl##_t *slist)                                                                                    \
     {                                                                                                                                    \
-        return slist->slh_length == 0;                                                                                                   \
+        return atomic_load_explicit(&slist->slh_length, memory_order_relaxed) == 0;                                                      \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -539,7 +559,8 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_head_##decl(decl##_t *slist)                                                                             \
     {                                                                                                                                    \
-        return slist->slh_head->field.sle_levels[0].next == slist->slh_tail ? NULL : slist->slh_head->field.sle_levels[0].next;          \
+        decl##_node_t *first = atomic_load_explicit(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire);                   \
+        return first == slist->slh_tail ? NULL : first;                                                                                  \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -552,7 +573,8 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     {                                                                                                                                    \
         if (slist == NULL)                                                                                                               \
             return NULL;                                                                                                                 \
-        return slist->slh_tail->field.sle_prev == slist->slh_head ? NULL : slist->slh_tail->field.sle_prev;                              \
+        decl##_node_t *last = atomic_load_explicit(&slist->slh_tail->field.sle_prev, memory_order_acquire);                              \
+        return last == slist->slh_head ? NULL : last;                                                                                    \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -565,9 +587,10 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     {                                                                                                                                    \
         if (slist == NULL || n == NULL)                                                                                                  \
             return NULL;                                                                                                                 \
-        if (n->field.sle_levels[0].next == slist->slh_tail)                                                                              \
+        decl##_node_t *next = atomic_load_explicit(&n->field.sle_levels[0].next, memory_order_acquire);                                  \
+        if (next == slist->slh_tail)                                                                                                     \
             return NULL;                                                                                                                 \
-        return n->field.sle_levels[0].next;                                                                                              \
+        return next;                                                                                                                     \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -581,9 +604,10 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     {                                                                                                                                    \
         if (slist == NULL || n == NULL)                                                                                                  \
             return NULL;                                                                                                                 \
-        if (n->field.sle_prev == slist->slh_head)                                                                                        \
+        decl##_node_t *prev = atomic_load_explicit(&n->field.sle_prev, memory_order_acquire);                                            \
+        if (prev == slist->slh_head)                                                                                                     \
             return NULL;                                                                                                                 \
-        return n->field.sle_prev;                                                                                                        \
+        return prev;                                                                                                                     \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
@@ -600,9 +624,9 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             return;                                                                                                                      \
         if (prefix##skip_is_empty_##decl(slist))                                                                                         \
             return;                                                                                                                      \
-        node = slist->slh_head->field.sle_levels[0].next;                                                                                \
+        node = atomic_load_explicit(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire);                                    \
         while (node != slist->slh_tail) {                                                                                                \
-            next = node->field.sle_levels[0].next;                                                                                       \
+            next = atomic_load_explicit(&node->field.sle_levels[0].next, memory_order_acquire);                                          \
             prefix##skip_free_node_##decl(slist, node);                                                                                  \
             node = next;                                                                                                                 \
         }                                                                                                                                \
@@ -650,20 +674,26 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (slist == NULL)                                                                                                               \
             return;                                                                                                                      \
                                                                                                                                          \
-        total_hits = slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits;                                          \
+        total_hits = atomic_load_explicit(                                                                                                \
+            &slist->slh_head->field.sle_levels[atomic_load_explicit(&slist->slh_head->field.sle_height, memory_order_relaxed)].hits,      \
+            memory_order_acquire);                                                                                                       \
         if (total_hits < SIZE_MAX / 2)                                                                                                   \
             return;                                                                                                                      \
                                                                                                                                          \
         /* Halve all hit counters on every node at every level. */                                                                       \
         node = slist->slh_head;                                                                                                          \
-        for (lvl = 0; lvl <= node->field.sle_height; lvl++)                                                                              \
-            node->field.sle_levels[lvl].hits = (node->field.sle_levels[lvl].hits + 1) / 2;                                               \
+        for (lvl = 0; lvl <= atomic_load_explicit(&node->field.sle_height, memory_order_relaxed); lvl++) {                               \
+            size_t h = atomic_load_explicit(&node->field.sle_levels[lvl].hits, memory_order_relaxed);                                    \
+            atomic_store_explicit(&node->field.sle_levels[lvl].hits, (h + 1) / 2, memory_order_relaxed);                                 \
+        }                                                                                                                                \
                                                                                                                                          \
         SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, nth)                                                                      \
         {                                                                                                                                \
             (void)nth;                                                                                                                   \
-            for (lvl = 0; lvl <= node->field.sle_height; lvl++)                                                                          \
-                node->field.sle_levels[lvl].hits = (node->field.sle_levels[lvl].hits + 1) / 2;                                           \
+            for (lvl = 0; lvl <= atomic_load_explicit(&node->field.sle_height, memory_order_relaxed); lvl++) {                           \
+                size_t h = atomic_load_explicit(&node->field.sle_levels[lvl].hits, memory_order_relaxed);                                \
+                atomic_store_explicit(&node->field.sle_levels[lvl].hits, (h + 1) / 2, memory_order_relaxed);                             \
+            }                                                                                                                            \
         }                                                                                                                                \
     }                                                                                                                                    \
                                                                                                                                          \
@@ -956,141 +986,266 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     /**                                                                                                                                  \
      * -- __skip_locate_                                                                                                                 \
      *                                                                                                                                   \
-     * Locates a node that matches another node updating `path` and then                                                                 \
-     * returning the length of that path + 1 to the node and the matching                                                                \
-     * node in path[0], or NULL at path[0] where there wasn't a match.                                                                   \
-     * sizeof(path) should be `slist->slh_head->field.sle_height + 1`                                                                    \
+     * Lock-free search: locates a node in the skiplist using Fraser's                                                                   \
+     * algorithm.  Helps physically unlink marked (logically deleted)                                                                    \
+     * nodes encountered during traversal.  Fills `path` with predecessors                                                               \
+     * and successors, returning the path length and a match in path[0].                                                                 \
      */                                                                                                                                  \
     static size_t __skip_locate_##decl(decl##_t *slist, decl##_node_t *n, __skiplist_path_##decl##_t path[])                             \
     {                                                                                                                                    \
-        unsigned int i;                                                                                                                  \
         size_t len = 0;                                                                                                                  \
-        decl##_node_t *elm;                                                                                                              \
+        int cmp;                                                                                                                         \
+        decl##_node_t *pred, *curr = NULL, *succ;                                                                                          \
                                                                                                                                          \
         if (slist == NULL || n == NULL)                                                                                                  \
             return 0;                                                                                                                    \
                                                                                                                                          \
-        elm = slist->slh_head;                                                                                                           \
+    __skip_locate_retry_##decl:                                                                                                          \
+        pred = slist->slh_head;                                                                                                          \
+        len = 0;                                                                                                                         \
                                                                                                                                          \
-        /* Find the node that matches `node` or NULL. */                                                                                 \
-        i = slist->slh_head->field.sle_height - 1;                                                                                       \
-        do {                                                                                                                             \
+        /* Traverse from the highest active level down to level 0.                                                                       \
+           Head's sle_height is the number of active levels (1 means only                                                                \
+           level 0 is active; search starts at level sle_height - 1). */                                                                 \
+        for (size_t __lvl = atomic_load_explicit(                                                                                        \
+                 &slist->slh_head->field.sle_height, memory_order_acquire);                                                              \
+             __lvl > 0; __lvl--) {                                                                                                       \
+            size_t i = __lvl - 1; /* current level index */                                                                              \
+                                                                                                                                         \
+            /* Read pred's next pointer at this level. */                                                                                \
+            curr = atomic_load_explicit(                                                                                                 \
+                &pred->field.sle_levels[i].next, memory_order_acquire);                                                                  \
+                                                                                                                                         \
+            for (;;) {                                                                                                                   \
+                /* Read curr's next pointer.  Tail's next is always NULL. */                                                             \
+                if (curr == slist->slh_tail) {                                                                                           \
+                    succ = NULL;                                                                                                         \
+                } else {                                                                                                                 \
+                    succ = atomic_load_explicit(                                                                                          \
+                        &curr->field.sle_levels[i].next, memory_order_acquire);                                                          \
+                }                                                                                                                        \
+                                                                                                                                         \
+                /* Help unlink any marked (logically deleted) nodes. */                                                                  \
+                while (succ != NULL && __SKIP_IS_MARKED(succ)) {                                                                         \
+                    decl##_node_t *unmarked_succ = __SKIP_UNMARK(succ);                                                                  \
+                    decl##_node_t *expected = curr;                                                                                      \
+                    if (!atomic_compare_exchange_strong_explicit(                                                                         \
+                            &pred->field.sle_levels[i].next,                                                                             \
+                            &expected, unmarked_succ,                                                                                    \
+                            memory_order_release, memory_order_relaxed)) {                                                               \
+                        /* CAS failed: restart from the top. */                                                                          \
+                        goto __skip_locate_retry_##decl;                                                                                 \
+                    }                                                                                                                    \
+                    curr = unmarked_succ;                                                                                                \
+                    if (curr == slist->slh_tail) {                                                                                       \
+                        succ = NULL;                                                                                                     \
+                    } else {                                                                                                             \
+                        succ = atomic_load_explicit(                                                                                      \
+                            &curr->field.sle_levels[i].next, memory_order_acquire);                                                      \
+                    }                                                                                                                    \
+                }                                                                                                                        \
+                                                                                                                                         \
+                /* Both curr and succ are unmarked.  Compare curr against key. */                                                        \
+                cmp = __skip_compare_nodes_##decl(slist, curr, n, slist->slh_aux);                                                       \
+                if (cmp < 0) {                                                                                                           \
+                    pred = curr;                                                                                                         \
+                    curr = (succ == NULL) ? slist->slh_tail : succ;                                                                      \
+                } else {                                                                                                                 \
+                    break;                                                                                                               \
+                }                                                                                                                        \
+            }                                                                                                                            \
+                                                                                                                                         \
+            /* Record predecessor and successor at level i. */                                                                           \
+            path[i + 1].node = pred;                                                                                                     \
+            path[i + 1].succ = curr;                                                                                                     \
             path[i + 1].pu = 0;                                                                                                          \
-            while (elm != slist->slh_tail && __skip_compare_nodes_##decl(slist, elm->field.sle_levels[i].next, n, slist->slh_aux) < 0) { \
-                path[i + 1].in = i;                                                                                                      \
-                elm = elm->field.sle_levels[i].next;                                                                                     \
-            }                                                                                                                            \
-            path[i + 1].node = elm;                                                                                                      \
-            if (path[i + 1].in > 0) {                                                                                                    \
-                path[i + 1].node->field.sle_levels[path[i + 1].in].hits += 1;                                                            \
-                path[i + 1].pu += path[i + 1].node->field.sle_levels[path[i + 1].in].hits;                                               \
-            }                                                                                                                            \
             len++;                                                                                                                       \
-        } while (i--);                                                                                                                   \
-        elm = elm->field.sle_levels[0].next;                                                                                             \
-        if (__skip_compare_nodes_##decl(slist, elm, n, slist->slh_aux) == 0) {                                                           \
-            path[0].node = elm;                                                                                                          \
-            path[0].node->field.sle_levels[0].hits++;                                                                                    \
-            path[i + 1].pu += path[0].node->field.sle_levels[0].hits;                                                                    \
-            slist->slh_head->field.sle_levels[slist->slh_head->field.sle_height].hits++;                                                 \
-            __skip_rebalance_##decl(slist, len, path);                                                                                   \
         }                                                                                                                                \
+                                                                                                                                         \
+        /* Check for an exact match at level 0. */                                                                                       \
+        if (curr != slist->slh_tail &&                                                                                                   \
+            __skip_compare_nodes_##decl(slist, curr, n, slist->slh_aux) == 0) {                                                          \
+            path[0].node = curr;                                                                                                         \
+            /* Hit counting with relaxed atomics. */                                                                                     \
+            atomic_fetch_add_explicit(                                                                                                   \
+                &curr->field.sle_levels[0].hits, 1, memory_order_relaxed);                                                               \
+            atomic_fetch_add_explicit(                                                                                                   \
+                &slist->slh_head->field.sle_levels[                                                                                      \
+                    atomic_load_explicit(&slist->slh_head->field.sle_height,                                                             \
+                                         memory_order_relaxed)].hits,                                                                    \
+                1, memory_order_relaxed);                                                                                                \
+            __skip_rebalance_##decl(slist, len, path);                                                                                   \
+        } else {                                                                                                                         \
+            path[0].node = NULL;                                                                                                         \
+        }                                                                                                                                \
+                                                                                                                                         \
         return len;                                                                                                                      \
     }                                                                                                                                    \
                                                                                                                                          \
     /**                                                                                                                                  \
      * -- __skip_insert_                                                                                                                 \
      *                                                                                                                                   \
-     * Inserts the node `new` into the list `slist`, when `flags` is non-zero                                                            \
-     * duplicate keys are allowed. Duplicates are grouped together by key but                                                            \
-     * are otherwise unordered (TODO: dupsort).                                                                                          \
+     * Lock-free insert: atomically links `new` into the skiplist at                                                                     \
+     * all appropriate levels.  Level-0 CAS is the linearization point.                                                                  \
+     * When `flags` is 0, duplicates are rejected; when non-zero, they                                                                   \
+     * are allowed.                                                                                                                      \
      */                                                                                                                                  \
     static int __skip_insert_##decl(decl##_t *slist, decl##_node_t *new, int flags)                                                      \
     {                                                                                                                                    \
-        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                       \
         int rc = 0;                                                                                                                      \
-        size_t i, len, loc = 0, current_height, new_height;                                                                              \
-        decl##_node_t *node;                                                                                                             \
+        size_t i, len, current_height, new_height, old_head_height;                                                                      \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
         if (slist == NULL || new == NULL)                                                                                                \
             return ENOENT;                                                                                                               \
                                                                                                                                          \
+    __skip_insert_retry_##decl:                                                                                                          \
         memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                  \
                                                                                                                                          \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
+        /* Phase 1: Find the insertion point. */                                                                                         \
         len = __skip_locate_##decl(slist, new, path);                                                                                    \
-        node = path[0].node;                                                                                                             \
-        if (len > 0) {                                                                                                                   \
-            if ((node != NULL) && (flags == 0)) {                                                                                        \
-                /* Don't insert, duplicate if flag not set. */                                                                           \
-                return -1;                                                                                                               \
-            }                                                                                                                            \
+        if (len == 0)                                                                                                                    \
+            return ENOENT;                                                                                                               \
                                                                                                                                          \
-            current_height = slist->slh_head->field.sle_height - 1;                                                                      \
-                                                                                                                                         \
-            /* Coin toss to determine level of this new node [0, current max height + 1).                                                \
-               Allow growth by one level beyond the current height so the list can                                                        \
-               organically grow taller as more elements are inserted. */                                                                  \
-            {                                                                                                                            \
-                /* Max node height is SKIPLIST_MAX_HEIGHT - 2 because head height = node_height + 1,                                     \
-                   and head uses level [sle_height] for hit counting, so head height must stay                                           \
-                   <= SKIPLIST_MAX_HEIGHT - 1 to keep sle_levels[sle_height] in bounds. */                                               \
-                size_t toss_max = current_height + 1;                                                                                    \
-                if (toss_max > SKIPLIST_MAX_HEIGHT - 2)                                                                                  \
-                    toss_max = SKIPLIST_MAX_HEIGHT - 2;                                                                                  \
-                new_height = __skip_toss_##decl(slist, toss_max);                                                                        \
-            }                                                                                                                            \
-            new->field.sle_height = new_height;                                                                                          \
-                                                                                                                                         \
-            /* If the new node is taller than the current list, grow the head/tail. */                                                   \
-            if (new_height > current_height) {                                                                                           \
-                for (i = current_height + 1; i <= new_height; i++) {                                                                     \
-                    slist->slh_head->field.sle_levels[i].next = slist->slh_tail;                                                         \
-                    slist->slh_head->field.sle_levels[i].hits = 0;                                                                       \
-                    slist->slh_tail->field.sle_levels[i].next = NULL;                                                                    \
-                }                                                                                                                        \
-                slist->slh_head->field.sle_height = new_height + 1;                                                                      \
-                slist->slh_tail->field.sle_height = new_height + 1;                                                                      \
-            }                                                                                                                            \
-                                                                                                                                         \
-            /* Fill in path entries for levels above what locate saw. */                                                                 \
-            for (i = current_height + 1; i <= new_height; i++) {                                                                         \
-                path[i + 1].node = slist->slh_head;                                                                                      \
-            }                                                                                                                            \
-            /* Ensure all next[] point to tail. */                                                                                       \
-            for (i = 0; i <= new_height; i++) {                                                                                          \
-                new->field.sle_levels[i].next = slist->slh_tail;                                                                         \
-            }                                                                                                                            \
-            /* Adjust all forward pointers for each element in the path. */                                                              \
-            for (i = 0; i <= new_height; i++) {                                                                                          \
-                /* The tail's next[i] is always NULL, we don't want that in the                                                          \
-                   next[i] for our new node. Also, don't set the tail's next[i]                                                          \
-                   because it is always NULL. */                                                                                         \
-                if (path[i + 1].node != slist->slh_tail) {                                                                               \
-                    new->field.sle_levels[i].next = path[i + 1].node->field.sle_levels[i].next;                                          \
-                    path[i + 1].node->field.sle_levels[i].next = new;                                                                    \
-                    loc = path[i + 1].node == slist->slh_head ? i : loc;                                                                 \
-                } else {                                                                                                                 \
-                    new->field.sle_levels[i].next = slist->slh_tail;                                                                     \
-                }                                                                                                                        \
-            }                                                                                                                            \
-            /* Adjust the previous pointers in the nodes. */                                                                             \
-            new->field.sle_prev = path[1].node;                                                                                          \
-            new->field.sle_levels[0].next->field.sle_prev = new;                                                                         \
-            /* Account for insert at tail. */                                                                                            \
-            if (new->field.sle_levels[0].next == slist->slh_tail)                                                                        \
-                slist->slh_tail->field.sle_prev = new;                                                                                   \
-            /* Record the era for this node to enable snapshots. */                                                                      \
-            if (slist->slh_snap.pres_era > 0) {                                                                                          \
-                /* Increase the list's era/age and record it. */                                                                         \
-                new->field.sle_era = slist->slh_snap.cur_era++;                                                                          \
-            }                                                                                                                            \
-            /* Set hits for re-balancing to 1 when newborn. */                                                                           \
-            new->field.sle_levels[new_height].hits = 1;                                                                                  \
-            /* Increase our list length (aka. size, count, etc.) by one. */                                                              \
-            slist->slh_length++;                                                                                                         \
+        /* Reject duplicates unless flags is set. */                                                                                     \
+        if (path[0].node != NULL && flags == 0) {                                                                                        \
+            return -1;                                                                                                                   \
         }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 2: Determine the new node's height via coin toss. */                                                                    \
+        old_head_height = atomic_load_explicit(                                                                                          \
+            &slist->slh_head->field.sle_height, memory_order_acquire);                                                                   \
+        current_height = old_head_height - 1;                                                                                            \
+                                                                                                                                         \
+        {                                                                                                                                \
+            size_t toss_max = current_height + 1;                                                                                        \
+            if (toss_max > SKIPLIST_MAX_HEIGHT - 2)                                                                                      \
+                toss_max = SKIPLIST_MAX_HEIGHT - 2;                                                                                      \
+            new_height = __skip_toss_##decl(slist, toss_max);                                                                            \
+        }                                                                                                                                \
+        atomic_store_explicit(&new->field.sle_height, new_height, memory_order_relaxed);                                                 \
+                                                                                                                                         \
+        /* Phase 3: Grow the head height if needed (CAS loop). */                                                                        \
+        if (new_height > current_height) {                                                                                               \
+            size_t desired_head_h = new_height + 1;                                                                                      \
+            size_t cur_h = atomic_load_explicit(                                                                                         \
+                &slist->slh_head->field.sle_height, memory_order_acquire);                                                               \
+            while (cur_h < desired_head_h) {                                                                                             \
+                if (atomic_compare_exchange_weak_explicit(                                                                                \
+                        &slist->slh_head->field.sle_height,                                                                              \
+                        &cur_h, desired_head_h,                                                                                          \
+                        memory_order_release, memory_order_acquire)) {                                                                   \
+                    atomic_store_explicit(                                                                                                \
+                        &slist->slh_tail->field.sle_height,                                                                              \
+                        desired_head_h, memory_order_release);                                                                           \
+                    break;                                                                                                               \
+                }                                                                                                                        \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Fill path entries for levels above what locate saw. */                                                                        \
+        for (i = old_head_height; i <= new_height; i++) {                                                                                \
+            path[i + 1].node = slist->slh_head;                                                                                          \
+            path[i + 1].succ = slist->slh_tail;                                                                                          \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 4: Pre-fill the new node's next pointers. */                                                                            \
+        for (i = 0; i <= new_height; i++) {                                                                                              \
+            atomic_store_explicit(                                                                                                       \
+                &new->field.sle_levels[i].next,                                                                                          \
+                path[i + 1].succ, memory_order_relaxed);                                                                                 \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 5: CAS at level 0 -- LINEARIZATION POINT. */                                                                           \
+        {                                                                                                                                \
+            decl##_node_t *expected = path[1].succ;                                                                                      \
+            if (!atomic_compare_exchange_strong_explicit(                                                                                 \
+                    &path[1].node->field.sle_levels[0].next,                                                                             \
+                    &expected, new,                                                                                                      \
+                    memory_order_release, memory_order_relaxed)) {                                                                       \
+                goto __skip_insert_retry_##decl;                                                                                         \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 6: Link at higher levels (1 .. new_height). */                                                                          \
+        for (i = 1; i <= new_height; i++) {                                                                                              \
+            for (;;) {                                                                                                                   \
+                decl##_node_t *pred_at_i = path[i + 1].node;                                                                             \
+                decl##_node_t *succ_at_i = path[i + 1].succ;                                                                             \
+                                                                                                                                         \
+                {                                                                                                                        \
+                    decl##_node_t *cur_next = atomic_load_explicit(                                                                       \
+                        &new->field.sle_levels[i].next, memory_order_acquire);                                                           \
+                    if (__SKIP_IS_MARKED(cur_next)) {                                                                                    \
+                        goto __skip_insert_done_##decl;                                                                                  \
+                    }                                                                                                                    \
+                    if (cur_next != succ_at_i) {                                                                                         \
+                        atomic_store_explicit(                                                                                           \
+                            &new->field.sle_levels[i].next,                                                                              \
+                            succ_at_i, memory_order_relaxed);                                                                            \
+                    }                                                                                                                    \
+                }                                                                                                                        \
+                                                                                                                                         \
+                {                                                                                                                        \
+                    decl##_node_t *expected = succ_at_i;                                                                                  \
+                    if (atomic_compare_exchange_strong_explicit(                                                                          \
+                            &pred_at_i->field.sle_levels[i].next,                                                                        \
+                            &expected, new,                                                                                              \
+                            memory_order_release, memory_order_relaxed)) {                                                               \
+                        break;                                                                                                           \
+                    }                                                                                                                    \
+                }                                                                                                                        \
+                                                                                                                                         \
+                /* CAS failed; re-find to get fresh preds/succs. */                                                                      \
+                memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                          \
+                __skip_locate_##decl(slist, new, path);                                                                                  \
+                                                                                                                                         \
+                {                                                                                                                        \
+                    decl##_node_t *lvl0_next = atomic_load_explicit(                                                                      \
+                        &new->field.sle_levels[0].next, memory_order_acquire);                                                           \
+                    if (__SKIP_IS_MARKED(lvl0_next)) {                                                                                   \
+                        goto __skip_insert_done_##decl;                                                                                  \
+                    }                                                                                                                    \
+                }                                                                                                                        \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+    __skip_insert_done_##decl:                                                                                                           \
+        /* Phase 7: Set backward pointer (advisory, best-effort). */                                                                     \
+        atomic_store_explicit(                                                                                                           \
+            &new->field.sle_prev, path[1].node, memory_order_relaxed);                                                                   \
+        {                                                                                                                                \
+            decl##_node_t *succ_at_0 = atomic_load_explicit(                                                                             \
+                &new->field.sle_levels[0].next, memory_order_acquire);                                                                   \
+            if (!__SKIP_IS_MARKED(succ_at_0) && succ_at_0 != slist->slh_tail) {                                                          \
+                decl##_node_t *old_prev = path[1].node;                                                                                  \
+                atomic_compare_exchange_strong_explicit(                                                                                  \
+                    &succ_at_0->field.sle_prev,                                                                                          \
+                    &old_prev, new,                                                                                                      \
+                    memory_order_relaxed, memory_order_relaxed);                                                                         \
+            } else if (!__SKIP_IS_MARKED(succ_at_0) && succ_at_0 == slist->slh_tail) {                                                   \
+                decl##_node_t *old_prev = path[1].node;                                                                                  \
+                atomic_compare_exchange_strong_explicit(                                                                                  \
+                    &slist->slh_tail->field.sle_prev,                                                                                    \
+                    &old_prev, new,                                                                                                      \
+                    memory_order_relaxed, memory_order_relaxed);                                                                         \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Record era for snapshot support. */                                                                                           \
+        if (slist->slh_snap.pres_era > 0) {                                                                                              \
+            new->field.sle_era = slist->slh_snap.cur_era++;                                                                              \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Initial hit count for splay rebalancing. */                                                                                   \
+        atomic_store_explicit(                                                                                                           \
+            &new->field.sle_levels[new_height].hits, 1, memory_order_relaxed);                                                           \
+                                                                                                                                         \
+        /* Increment list length. */                                                                                                     \
+        atomic_fetch_add_explicit(                                                                                                       \
+            &slist->slh_length, 1, memory_order_relaxed);                                                                                \
+                                                                                                                                         \
         return rc;                                                                                                                       \
     }                                                                                                                                    \
                                                                                                                                          \
@@ -1156,7 +1311,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         __skip_locate_##decl(slist, query, path);                                                                                        \
         node = path[1].node;                                                                                                             \
         do {                                                                                                                             \
-            node = node->field.sle_levels[0].next;                                                                                       \
+            node = atomic_load_explicit(&node->field.sle_levels[0].next, memory_order_acquire);                                          \
             cmp = __skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                       \
         } while (cmp < 0);                                                                                                               \
                                                                                                                                          \
@@ -1172,12 +1327,12 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
      */                                                                                                                                  \
     decl##_node_t *prefix##skip_position_gt_##decl(decl##_t *slist, decl##_node_t *query)                                                \
     {                                                                                                                                    \
-        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                       \
         int cmp;                                                                                                                         \
         decl##_node_t *node;                                                                                                             \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                  \
                                                                                                                                          \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                   \
         __skip_locate_##decl(slist, query, path);                                                                                        \
@@ -1185,7 +1340,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
         if (node == slist->slh_tail)                                                                                                     \
             goto done;                                                                                                                   \
         do {                                                                                                                             \
-            node = node->field.sle_levels[0].next;                                                                                       \
+            node = atomic_load_explicit(&node->field.sle_levels[0].next, memory_order_acquire);                                          \
             cmp = __skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                       \
         } while (cmp <= 0 && node != slist->slh_tail);                                                                                   \
     done:;                                                                                                                               \
@@ -1318,72 +1473,121 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
     /**                                                                                                                                  \
      * -- skip_remove_node_                                                                                                              \
      *                                                                                                                                   \
-     * Removes the node `n` from the `slist` if present.                                                                                 \
+     * Lock-free delete: logically removes a node by marking its next                                                                    \
+     * pointers (top-down), then physically unlinks by re-traversing.                                                                    \
+     * The level-0 mark is the linearization point.                                                                                      \
      */                                                                                                                                  \
     int prefix##skip_remove_node_##decl(decl##_t *slist, decl##_node_t *query)                                                           \
     {                                                                                                                                    \
-        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                \
+        __skiplist_path_##decl##_t apath[SKIPLIST_MAX_HEIGHT + 1];                                                                       \
         int np = 0;                                                                                                                      \
-        size_t i, len, height;                                                                                                           \
-        decl##_node_t *node;                                                                                                             \
+        size_t height;                                                                                                                   \
+        decl##_node_t *node, *succ, *expected;                                                                                           \
         __skiplist_path_##decl##_t *path = apath;                                                                                        \
+        int ok;                                                                                                                          \
                                                                                                                                          \
         if (slist == NULL || query == NULL)                                                                                              \
             return -1;                                                                                                                   \
-        if (slist->slh_length == 0)                                                                                                      \
-            return 0;                                                                                                                    \
                                                                                                                                          \
-        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                   \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                  \
                                                                                                                                          \
-        /* Attempt to locate the node in the list. */                                                                                    \
-        len = __skip_locate_##decl(slist, query, path);                                                                                  \
+        /* Locate the node to be removed. */                                                                                             \
+        __skip_locate_##decl(slist, query, path);                                                                                        \
         node = path[0].node;                                                                                                             \
-        if (node) {                                                                                                                      \
-            /* If the optional snapshots feature is configured, use it now.                                                              \
-               Snapshots preserve the node if it is older than our snapshot                                                              \
-               and about to be mutated. */                                                                                               \
-            if (slist->slh_snap.pres_era > 0) {                                                                                          \
-                /* Preserve the node. */                                                                                                 \
-                np = slist->slh_fns.snapshot_preserve_node(slist, node, NULL);                                                           \
-                if (np > 0)                                                                                                              \
-                    return np;                                                                                                           \
-                                                                                                                                         \
-                /* Increase the list's era/age. */                                                                                       \
-                slist->slh_snap.cur_era++;                                                                                               \
-            }                                                                                                                            \
-            /* We found it, set the next->prev to the node->prev keeping in mind                                                         \
-               that the next node might be the tail). */                                                                                 \
-            node->field.sle_levels[0].next->field.sle_prev = node->field.sle_prev;                                                       \
-            /* Walk the path, stop when the next node is not the one we're                                                               \
-               removing. At each step along our walk... */                                                                               \
-            for (i = 0; i < len; i++) {                                                                                                  \
-                if (path[i + 1].node->field.sle_levels[i].next != node)                                                                  \
-                    break;                                                                                                               \
-                /* ... adjust the next pointer at that level. */                                                                         \
-                path[i + 1].node->field.sle_levels[i].next = node->field.sle_levels[i].next;                                             \
-                /* Adjust the height such that we're only pointing at the tail once at                                                   \
-                   the top that way we don't waste steps later when searching. */                                                        \
-                if (path[i + 1].node->field.sle_levels[i].next == slist->slh_tail) {                                                     \
-                    height = path[i + 1].node->field.sle_height;                                                                         \
-                    path[i + 1].node->field.sle_height = height - 1;                                                                     \
-                }                                                                                                                        \
-            }                                                                                                                            \
-            /* Account for delete at tail. */                                                                                            \
-            if (node->field.sle_levels[0].next == slist->slh_tail) {                                                                     \
-                slist->slh_tail->field.sle_prev = node->field.sle_prev;                                                                  \
-            }                                                                                                                            \
-                                                                                                                                         \
-            slist->slh_fns.free_entry(node);                                                                                             \
-            free(node);                                                                                                                  \
-                                                                                                                                         \
-            /* Reduce the height of the head/tail nodes (minimum height is 1). */                                                         \
-            for (i = 0; slist->slh_head->field.sle_levels[i].next != slist->slh_tail && i < SKIPLIST_MAX_HEIGHT; i++)                    \
-                ;                                                                                                                        \
-            slist->slh_head->field.sle_height = slist->slh_tail->field.sle_height = (i > 0 ? i : 1);                                    \
-                                                                                                                                         \
-            slist->slh_length--;                                                                                                         \
-            __skip_adjust_hit_counts_##decl(slist);                                                                                      \
+        if (node == NULL) {                                                                                                              \
+            return 0;                                                                                                                    \
         }                                                                                                                                \
+                                                                                                                                         \
+        /* Snapshot preservation (single-threaded feature). */                                                                           \
+        if (slist->slh_snap.pres_era > 0) {                                                                                              \
+            np = slist->slh_fns.snapshot_preserve_node(slist, node, NULL);                                                               \
+            if (np > 0)                                                                                                                  \
+                return np;                                                                                                               \
+            slist->slh_snap.cur_era++;                                                                                                   \
+        }                                                                                                                                \
+                                                                                                                                         \
+        height = atomic_load_explicit(                                                                                                   \
+            &node->field.sle_height, memory_order_acquire);                                                                              \
+                                                                                                                                         \
+        /* Phase 1: Mark next pointers from top level down to level 1. */                                                                \
+        {                                                                                                                                \
+            size_t lvl = height;                                                                                                         \
+            while (lvl >= 1) {                                                                                                           \
+                succ = atomic_load_explicit(                                                                                              \
+                    &node->field.sle_levels[lvl].next, memory_order_acquire);                                                            \
+                while (!__SKIP_IS_MARKED(succ)) {                                                                                        \
+                    expected = succ;                                                                                                     \
+                    atomic_compare_exchange_strong_explicit(                                                                              \
+                        &node->field.sle_levels[lvl].next,                                                                               \
+                        &expected, __SKIP_MARK(succ),                                                                                    \
+                        memory_order_release, memory_order_relaxed);                                                                     \
+                    succ = atomic_load_explicit(                                                                                          \
+                        &node->field.sle_levels[lvl].next, memory_order_acquire);                                                        \
+                }                                                                                                                        \
+                lvl--;                                                                                                                   \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 2: Mark level 0 -- LINEARIZATION POINT. */                                                                              \
+        succ = atomic_load_explicit(                                                                                                     \
+            &node->field.sle_levels[0].next, memory_order_acquire);                                                                      \
+        for (;;) {                                                                                                                       \
+            if (__SKIP_IS_MARKED(succ)) {                                                                                                \
+                /* Another thread already marked level 0. */                                                                             \
+                return 0;                                                                                                                \
+            }                                                                                                                            \
+            expected = succ;                                                                                                             \
+            ok = atomic_compare_exchange_strong_explicit(                                                                                 \
+                &node->field.sle_levels[0].next,                                                                                         \
+                &expected, __SKIP_MARK(succ),                                                                                            \
+                memory_order_acq_rel, memory_order_acquire);                                                                             \
+            if (ok) {                                                                                                                    \
+                break;                                                                                                                   \
+            }                                                                                                                            \
+            succ = expected;                                                                                                             \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Phase 3: Physical unlinking via find. */                                                                                      \
+        memset(path, 0, sizeof(__skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                  \
+        __skip_locate_##decl(slist, query, path);                                                                                        \
+                                                                                                                                         \
+        /* Update backward pointer hint (best-effort). */                                                                                \
+        {                                                                                                                                \
+            decl##_node_t *unmarked_succ = __SKIP_UNMARK(                                                                                \
+                atomic_load_explicit(                                                                                                    \
+                    &node->field.sle_levels[0].next, memory_order_acquire));                                                             \
+            if (unmarked_succ != slist->slh_tail && unmarked_succ != NULL) {                                                             \
+                decl##_node_t *exp_prev = node;                                                                                          \
+                decl##_node_t *new_prev = atomic_load_explicit(                                                                          \
+                    &node->field.sle_prev, memory_order_relaxed);                                                                        \
+                atomic_compare_exchange_strong_explicit(                                                                                  \
+                    &unmarked_succ->field.sle_prev,                                                                                      \
+                    &exp_prev, new_prev,                                                                                                 \
+                    memory_order_relaxed, memory_order_relaxed);                                                                         \
+            }                                                                                                                            \
+            if (unmarked_succ == slist->slh_tail) {                                                                                      \
+                decl##_node_t *exp_prev = node;                                                                                          \
+                decl##_node_t *new_prev = atomic_load_explicit(                                                                          \
+                    &node->field.sle_prev, memory_order_relaxed);                                                                        \
+                atomic_compare_exchange_strong_explicit(                                                                                  \
+                    &slist->slh_tail->field.sle_prev,                                                                                    \
+                    &exp_prev, new_prev,                                                                                                 \
+                    memory_order_relaxed, memory_order_relaxed);                                                                         \
+            }                                                                                                                            \
+        }                                                                                                                                \
+                                                                                                                                         \
+        /* Decrement list length. */                                                                                                     \
+        atomic_fetch_sub_explicit(                                                                                                       \
+            &slist->slh_length, 1, memory_order_relaxed);                                                                                \
+                                                                                                                                         \
+        /* Free the node.  NOTE: In a truly concurrent environment this                                                                  \
+           requires safe memory reclamation (EBR).  Phase 3 of the project                                                               \
+           will add EBR; for now this is safe for single-threaded use. */                                                                \
+        slist->slh_fns.free_entry(node);                                                                                                 \
+        free(node);                                                                                                                      \
+                                                                                                                                         \
+        __skip_adjust_hit_counts_##decl(slist);                                                                                          \
+                                                                                                                                         \
         return 0;                                                                                                                        \
     }                                                                                                                                    \
                                                                                                                                          \
@@ -1654,7 +1858,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             /* Unlink from the preserved singly-linked list. */                                                  \
             decl##_node_t **pp = &slist->slh_snap.pres;                                                          \
             while (*pp && *pp != to_discard[i])                                                                  \
-                pp = &(*pp)->field.sle_levels[0].next;                                                           \
+                pp = (decl##_node_t **)&(*pp)->field.sle_levels[0].next;                                         \
             if (*pp)                                                                                             \
                 *pp = to_discard[i]->field.sle_levels[0].next;                                                   \
             prefix##skip_free_node_##decl(slist, to_discard[i]);                                                 \
@@ -1666,7 +1870,7 @@ __skip_diag_(const char *file, int line, const char *func, const char *format, .
             /* Unlink from the preserved singly-linked list. */                                                  \
             decl##_node_t **pp = &slist->slh_snap.pres;                                                          \
             while (*pp && *pp != to_restore[i])                                                                  \
-                pp = &(*pp)->field.sle_levels[0].next;                                                           \
+                pp = (decl##_node_t **)&(*pp)->field.sle_levels[0].next;                                         \
             if (*pp)                                                                                             \
                 *pp = to_restore[i]->field.sle_levels[0].next;                                                   \
                                                                                                                  \
