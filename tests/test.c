@@ -68,6 +68,15 @@ SKIPLIST_DECL_ACCESS(
     /* query block */ { query.key = key; },
     /* return block */ { return node->value; })
 
+/* Generate validation functions */
+SKIPLIST_DECL_VALIDATE(test, api_, entries)
+
+/* Generate EBR functions */
+SKIPLIST_DECL_EBR(test, api_)
+
+/* Generate pool allocator functions */
+SKIPLIST_DECL_POOL(test, api_, entries, 256)
+
 /* Helper function to create test value */
 static char *
 make_test_value(int key)
@@ -717,6 +726,328 @@ test_stress_insert_remove(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Test pool allocator */
+static MunitResult
+test_pool_allocator(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    __skip_pool_test_t pool;
+    int rc = api_skip_pool_init_test(&pool, 8);
+    assert_int(rc, ==, 0);
+
+    /* Allocate all 8 slots */
+    test_node_t *nodes[8];
+    for (int i = 0; i < 8; i++) {
+        nodes[i] = api_skip_pool_alloc_test(&pool);
+        assert_not_null(nodes[i]);
+        nodes[i]->key = i;
+        nodes[i]->value = NULL; /* keep it simple, no heap values */
+    }
+
+    /* Pool should be exhausted now */
+    test_node_t *overflow = api_skip_pool_alloc_test(&pool);
+    assert_null(overflow);
+
+    /* Test ENOMEM from pool_alloc_node */
+    test_node_t *enomem_node;
+    rc = api_skip_pool_alloc_node_test(&pool, &enomem_node);
+    assert_int(rc, ==, ENOMEM);
+
+    /* Verify is_from_pool check */
+    for (int i = 0; i < 8; i++) {
+        assert_true(api_skip_pool_is_from_test(&pool, nodes[i]));
+    }
+
+    /* A malloc-allocated node should not be from the pool */
+    test_node_t *heap_node;
+    api_skip_alloc_node_test(&heap_node);
+    heap_node->key = 99;
+    heap_node->value = NULL;
+    assert_false(api_skip_pool_is_from_test(&pool, heap_node));
+    free(heap_node);
+
+    /* Free all nodes back to the pool */
+    for (int i = 0; i < 8; i++) {
+        api_skip_pool_free_test(&pool, nodes[i]);
+    }
+
+    /* Re-allocate from pool after freeing -- proves recycling works */
+    test_node_t *realloc_node = api_skip_pool_alloc_test(&pool);
+    assert_not_null(realloc_node);
+
+    /* Return it */
+    api_skip_pool_free_test(&pool, realloc_node);
+
+    /* Test pool_alloc_node wrapper (success case after freeing) */
+    test_node_t *wrapper_node;
+    rc = api_skip_pool_alloc_node_test(&pool, &wrapper_node);
+    assert_int(rc, ==, 0);
+    assert_not_null(wrapper_node);
+    api_skip_pool_free_test(&pool, wrapper_node);
+
+    /* Test invalid init parameters */
+    __skip_pool_test_t bad_pool;
+    rc = api_skip_pool_init_test(NULL, 8);
+    assert_int(rc, ==, EINVAL);
+    rc = api_skip_pool_init_test(&bad_pool, 0);
+    assert_int(rc, ==, EINVAL);
+
+    api_skip_pool_destroy_test(&pool);
+
+    return MUNIT_OK;
+}
+
+/* Test EBR basic operations */
+static MunitResult
+test_ebr_basic(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    /* Initialize EBR */
+    __skip_ebr_test_t ebr;
+    api_skip_ebr_init_test(&ebr);
+
+    /* Verify initial state */
+    assert_uint64(atomic_load(&ebr.global_epoch), ==, 1);
+    assert_int(atomic_load(&ebr.thread_count), ==, 0);
+
+    /* Register a thread */
+    int tid = api_skip_ebr_register_test(&ebr);
+    assert_int(tid, ==, 0);
+    assert_int(atomic_load(&ebr.thread_count), ==, 1);
+
+    /* Register a second thread */
+    int tid2 = api_skip_ebr_register_test(&ebr);
+    assert_int(tid2, ==, 1);
+    assert_int(atomic_load(&ebr.thread_count), ==, 2);
+
+    /* Pin and unpin */
+    api_skip_ebr_pin_test(&ebr, tid);
+    assert_int(atomic_load(&ebr.threads[tid].active), ==, 1);
+
+    api_skip_ebr_unpin_test(&ebr, tid);
+    assert_int(atomic_load(&ebr.threads[tid].active), ==, 0);
+
+    /* Create a list and retire a node through EBR */
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Attach EBR to the list */
+    api_skip_ebr_attach_test(list, &ebr);
+
+    /* Insert some nodes */
+    for (int i = 0; i < 5; i++) {
+        test_node_t *node;
+        api_skip_alloc_node_test(&node);
+        node->key = i;
+        node->value = make_test_value(i);
+        api_skip_insert_test(list, node);
+    }
+    assert_int(api_skip_length_test(list), ==, 5);
+
+    /* Pin, do some work, retire a node, then unpin */
+    api_skip_ebr_pin_test(&ebr, tid);
+
+    /* Allocate a standalone node to retire (simulating a removed node) */
+    test_node_t *retired_node;
+    api_skip_alloc_node_test(&retired_node);
+    retired_node->key = 999;
+    retired_node->value = make_test_value(999);
+
+    api_skip_ebr_retire_test(&ebr, list, retired_node);
+
+    api_skip_ebr_unpin_test(&ebr, tid);
+
+    /* Drain all retire lists to free deferred nodes */
+    api_skip_ebr_drain_test(&ebr);
+
+    /* Free the list normally */
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test validation / integrity check */
+static MunitResult
+test_validation(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Validate empty list (single-threaded mode, flags=1) */
+    int errors = __skip_integrity_check_test(list, 1);
+    assert_int(errors, ==, 0);
+
+    /* Insert elements */
+    for (int i = 1; i <= 20; i++) {
+        test_node_t *node;
+        api_skip_alloc_node_test(&node);
+        node->key = i;
+        node->value = make_test_value(i);
+        api_skip_insert_test(list, node);
+    }
+    assert_int(api_skip_length_test(list), ==, 20);
+
+    /* Validate with single-threaded mode (flags=1, skip concurrent checks) */
+    errors = __skip_integrity_check_test(list, 1);
+    assert_int(errors, ==, 0);
+
+    /* Validate with concurrent mode (flags=0, includes forward-chain checks) */
+    errors = __skip_integrity_check_test(list, 0);
+    assert_int(errors, ==, 0);
+
+    /* Remove some elements and validate again */
+    for (int i = 1; i <= 10; i++) {
+        api_skip_del_test(list, i);
+    }
+    assert_int(api_skip_length_test(list), ==, 10);
+
+    errors = __skip_integrity_check_test(list, 1);
+    assert_int(errors, ==, 0);
+
+    errors = __skip_integrity_check_test(list, 0);
+    assert_int(errors, ==, 0);
+
+    /* Validate with early-exit flag (flags=3 = single-threaded + early-exit) */
+    errors = __skip_integrity_check_test(list, 3);
+    assert_int(errors, ==, 0);
+
+    /* Validate NULL list returns error */
+    errors = __skip_integrity_check_test(NULL, 1);
+    assert_int(errors, >, 0);
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Test head height growth */
+static MunitResult
+test_head_height_growth_shrinkage(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Record initial head height */
+    size_t initial_height = list->slh_head->entries.sle_height;
+    assert_size(initial_height, ==, 1);
+
+    /* Insert many elements to grow head height */
+    for (int i = 0; i < 1000; i++) {
+        test_node_t *node;
+        api_skip_alloc_node_test(&node);
+        node->key = i;
+        node->value = make_test_value(i);
+        api_skip_insert_test(list, node);
+    }
+
+    /* Head height should have grown beyond initial */
+    size_t grown_height = list->slh_head->entries.sle_height;
+    assert_size(grown_height, >, initial_height);
+
+    /* Head height must not exceed SKIPLIST_MAX_HEIGHT */
+    assert_size(grown_height, <=, SKIPLIST_MAX_HEIGHT);
+
+    /* Head and tail heights should be equal */
+    size_t tail_height = list->slh_tail->entries.sle_height;
+    assert_size(grown_height, ==, tail_height);
+
+    /* Delete all elements */
+    for (int i = 0; i < 1000; i++) {
+        api_skip_del_test(list, i);
+    }
+    assert_int(api_skip_length_test(list), ==, 0);
+
+    /* Verify list is empty and usable */
+    assert_true(api_skip_is_empty_test(list));
+    assert_null(api_skip_head_test(list));
+    assert_null(api_skip_tail_test(list));
+
+    /* Re-insert to prove list works after full drain */
+    test_node_t *node;
+    api_skip_alloc_node_test(&node);
+    node->key = 42;
+    node->value = make_test_value(42);
+    int rc = api_skip_insert_test(list, node);
+    assert_int(rc, ==, 0);
+    assert_int(api_skip_length_test(list), ==, 1);
+    assert_true(api_skip_contains_test(list, 42));
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
+/* Stress test: insert 100K, remove odds, verify evens */
+static MunitResult
+test_stress_100k(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    int n = 100000;
+
+    /* Insert 100K elements */
+    for (int i = 0; i < n; i++) {
+        char *value = make_test_value(i);
+        api_skip_put_test(list, i, value);
+    }
+    assert_int(api_skip_length_test(list), ==, n);
+
+    /* Remove odd elements */
+    for (int i = 1; i < n; i += 2) {
+        api_skip_del_test(list, i);
+    }
+    assert_int(api_skip_length_test(list), ==, n / 2);
+
+    /* Verify even elements remain */
+    for (int i = 0; i < n; i += 2) {
+        assert_true(api_skip_contains_test(list, i));
+    }
+
+    /* Verify odd elements are gone */
+    for (int i = 1; i < n; i += 2) {
+        assert_false(api_skip_contains_test(list, i));
+    }
+
+    /* Verify ordering */
+    test_node_t *current = api_skip_head_test(list);
+    int prev_key = -1;
+    int count = 0;
+    while (current) {
+        assert_int(current->key, >, prev_key);
+        assert_int(current->key % 2, ==, 0);
+        prev_key = current->key;
+        count++;
+        current = api_skip_next_node_test(list, current);
+    }
+    assert_int(count, ==, n / 2);
+
+    /* Validate integrity after stress */
+    int errors = __skip_integrity_check_test(list, 1);
+    assert_int(errors, ==, 0);
+
+    api_skip_free_test(list);
+    free(list);
+
+    return MUNIT_OK;
+}
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -732,6 +1063,11 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/delete_last_element", test_delete_last_element, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/position_variants", test_position_variants, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/stress_insert_remove", test_stress_insert_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_allocator", test_pool_allocator, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/ebr_basic", test_ebr_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/validation", test_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/head_height_growth_shrinkage", test_head_height_growth_shrinkage, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/stress_100k", test_stress_100k, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };
