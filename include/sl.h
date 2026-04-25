@@ -1040,6 +1040,18 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             prefix##skip_free_node_##decl(slist, node);                                                                                                      \
             node = next;                                                                                                                                     \
         }                                                                                                                                                    \
+        /* Reset to empty-list state so the list is reusable. */                                                                                             \
+        slist->slh_length = 0;                                                                                                                               \
+        slist->slh_head->field.sle_height = 1;                                                                                                               \
+        for (size_t _i = 0; _i < SKIPLIST_MAX_HEIGHT; _i++) {                                                                                                \
+            slist->slh_head->field.sle_levels[_i].next = slist->slh_tail;                                                                                    \
+            slist->slh_head->field.sle_levels[_i].hits = 0;                                                                                                  \
+            slist->slh_tail->field.sle_levels[_i].next = NULL;                                                                                               \
+            slist->slh_tail->field.sle_levels[_i].hits = 0;                                                                                                  \
+        }                                                                                                                                                    \
+        slist->slh_head->field.sle_prev = NULL;                                                                                                              \
+        slist->slh_tail->field.sle_height = 1;                                                                                                               \
+        slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                   \
         if (slist->slh_snap.pres_era > 0)                                                                                                                    \
             slist->slh_snap.cur_era++;                                                                                                                       \
         return;                                                                                                                                              \
@@ -1052,17 +1064,21 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      * This isn't maintained by the list, if you add/remove nodes it is                                                                                      \
      * no longer accurate. At [-1] is the length of the array.                                                                                               \
      * NOTE: Caller must deallocate.                                                                                                                         \
+     * NOTE: Not safe for concurrent use. The caller must ensure no                                                                                          \
+     * concurrent insertions or deletions during this call.                                                                                                  \
      */                                                                                                                                                      \
     decl##_node_t **prefix##skip_to_array_##decl(decl##_t *slist)                                                                                            \
     {                                                                                                                                                        \
         size_t nth, len = prefix##skip_length_##decl(slist);                                                                                                 \
         decl##_node_t *node, **nodes = NULL;                                                                                                                 \
-        nodes = (decl##_node_t **)calloc(sizeof(decl##_node_t *), len + 1);                                                                                  \
+        nodes = (decl##_node_t **)calloc(len + 1, sizeof(decl##_node_t *));                                                                                  \
         if (nodes != NULL) {                                                                                                                                 \
             nodes[0] = (decl##_node_t *)(uintptr_t)len;                                                                                                      \
             nodes++;                                                                                                                                         \
             SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, nth)                                                                                      \
             {                                                                                                                                                \
+                if (nth >= len)                                                                                                                              \
+                    break;                                                                                                                                   \
                 nodes[nth] = node;                                                                                                                           \
             }                                                                                                                                                \
         }                                                                                                                                                    \
@@ -1204,7 +1220,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
              *                                                                                                                                               \
              * A node with few hits relative to its height is over-promoted.                                                                                 \
              * We remove it from its top level to push it down. */                                                                                           \
-            dsc_cond = (double)m_total_hits / pow(2.0, (double)delta_height);                                                                                \
+            dsc_cond = (double)m_total_hits / (double)(1ULL << delta_height);                                                                                \
             if (u_hits <= (size_t)dsc_cond && node_height > 0) {                                                                                             \
                 size_t top = node_height;                                                                                                                    \
                                                                                                                                                              \
@@ -1266,7 +1282,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                           * A node with many hits relative to its height is under-promoted.                                                  \
                                           * We add a new level to bring it higher in the structure. */                                                       \
                                          if (delta_height < 1) continue;                                                                                     \
-            asc_cond = (double)m_total_hits / pow(2.0, (double)(delta_height - 1));                                                                          \
+            asc_cond = (double)m_total_hits / (double)(1ULL << (delta_height - 1));                                                                          \
             if (u_hits <= (size_t)asc_cond)                                                                                                                  \
                 continue;                                                                                                                                    \
             if (node_height >= SKIPLIST_MAX_HEIGHT - 1)                                                                                                      \
@@ -1495,12 +1511,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
     /**                                                                                                                                                      \
      * -- _skip_insert_                                                                                                                                      \
      *                                                                                                                                                       \
-     * Lock-free insert: atomically links `new` into the skiplist at                                                                                         \
+     * Lock-free insert: atomically links `n` into the skiplist at                                                                                           \
      * all appropriate levels.  Level-0 CAS is the linearization point.                                                                                      \
      * When `flags` is 0, duplicates are rejected; when non-zero, they                                                                                       \
      * are allowed.                                                                                                                                          \
      */                                                                                                                                                      \
-    static int _skip_insert_##decl(decl##_t *slist, decl##_node_t *new, int flags)                                                                           \
+    static int _skip_insert_##decl(decl##_t *slist, decl##_node_t *n, int flags)                                                                             \
     {                                                                                                                                                        \
         /* Only path[0] is pre-zeroed (_SKIP_PATH_CLEAR); _skip_locate_ writes                                                                               \
            all entries [0..height] before they are read.  Upper entries may                                                                                  \
@@ -1510,13 +1526,13 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         size_t i, len, current_height, new_height;                                                                                                           \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        if (slist == NULL || new == NULL)                                                                                                                    \
+        if (slist == NULL || n == NULL)                                                                                                                      \
             return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
         _skip_insert_retry_##decl : _SKIP_PATH_CLEAR(path);                                                                                                  \
                                                                                                                                                              \
         /* Phase 1: Find the insertion point. */                                                                                                             \
-        len = _skip_locate_##decl(slist, new, path);                                                                                                         \
+        len = _skip_locate_##decl(slist, n, path);                                                                                                           \
         if (len == 0)                                                                                                                                        \
             return ENOENT;                                                                                                                                   \
                                                                                                                                                              \
@@ -1537,7 +1553,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 toss_max = SKIPLIST_MAX_HEIGHT - 2;                                                                                                          \
             new_height = _skip_toss_##decl(slist, toss_max);                                                                                                 \
         }                                                                                                                                                    \
-        _skip_atomic_store(&new->field.sle_height, new_height, memory_order_relaxed);                                                                        \
+        _skip_atomic_store(&n->field.sle_height, new_height, memory_order_relaxed);                                                                          \
                                                                                                                                                              \
         /* Phase 3: Grow the head height if needed (CAS loop). */                                                                                            \
         if (new_height > current_height) {                                                                                                                   \
@@ -1559,13 +1575,13 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         /* Phase 4: Pre-fill the new node's next pointers. */                                                                                                \
         for (i = 0; i <= new_height; i++) {                                                                                                                  \
-            _skip_atomic_store(&new->field.sle_levels[i].next, path[i + 1].succ, memory_order_relaxed);                                                      \
+            _skip_atomic_store(&n->field.sle_levels[i].next, path[i + 1].succ, memory_order_relaxed);                                                        \
         }                                                                                                                                                    \
                                                                                                                                                              \
         /* Phase 5: CAS at level 0 -- LINEARIZATION POINT. */                                                                                                \
         {                                                                                                                                                    \
             decl##_node_t *expected = path[1].succ;                                                                                                          \
-            if (!_skip_atomic_cas_strong(&path[1].node->field.sle_levels[0].next, &expected, new, memory_order_release, memory_order_relaxed)) {             \
+            if (!_skip_atomic_cas_strong(&path[1].node->field.sle_levels[0].next, &expected, n, memory_order_release, memory_order_relaxed)) {               \
                 goto _skip_insert_retry_##decl;                                                                                                              \
             }                                                                                                                                                \
         }                                                                                                                                                    \
@@ -1577,28 +1593,28 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 decl##_node_t *succ_at_i = path[i + 1].succ;                                                                                                 \
                                                                                                                                                              \
                 {                                                                                                                                            \
-                    decl##_node_t *cur_next = _skip_atomic_load(&new->field.sle_levels[i].next, memory_order_acquire);                                       \
+                    decl##_node_t *cur_next = _skip_atomic_load(&n->field.sle_levels[i].next, memory_order_acquire);                                         \
                     if (_SKIP_IS_MARKED(cur_next)) {                                                                                                         \
                         goto _skip_insert_done_##decl;                                                                                                       \
                     }                                                                                                                                        \
                     if (cur_next != succ_at_i) {                                                                                                             \
-                        _skip_atomic_store(&new->field.sle_levels[i].next, succ_at_i, memory_order_relaxed);                                                 \
+                        _skip_atomic_store(&n->field.sle_levels[i].next, succ_at_i, memory_order_relaxed);                                                   \
                     }                                                                                                                                        \
                 }                                                                                                                                            \
                                                                                                                                                              \
                 {                                                                                                                                            \
                     decl##_node_t *expected = succ_at_i;                                                                                                     \
-                    if (_skip_atomic_cas_strong(&pred_at_i->field.sle_levels[i].next, &expected, new, memory_order_release, memory_order_relaxed)) {         \
+                    if (_skip_atomic_cas_strong(&pred_at_i->field.sle_levels[i].next, &expected, n, memory_order_release, memory_order_relaxed)) {           \
                         break;                                                                                                                               \
                     }                                                                                                                                        \
                 }                                                                                                                                            \
                                                                                                                                                              \
                 /* CAS failed; re-find to get fresh preds/succs. */                                                                                          \
                 _SKIP_PATH_CLEAR(path);                                                                                                                      \
-                _skip_locate_##decl(slist, new, path);                                                                                                       \
+                _skip_locate_##decl(slist, n, path);                                                                                                         \
                                                                                                                                                              \
                 {                                                                                                                                            \
-                    decl##_node_t *lvl0_next = _skip_atomic_load(&new->field.sle_levels[0].next, memory_order_acquire);                                      \
+                    decl##_node_t *lvl0_next = _skip_atomic_load(&n->field.sle_levels[0].next, memory_order_acquire);                                        \
                     if (_SKIP_IS_MARKED(lvl0_next)) {                                                                                                        \
                         goto _skip_insert_done_##decl;                                                                                                       \
                     }                                                                                                                                        \
@@ -1607,26 +1623,26 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         }                                                                                                                                                    \
                                                                                                                                                              \
         _skip_insert_done_##decl : /* Phase 7: Set backward pointer (advisory, best-effort). */                                                              \
-                                   _skip_atomic_store(&new->field.sle_prev, path[1].node, memory_order_relaxed);                                             \
+                                   _skip_atomic_store(&n->field.sle_prev, path[1].node, memory_order_relaxed);                                               \
         {                                                                                                                                                    \
-            decl##_node_t *succ_at_0 = _skip_atomic_load(&new->field.sle_levels[0].next, memory_order_acquire);                                              \
+            decl##_node_t *succ_at_0 = _skip_atomic_load(&n->field.sle_levels[0].next, memory_order_acquire);                                                \
             if (!_SKIP_IS_MARKED(succ_at_0) && succ_at_0 != slist->slh_tail) {                                                                               \
                 decl##_node_t *old_prev = path[1].node;                                                                                                      \
-                _skip_atomic_cas_strong(&succ_at_0->field.sle_prev, &old_prev, new, memory_order_relaxed, memory_order_relaxed);                             \
+                _skip_atomic_cas_strong(&succ_at_0->field.sle_prev, &old_prev, n, memory_order_relaxed, memory_order_relaxed);                               \
             } else if (!_SKIP_IS_MARKED(succ_at_0) && succ_at_0 == slist->slh_tail) {                                                                        \
                 decl##_node_t *old_prev = path[1].node;                                                                                                      \
-                _skip_atomic_cas_strong(&slist->slh_tail->field.sle_prev, &old_prev, new, memory_order_relaxed, memory_order_relaxed);                       \
+                _skip_atomic_cas_strong(&slist->slh_tail->field.sle_prev, &old_prev, n, memory_order_relaxed, memory_order_relaxed);                         \
             }                                                                                                                                                \
         }                                                                                                                                                    \
                                                                                                                                                              \
         /* Record era for snapshot support.                                                                                                                  \
            Non-atomic: snapshots are single-threaded only (see SKIPLIST_DECL_SNAPSHOTS). */                                                                  \
         if (slist->slh_snap.pres_era > 0) {                                                                                                                  \
-            new->field.sle_era = slist->slh_snap.cur_era++;                                                                                                  \
+            n->field.sle_era = slist->slh_snap.cur_era++;                                                                                                    \
         }                                                                                                                                                    \
                                                                                                                                                              \
         /* Initial hit count for splay rebalancing. */                                                                                                       \
-        _skip_atomic_store(&new->field.sle_levels[new_height].hits, 1, memory_order_relaxed);                                                                \
+        _skip_atomic_store(&n->field.sle_levels[new_height].hits, 1, memory_order_relaxed);                                                                  \
                                                                                                                                                              \
         /* Increment list length. */                                                                                                                         \
         _skip_atomic_fetch_add(&slist->slh_length, 1, memory_order_relaxed);                                                                                 \
@@ -1669,7 +1685,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
+        /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
                                                                                                                                                              \
@@ -1692,7 +1708,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
+        /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
         do {                                                                                                                                                 \
@@ -1721,7 +1737,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
+        /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
         if (node == slist->slh_tail)                                                                                                                         \
@@ -1750,12 +1766,14 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
+        /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
         if (node)                                                                                                                                            \
             goto done;                                                                                                                                       \
         node = path[1].node;                                                                                                                                 \
+        if (node == slist->slh_head)                                                                                                                         \
+            node = NULL;                                                                                                                                     \
     done:;                                                                                                                                                   \
                                                                                                                                                              \
         return node;                                                                                                                                         \
@@ -1775,9 +1793,11 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
+        /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
+        if (node == slist->slh_head)                                                                                                                         \
+            node = NULL;                                                                                                                                     \
                                                                                                                                                              \
         return node;                                                                                                                                         \
     }                                                                                                                                                        \
@@ -2454,7 +2474,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         dest->field.sle_levels = (struct _skiplist_##decl##_level *)((uintptr_t)dest + sizeof(decl##_node_t));          \
                                                                                                                         \
         /* (c) then user-supplied copy */                                                                               \
-        slist->slh_fns.archive_entry(dest, src);                                                                        \
+        rc = slist->slh_fns.archive_entry(dest, src);                                                                   \
         if (rc) {                                                                                                       \
             prefix##skip_free_node_##decl(slist, dest);                                                                 \
             return rc;                                                                                                  \
