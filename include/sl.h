@@ -1502,7 +1502,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (slist == NULL || new == NULL)                                                                                                                    \
             return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
-        _skip_insert_retry_##decl : memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                          \
+        _skip_insert_retry_##decl                                                                                                                            \
+            : memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));        \
                                                                                                                                                              \
         /* Phase 1: Find the insertion point. */                                                                                                             \
         len = _skip_locate_##decl(slist, new, path);                                                                                                         \
@@ -1583,7 +1584,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 }                                                                                                                                            \
                                                                                                                                                              \
                 /* CAS failed; re-find to get fresh preds/succs. */                                                                                          \
-                memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                              \
+                memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));      \
                 _skip_locate_##decl(slist, new, path);                                                                                                       \
                                                                                                                                                              \
                 {                                                                                                                                            \
@@ -1656,7 +1657,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         decl##_node_t *node = NULL;                                                                                                                          \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1679,7 +1680,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         decl##_node_t *node;                                                                                                                                 \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1708,7 +1709,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         decl##_node_t *node;                                                                                                                                 \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1737,7 +1738,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         decl##_node_t *node;                                                                                                                                 \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1762,7 +1763,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         decl##_node_t *node;                                                                                                                                 \
         _skiplist_path_##decl##_t *path = apath;                                                                                                             \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Find a `path` to `new` in the list and a match (`path[0]`) if it exists. */                                                                       \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1820,7 +1821,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (slist == NULL)                                                                                                                                   \
             return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
@@ -1865,7 +1866,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (slist == NULL || query == NULL)                                                                                                                  \
             return EINVAL;                                                                                                                                   \
                                                                                                                                                              \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
                                                                                                                                                              \
         /* Locate the node to be removed. */                                                                                                                 \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
@@ -1915,7 +1916,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         }                                                                                                                                                    \
                                                                                                                                                              \
         /* Phase 3: Physical unlinking via find. */                                                                                                          \
-        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (SKIPLIST_MAX_HEIGHT + 1));                                                                      \
+        memset(path, 0, sizeof(_skiplist_path_##decl##_t) * (_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire) + 1));              \
         _skip_locate_##decl(slist, query, path);                                                                                                             \
                                                                                                                                                              \
         /* Update backward pointer hint (best-effort). */                                                                                                    \
@@ -3844,7 +3845,7 @@ _skip_read_le64(const uint8_t *src)
                                                                                                                      \
         /* Zero the slot and initialize the node */                                                                  \
         char *slot = _skip_pool_slot_ptr_##decl(pool, head);                                                         \
-        memset(slot, 0, pool->slot_size);                                                                            \
+        memset(slot, 0, sizeof(decl##_node_t) + sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT);      \
                                                                                                                      \
         decl##_node_t *node = (decl##_node_t *)slot;                                                                 \
         node->field.sle_height = 0;                                                                                  \
