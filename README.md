@@ -162,7 +162,9 @@ cc -std=c11 -I/path/to/skiplist/include -O2 -pthread my.c -lm -o my
 ## Build, Test, Install
 
 The repository ships three equivalent build systems.  Pick whichever
-fits your workflow.
+fits your workflow.  All three install the public header, the
+pkg-config file, and the man pages (`skiplist(7)` and `sl.h(3)`)
+under the configured prefix.
 
 ### Plain Make
 
@@ -183,6 +185,13 @@ make install PREFIX=/opt/skiplist
 make uninstall
 make clean
 make distclean         # clean + remove configure-generated files
+```
+
+After `make install`, the man pages are available via `man`:
+
+```sh
+man 7 skiplist         # conceptual overview
+man 3 sl.h             # API reference (all macros and generated functions)
 ```
 
 Override the compiler:
@@ -728,6 +737,8 @@ tests/test_concurrent.c    Multi-threaded tests
 tests/munit.{c,h}          Vendored test harness
 examples/ex01..ex10        Progressive examples
 bench/bench.c              Throughput / latency benchmark
+man/skiplist.7             Conceptual overview man page
+man/sl.h.3                 API reference man page
 Makefile                   Plain-make build
 configure.ac               Autoconf configure script source
 config.mk.in               Make variables substituted by configure

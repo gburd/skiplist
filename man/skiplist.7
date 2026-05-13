@@ -1,0 +1,182 @@
+.\" skiplist.7 -- conceptual overview of the skiplist library
+.\" SPDX-License-Identifier: ISC OR MIT
+.\" Copyright (c) 2024-2026 Gregory Burd <greg@burd.me>
+.\"
+.TH SKIPLIST 7 "May 2026" "skiplist 1.0" "Miscellaneous Information Manual"
+.SH NAME
+skiplist \- header-only C splay-list with lock-free concurrency
+.SH DESCRIPTION
+.B skiplist
+is a header-only C library that implements a probabilistic
+sorted-list data structure with logarithmic expected lookup time.
+Unlike a balanced binary tree, a skiplist achieves balance
+probabilistically: each node has a randomly chosen
+.I height
+that determines how many of its forward pointers participate in
+the upper-level shortcuts.
+.PP
+The implementation in
+.B skiplist
+adds two extensions to the basic algorithm:
+.TP
+\fBLock-free concurrency\fR
+The default mode supports multiple concurrent readers and writers
+using the Fraser/Harris algorithm with marked pointers for logical
+deletion and epoch-based reclamation (EBR) for safe memory reuse.
+.TP
+\fBSplay rebalancing\fR (opt-in)
+When enabled at compile time via
+.B SKIPLIST_SPLAY_REBALANCE,
+node heights adapt to the observed access distribution: hot keys
+are promoted toward the head, cold keys are demoted.  Trades a
+small per-access overhead for a near-optimal layout under skewed
+workloads.
+.SH "DATA STRUCTURE"
+A skiplist is a singly- or doubly-linked sorted list where some
+nodes also carry forward pointers at higher
+.IR levels .
+A search begins at the head sentinel at the highest level and
+descends, following forward pointers as long as the next key is
+less than or equal to the target.  In
+.B skiplist
+the level-0 list is doubly linked, so reverse iteration is O(1)
+per step.
+.PP
+Each node carries an array of
+.B {next, hits}
+pairs, one entry per active level.  The
+.B hits
+counter on each level drives the optional splay rebalancing pass.
+The library reserves head and tail
+.I sentinel
+nodes at every level so the lookup, insert, and remove paths
+never have to special-case the boundaries.
+.SH "GENERATED CODE MODEL"
+The entire implementation lives in preprocessor macros that
+generate type-specific code at compile time, similar to C++
+templates.  Users include a single header,
+.BR sl.h ,
+embed
+.B SKIPLIST_ENTRY
+in their node structure, and invoke
+.B SKIPLIST_DECL
+to generate a family of functions named
+.IB prefix _skip_ operation _ decl ().
+The preprocessor approach is verbose to read but eliminates the
+runtime cost of indirect function dispatch that a plain-C
+implementation would otherwise require.
+.PP
+Users who want only basic ordered-set operations include
+.BR sl.h ,
+invoke
+.BR SKIPLIST_ENTRY ,
+and
+.BR SKIPLIST_DECL .
+Additional macros layer optional features on top:
+.TP
+.B SKIPLIST_DECL_ACCESS
+High-level key/value API (\fBget\fR, \fBput\fR, \fBdel\fR,
+\fBcontains\fR, ...)
+.TP
+.B SKIPLIST_DECL_SNAPSHOTS
+MVCC point-in-time snapshots with restore
+.TP
+.B SKIPLIST_DECL_EBR
+Epoch-based reclamation for concurrent memory safety
+.TP
+.B SKIPLIST_DECL_POOL
+Cache-line-aligned fixed-capacity pool allocator
+.TP
+.B SKIPLIST_DECL_ARCHIVE
+Binary serialization and deserialization
+.TP
+.B SKIPLIST_DECL_VALIDATE
+Runtime invariant checking
+.TP
+.B SKIPLIST_DECL_DOT
+GraphViz DOT visualization
+.SH "CONCURRENCY MODEL"
+The default build supports lock-free insert, search, and remove
+across multiple threads.  Three correctness ingredients:
+.TP
+\fBMarked pointers.\fR
+The lowest bit of each forward pointer flags a logically-deleted
+node.  Readers skip marked nodes; the next writer to traverse the
+predecessor unlinks the corpse.
+.TP
+\fBCompare-and-swap chains.\fR
+Inserts splice in bottom-up: a CAS at level 0 establishes
+visibility, then upper levels are linked opportunistically.
+A failure on level >0 leaves the node reachable but at lower
+height.  A subsequent splay-rebalance pass restores the expected
+distribution.
+.TP
+\fBEpoch-based reclamation.\fR
+Threads register once with the EBR machinery and pin/unpin around
+each operation.  Removed nodes are retired into a per-thread
+limbo list and freed only after every registered thread has
+visited a fresh epoch.
+.PP
+For applications that do not need concurrency, defining
+.B SKIPLIST_SINGLE_THREADED
+before including
+.B sl.h
+strips all atomic operations.  The dependency on
+.B <stdatomic.h>
+and
+.B <stdalign.h>
+is removed; tight insert loops run roughly 30 percent faster
+than the lock-free path.
+.SH "MEMORY MANAGEMENT"
+Nodes are user-allocated.  The library calls a user-supplied
+.I free
+block to release node-internal resources, then frees the node
+storage itself.  Under concurrent mode this happens through EBR;
+under single-threaded mode it happens immediately on
+.IR remove .
+.PP
+The optional pool allocator
+.RB ( SKIPLIST_DECL_POOL )
+provides a fixed-capacity slab with cache-line-aligned slots and
+a lock-free free list.  Allocations beyond the configured
+capacity fall back to
+.BR malloc (3).
+For sequential-insert workloads the pool typically improves
+throughput by a factor of two to three.
+.SH "PORTABILITY"
+.B skiplist
+is C11 (or C99 with
+.BR SKIPLIST_SINGLE_THREADED )
+and depends only on the C standard library plus
+.B <pthread.h>
+in tests and examples.  The header contains portability shims
+for atomics, alignment, and process-id retrieval that work on
+GCC, Clang, and MSVC.
+.SH FILES
+.TP
+.B include/sl.h
+The implementation.  Single header; copy into your project or
+install via
+.B make install
+to obtain
+.B <sl.h>
+under the system include path.
+.TP
+.B skiplist.pc
+.BR pkg-config (1)
+metadata installed alongside the header.
+.SH "SEE ALSO"
+.BR sl.h (3),
+.BR pkg-config (1)
+.PP
+Project home page:
+.UR https://codeberg.org/gregburd/skiplist
+.UE
+.SH AUTHOR
+Gregory Burd <greg@burd.me>
+.SH LICENSE
+Dual-licensed under ISC OR MIT.  Pick whichever suits.
+.SH "REPORTING BUGS"
+File issues at
+.UR https://codeberg.org/gregburd/skiplist/issues
+.UE .

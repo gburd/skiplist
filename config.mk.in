@@ -6,6 +6,7 @@ exec_prefix    = @exec_prefix@
 PREFIX         = @prefix@
 INCLUDEDIR     = @includedir@
 LIBDIR         = @libdir@
+MANDIR         = @mandir@
 
 CC             = @CC@
 INSTALL        = @INSTALL@

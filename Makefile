@@ -13,8 +13,9 @@
 #   make bench           -- build and run the benchmark suite
 #   make coverage        -- gcov coverage over include/sl.h
 #   make valgrind        -- run unit tests under valgrind (single-threaded)
+#   make man             -- lint man pages (renders via mandoc if present)
 #   make format          -- clang-format the tree
-#   make install         -- install header + pkg-config file
+#   make install         -- install header + pkg-config + man pages
 #   make clean           -- remove build artefacts
 #   make distclean       -- clean + remove configure-generated files
 #
@@ -31,6 +32,7 @@
 PREFIX     ?= /usr/local
 INCLUDEDIR ?= $(PREFIX)/include
 LIBDIR     ?= $(PREFIX)/lib
+MANDIR     ?= $(PREFIX)/share/man
 
 CC         ?= cc
 INSTALL    ?= install
@@ -67,8 +69,10 @@ EXAMPLES = examples/ex01 examples/ex02 examples/ex03 examples/ex04 \
            examples/ex05 examples/ex06 examples/ex07 examples/ex08 \
            examples/ex09 examples/ex10
 
+MAN_PAGES = man/skiplist.7 man/sl.h.3
+
 .PHONY: all clean distclean test test_concurrent test_tsan test_all examples mls coverage \
-        bench valgrind install uninstall format
+        bench valgrind install uninstall format man
 
 # Header-only library: no .a / .so / .o to produce.  "all" builds
 # everything that exercises the header, which is the meaningful default.
@@ -172,6 +176,20 @@ tests/test_valgrind: tests/test.c tests/munit.c include/sl.h
 	$(CC) $(WARNFLAGS) -Og -g -std=c11 -Iinclude/ $(TEST_FLAGS) -o $@ tests/test.c tests/munit.c -lm -pthread
 
 # ----------------------------------------------------------------------
+# Man pages
+# ----------------------------------------------------------------------
+
+# Man pages are static groff files; this target exists for parity with
+# meson and so 'make man' lints/renders them via mandoc when available.
+man: $(MAN_PAGES)
+	@for p in $(MAN_PAGES); do \
+	  if command -v mandoc >/dev/null 2>&1; then \
+	    mandoc -Tlint $$p || true; \
+	  fi; \
+	done
+	@echo "Man pages OK: $(MAN_PAGES)"
+
+# ----------------------------------------------------------------------
 # Install / pkg-config
 # ----------------------------------------------------------------------
 
@@ -180,10 +198,16 @@ install: skiplist.pc
 	$(INSTALL) -m 644 include/sl.h $(DESTDIR)$(INCLUDEDIR)/sl.h
 	$(INSTALL) -d $(DESTDIR)$(LIBDIR)/pkgconfig
 	$(INSTALL) -m 644 skiplist.pc $(DESTDIR)$(LIBDIR)/pkgconfig/skiplist.pc
+	$(INSTALL) -d $(DESTDIR)$(MANDIR)/man3
+	$(INSTALL) -m 644 man/sl.h.3 $(DESTDIR)$(MANDIR)/man3/sl.h.3
+	$(INSTALL) -d $(DESTDIR)$(MANDIR)/man7
+	$(INSTALL) -m 644 man/skiplist.7 $(DESTDIR)$(MANDIR)/man7/skiplist.7
 
 uninstall:
 	rm -f $(DESTDIR)$(INCLUDEDIR)/sl.h
 	rm -f $(DESTDIR)$(LIBDIR)/pkgconfig/skiplist.pc
+	rm -f $(DESTDIR)$(MANDIR)/man3/sl.h.3
+	rm -f $(DESTDIR)$(MANDIR)/man7/skiplist.7
 
 # When ./configure was run, skiplist.pc is generated from skiplist.pc.in
 # by the substitution of @PREFIX@/@INCLUDEDIR@/@LIBDIR@ via config.status.

@@ -27,6 +27,10 @@ AC_CONFIG_SRCDIR([include/sl.h])
 AC_PROG_CC
 AC_PROG_INSTALL
 
+# Allow --mandir override (autoconf provides the variable for free,
+# we just substitute it into config.mk).
+AC_SUBST([mandir])
+
 # Validate -std=c11.
 AC_MSG_CHECKING([whether $CC accepts -std=c11])
 saved_CFLAGS=$CFLAGS

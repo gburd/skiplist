@@ -24,6 +24,11 @@ skiplist_dep = declare_dependency(
 # Install the public header and a pkg-config file for non-meson consumers.
 install_headers('include/sl.h')
 
+# Install man pages -- skiplist.7 is the conceptual overview,
+# sl.h.3 is the API reference (a single page covering all macros,
+# in the style of queue(3) or tree(3)).
+install_man('man/skiplist.7', 'man/sl.h.3')
+
 pkg = import('pkgconfig')
 pkg.generate(
   name : 'skiplist',
