@@ -171,7 +171,7 @@ extern "C" {
 
 /* ----- Atomics abstraction ----- */
 #ifdef SKIPLIST_SINGLE_THREADED
-/* No <stdatomic.h> needed — provide dummy memory-order constants */
+/* No <stdatomic.h> needed -- provide dummy memory-order constants */
 enum { memory_order_relaxed, memory_order_consume, memory_order_acquire, memory_order_release, memory_order_acq_rel, memory_order_seq_cst };
 #define _SKIP_ATOMIC(T) T
 #define _skip_atomic_load(p, order) (*(p))
@@ -1451,7 +1451,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
             /* Read pred's next pointer at this level.  If pred was                                                                                          \
                concurrently logically deleted, its stored next pointers                                                                                      \
-               are marked — restart from the top in that case. */                                                                                          \
+               are marked -- restart from the top in that case. */                                                                                          \
             curr = _skip_atomic_load(&pred->field.sle_levels[i].next, memory_order_acquire);                                                                 \
             if (_SKIP_IS_MARKED(curr)) {                                                                                                                     \
                 goto _skip_locate_retry_##decl;                                                                                                              \
@@ -2497,7 +2497,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             dest->field.sle_levels[lvl].next = NULL;                                                                    \
         }                                                                                                               \
                                                                                                                         \
-        /* (f) set duplicate flag — reuses sle_levels[1].next as a boolean;                                           \
+        /* (f) set duplicate flag -- reuses sle_levels[1].next as a boolean;                                           \
            safe because all nodes are allocated with SKIPLIST_MAX_HEIGHT levels. */                                     \
         dest->field.sle_levels[1].next = is_dup;                                                                        \
                                                                                                                         \

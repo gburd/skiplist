@@ -525,7 +525,7 @@ test_splay_behavior(const MunitParameter params[], void *data)
         (void)cold_initial_height;
     }
 #else
-    /* Without splay, heights don't change — just suppress warnings */
+    /* Without splay, heights don't change -- just suppress warnings */
     (void)hot_node;
     (void)cold_node;
     (void)initial_height;

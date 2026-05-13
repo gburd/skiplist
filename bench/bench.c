@@ -34,7 +34,7 @@
 
 #include "sl.h"
 
-/* ── Skiplist type definition ─────────────────────────────────────── */
+/* -- Skiplist type definition --------------------------------------- */
 
 struct bench_node {
     int key;
@@ -68,7 +68,7 @@ SKIPLIST_DECL_ACCESS(bench, api_, key, int, val, long, { query.key = key; }, { r
 SKIPLIST_DECL_EBR(bench, api_)
 SKIPLIST_DECL_POOL(bench, api_, entries, 1024)
 
-/* ── PRNG (xorshift64*) ──────────────────────────────────────────── */
+/* -- PRNG (xorshift64*) -------------------------------------------- */
 
 static uint64_t rng_state;
 
@@ -101,7 +101,7 @@ shuffle_array(int *arr, int n)
     }
 }
 
-/* ── Timing helpers ──────────────────────────────────────────────── */
+/* -- Timing helpers ------------------------------------------------ */
 
 static inline uint64_t
 now_ns(void)
@@ -125,7 +125,7 @@ print_result(bench_result_t *r)
     printf("  %-40s  %8d ops  %12.0f ops/s  %8.1f ns/op\n", r->name, r->n, r->ops_per_sec, r->ns_per_op);
 }
 
-/* ── Benchmark implementations ───────────────────────────────────── */
+/* -- Benchmark implementations ------------------------------------- */
 
 static bench_result_t
 bench_sequential_insert(int n)
@@ -396,7 +396,7 @@ bench_splay_hotspot(int n)
     return r;
 }
 
-/* ── Latency distribution ────────────────────────────────────────── */
+/* -- Latency distribution ------------------------------------------ */
 
 static int
 cmp_uint64(const void *a, const void *b)
@@ -440,7 +440,7 @@ bench_latency_distribution(int n, int *keys)
     free(list);
 }
 
-/* ── Concurrent benchmark helpers ─────────────────────────────────── */
+/* -- Concurrent benchmark helpers ----------------------------------- */
 
 /* Thread-local PRNG to avoid data races on the global rng_state. */
 typedef struct {
@@ -781,7 +781,7 @@ run_concurrent_benchmarks(int n)
     print_result(&r_pool);
 }
 
-/* ── Main ────────────────────────────────────────────────────────── */
+/* -- Main ---------------------------------------------------------- */
 
 int
 main(int argc, char **argv)
