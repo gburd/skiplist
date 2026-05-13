@@ -12,8 +12,17 @@ skiplist.pc
 # Test binaries
 tests/test
 tests/test_cov
+tests/test_cov_concurrent
+tests/test_cov_concurrent_splay
+tests/test_cov_single
+tests/test_cov_splay
 tests/test_concurrent
+tests/test_concurrent_splay
 tests/test_concurrent_tsan
+tests/test_concurrent_tsan_splay
+tests/test_single
+tests/test_splay
+tests/test_valgrind
 
 # Example binaries
 examples/ex01
