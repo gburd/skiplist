@@ -65,17 +65,27 @@ all dependencies on `<stdatomic.h>`.
 Production-ready.  The current `main` branch is the canonical version.
 The full test matrix passes locally and in CI:
 
-| Suite                | Tests | Status |
-|----------------------|-------|--------|
-| Unit                 | 28    | pass   |
-| Concurrent           | 6     | pass   |
-| TSAN                 | 6     | pass   |
-| ASan + LSan + UBSan  | 28    | pass   |
-| Valgrind             | 28    | pass   |
+| Suite                              | Tests | Status |
+|------------------------------------|-------|--------|
+| Unit (default)                     |    33 | pass   |
+| Concurrent (default)               |     7 | pass   |
+| TSAN (default)                     |     7 | pass   |
+| Unit (splay rebalance enabled)     |    33 | pass   |
+| Concurrent (splay rebalance)       |     7 | pass   |
+| TSAN (splay rebalance)             |     7 | pass   |
+| Single-threaded mode               |     6 | pass   |
+| ASan + LSan + UBSan                |    33 | pass   |
+| Valgrind                           |    33 | pass   |
 
 Verified on Linux x86_64 with gcc 13/15 and clang 18/21.  The
 implementation is C11 with no Linux-specific syscalls; macOS, the BSDs,
 and Windows (MSVC) are supported by the portability shims in `sl.h`.
+
+Coverage on the implementation surface (`include/sl.h` plus the
+three test translation units that instantiate its macros): 97% line,
+99% function, 58% branch.  Branch coverage of lock-free CAS retry and
+EBR contention paths is hard to exercise deterministically and is
+tracked separately rather than gated.
 
 Historical exploration is preserved as git tags under `archive/*`:
 `archive/lock-free-first-attempt`, `archive/splay-list-original`,
@@ -171,14 +181,18 @@ under the configured prefix.
 The simplest path; works out of the box without `./configure`.
 
 ```sh
-make test              # 28 unit tests under ASan + LSan + UBSan
-make test_concurrent   # 6 concurrent tests under ASan + LSan + UBSan
-make test_tsan         # 6 concurrent tests under ThreadSanitizer
+make test              # 33 unit tests under ASan + LSan + UBSan
+make test              # 33 unit tests under ASan + LSan + UBSan
+make test_concurrent   # 7 concurrent tests under ASan + LSan + UBSan
+make test_tsan         # 7 concurrent tests under ThreadSanitizer
+make test_splay        # full suite with -DSKIPLIST_SPLAY_REBALANCE
+make test_tsan_splay   # TSAN with splay rebalancing
+make test_single       # SKIPLIST_SINGLE_THREADED build (6 tests)
 make test_all          # all of the above
-make valgrind          # 28 unit tests under valgrind (no sanitizers)
+make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
 make bench             # build and run the benchmark suite
-make coverage          # gcov coverage over include/sl.h
+make coverage          # gcov + gcovr; gates on >=95% line + function
 make format            # clang-format the tree
 make install           # install header + pkg-config to /usr/local
 make install PREFIX=/opt/skiplist
@@ -572,11 +586,26 @@ based on a hit counter on each tower level:
 - Low-traffic nodes get demoted -- their tower shrinks so the
   vertical fanout above them stays sparse.
 
-The algorithm is from Aksenov et al. ("The Splay-List", 2020).
-Trade-off: a few percent overhead per access in exchange for
-near-optimal layout under skewed workloads (Zipf-like).  Uniform
-random keys gain little.  The feature is opt-in because the underlying
-skip-list is already O(log n) on uniform keys.
+The algorithm is from Aksenov et al. ("The Splay-List", 2020).  A node
+with hit ratio `u/T` (where `T` is the total accesses) settles at
+height `K - 1 - log2(T/u)` where `K` is the head's current height,
+placing it at depth `log2(1/p)` from the top -- exactly matching the
+paper's `O(log(1/p))` search-cost target.  Hot keys ride near the top;
+uniform random keys see no benefit and a few percent overhead.
+
+The rebalance fires only on read-only access paths (search, contains,
+position_*, update, and the duplicate-found path of insert).  It does
+not fire from `remove`: promoting a node that is about to be physically
+unlinked would create upper-level forward pointers the remove protocol
+cannot clean up, leaving dangling references after EBR reclaims the
+node.
+
+Under concurrent mode the rebalance never dereferences nodes outside
+the locate-recorded path (which are EBR-pinned by the active caller),
+so the feature is safe to combine with multiple writer threads and
+epoch-based reclamation.  The Aksenov design accepts that splay is a
+heuristic and a CAS failure is acceptable; we revert the height bump
+and try again on the next access.
 
 
 ## Examples Walkthrough

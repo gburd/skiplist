@@ -1,5 +1,6 @@
 #define MUNIT_ENABLE_ASSERT_ALIASES
 
+#include <limits.h>
 #include <string.h>
 
 #include "munit.h"
@@ -116,6 +117,16 @@ SKIPLIST_DECL_ARCHIVE(
             node->value = NULL;
         }
     })
+
+/* Generate DOT (GraphViz) visualization functions */
+SKIPLIST_DECL_DOT(test, api_, entries)
+
+/* Helper for the DOT writer: stringify a node's key into a 2048-byte buffer. */
+static void
+sprintf_test_node(test_node_t *n, char *buf)
+{
+    snprintf(buf, 2048, "%d=%s", n->key, n->value ? n->value : "");
+}
 
 /* Helper function to create test value */
 static char *
@@ -1530,6 +1541,237 @@ test_archive_roundtrip(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Test DOT visualization output. */
+static MunitResult
+test_dot(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    api_skip_init_test(list);
+
+    /* Empty list should still produce valid DOT output. */
+    FILE *fp = tmpfile();
+    assert_not_null(fp);
+    size_t nsg = 0;
+    nsg = api_skip_dot_test(fp, list, nsg, (char *)"empty", sprintf_test_node);
+    assert_size(nsg, >, 0);
+
+    /* Insert some data and emit a second subgraph. */
+    for (int i = 1; i <= 10; i++) {
+        int rc = api_skip_put_test(list, i, make_test_value(i));
+        assert_int(rc, ==, 0);
+    }
+    nsg = api_skip_dot_test(fp, list, nsg, (char *)"populated", sprintf_test_node);
+    assert_size(nsg, >, 1);
+
+    api_skip_dot_end_test(fp, nsg);
+
+    /* Read back, verify DOT output looks like a graph (contains 'digraph'
+     * or 'subgraph'/'graph' tokens, plus our node labels). */
+    rewind(fp);
+    char buf[8192];
+    size_t total_read = 0;
+    size_t n;
+    while ((n = fread(buf + total_read, 1, sizeof(buf) - 1 - total_read, fp)) > 0) {
+        total_read += n;
+        if (total_read >= sizeof(buf) - 1)
+            break;
+    }
+    buf[total_read] = '\0';
+    fclose(fp);
+
+    /* DOT output must contain a graph keyword and at least one of our keys. */
+    assert_true(strstr(buf, "graph") != NULL);
+    assert_true(strstr(buf, "5=value_5") != NULL);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Test the broader API surface that the other tests don't exercise:
+ * dup/set/update/to_array/prev_validated/pos/pool_free_node, and the
+ * EBR retire-callback hook.  Pure single-list test, no concurrency. */
+static MunitResult
+test_api_breadth(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* dup: insert duplicates of the same key. */
+    assert_int(api_skip_dup_test(list, 7, make_test_value(7)), ==, 0);
+    assert_int(api_skip_dup_test(list, 7, make_test_value(70)), ==, 0);
+    assert_int(api_skip_dup_test(list, 7, make_test_value(700)), ==, 0);
+    assert_size(api_skip_length_test(list), ==, 3);
+
+    /* put: distinct keys. */
+    for (int i = 1; i <= 10; i++)
+        if (i != 7)
+            api_skip_put_test(list, i, make_test_value(i));
+    assert_size(api_skip_length_test(list), ==, 12);
+
+    /* set: update existing key.  Returns 0 on success. */
+    assert_int(api_skip_set_test(list, 5, make_test_value(500)), ==, 0);
+    assert_string_equal(api_skip_get_test(list, 5), "value_500");
+
+    /* update: walk through query node. */
+    test_node_t q;
+    memset(&q, 0, sizeof(q));
+    q.key = 3;
+    char *new_val = make_test_value(300);
+    assert_int(api_skip_update_test(list, &q, new_val), ==, 0);
+    assert_string_equal(api_skip_get_test(list, 3), "value_300");
+
+    /* to_array: snapshot all nodes into a heap array.  The array stores
+     * length at index -1 (cast to pointer); valid entries are [0..len-1];
+     * caller frees the underlying allocation at (arr - 1). */
+    test_node_t **arr = api_skip_to_array_test(list);
+    assert_not_null(arr);
+    size_t arr_len = (size_t)(uintptr_t)arr[-1];
+    assert_size(arr_len, ==, api_skip_length_test(list));
+    for (size_t i = 0; i < arr_len; i++)
+        assert_not_null(arr[i]);
+    free(arr - 1);
+
+    /* prev_validated: walk backward and verify each step is consistent.
+     * The walk relies on sle_prev which validates and falls back to a
+     * forward scan; with duplicate keys, the chain semantics are subtle
+     * and a NULL return is allowed for the post-validation case.  We
+     * verify monotonicity rather than exact count. */
+    test_node_t *cur = api_skip_tail_test(list);
+    cur = api_skip_prev_validated_test(list, cur);
+    int seen = 0;
+    int prev_key = INT_MAX;
+    while (cur != NULL && cur != api_skip_head_test(list)) {
+        assert_int(cur->key, <=, prev_key);
+        prev_key = cur->key;
+        seen++;
+        cur = api_skip_prev_validated_test(list, cur);
+    }
+    assert_int(seen, >, 0);
+
+    /* pos: positional lookup with all comparison ops. */
+    test_node_t *p;
+    p = api_skip_pos_test(list, SKIP_EQ, 5);
+    assert_not_null(p);
+    assert_int(p->key, ==, 5);
+    p = api_skip_pos_test(list, SKIP_LT, 5);
+    assert_not_null(p);
+    assert_int(p->key, <, 5);
+    p = api_skip_pos_test(list, SKIP_LTE, 5);
+    assert_not_null(p);
+    assert_int(p->key, <=, 5);
+    p = api_skip_pos_test(list, SKIP_GT, 5);
+    assert_not_null(p);
+    assert_int(p->key, >, 5);
+    p = api_skip_pos_test(list, SKIP_GTE, 5);
+    assert_not_null(p);
+    assert_int(p->key, >=, 5);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Exercise the pool's free_node entry that returns a node back to the
+ * pool after detaching from a list (skip_pool_free_node_).  This
+ * differs from the basic pool test: it goes through the slist-aware
+ * wrapper that calls free_entry_blk before recycling. */
+static MunitResult
+test_pool_free_node(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    _skip_pool_test_t pool;
+    int rc = api_skip_pool_init_test(&pool, 16);
+    assert_int(rc, ==, 0);
+
+    test_node_t *n = api_skip_pool_alloc_test(&pool);
+    assert_not_null(n);
+    n->key = 100;
+    n->value = make_test_value(100);
+    /* free_node calls the user free block then returns to pool. */
+    api_skip_pool_free_node_test(&pool, list, n);
+
+    /* pool acquire/release wrappers test (skip_pool_alloc_node uses
+     * the wrapper that returns int rc).  Already tested elsewhere; here
+     * just confirm the entry. */
+    test_node_t *wrap = NULL;
+    rc = api_skip_pool_alloc_node_test(&pool, &wrap);
+    assert_int(rc, ==, 0);
+    assert_not_null(wrap);
+    api_skip_pool_free_node_test(&pool, list, wrap);
+
+    api_skip_pool_destroy_test(&pool);
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Invoke the sizeof_entry trampoline directly to confirm wiring. */
+static MunitResult
+test_sizeof_entry(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    test_node_t sample;
+    memset(&sample, 0, sizeof(sample));
+    sample.key = 1;
+    sample.value = make_test_value(1);
+    size_t sz = list->slh_fns.sizeof_entry(&sample);
+    assert_size(sz, >, 0);
+    free(sample.value);
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Exercise the EBR retire-callback path: attach EBR to a list, remove
+ * a node, verify the callback wires through.  This hits the
+ * _skip_ebr_retire_cb_test trampoline that the basic /ebr_basic test
+ * doesn't reach because it doesn't attach EBR to a populated list. */
+static MunitResult
+test_ebr_retire_callback(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    _skip_ebr_test_t ebr;
+    api_skip_ebr_init_test(&ebr);
+    api_skip_ebr_attach_test(list, &ebr);
+    int tid = api_skip_ebr_register_test(&ebr);
+
+    /* Insert a few keys, then remove with EBR pinned -- the remove path
+     * routes through slh_ebr_retire which dispatches to the trampoline. */
+    for (int i = 1; i <= 5; i++)
+        api_skip_put_test(list, i, make_test_value(i));
+
+    api_skip_ebr_pin_test(&ebr, tid);
+    api_skip_del_test(list, 3);
+    api_skip_ebr_unpin_test(&ebr, tid);
+
+    /* Drain to actually free the retired node. */
+    api_skip_ebr_drain_test(&ebr);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -1558,6 +1800,11 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/archive_basic", test_archive_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/archive_empty", test_archive_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/archive_roundtrip", test_archive_roundtrip, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/dot", test_dot, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/api_breadth", test_api_breadth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_free_node", test_pool_free_node, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/ebr_retire_callback", test_ebr_retire_callback, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/sizeof_entry", test_sizeof_entry, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };

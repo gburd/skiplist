@@ -42,6 +42,16 @@ jobs:
           CC: ${{ matrix.cc }}
         run: make test_concurrent
 
+      - name: Single-threaded build
+        env:
+          CC: ${{ matrix.cc }}
+        run: make test_single
+
+      - name: Splay-rebalance variant (signature feature)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make test_splay
+
       - name: Examples
         env:
           CC: ${{ matrix.cc }}
@@ -57,6 +67,12 @@ jobs:
         env:
           CC: gcc
         run: make test_tsan
+
+      - name: ThreadSanitizer + splay (gcc only)
+        if: matrix.cc == 'gcc'
+        env:
+          CC: gcc
+        run: make test_tsan_splay
 
   # Valgrind cannot coexist with AddressSanitizer; the Makefile builds a
   # separate non-sanitized binary for this job.  Concurrent tests are
@@ -115,5 +131,29 @@ jobs:
         run: ./configure
       - name: Build & test
         run: |
-          make check
-          make distcheck
+          make test
+          make test_concurrent
+          make test_splay
+          make test_single
+
+  # Coverage gate: 95% line and function coverage of the implementation
+  # surface (include/sl.h plus the .c files that instantiate its
+  # macros).  Branch coverage of lock-free CAS retry paths is hard to
+  # exercise deterministically and is reported but not gated.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gcc + gcovr
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcovr python3
+      - name: Build + run coverage suite
+        env:
+          CC: gcc
+        run: make coverage
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report/

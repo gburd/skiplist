@@ -1135,6 +1135,15 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         }                                                                                                                                                    \
     }                                                                                                                                                        \
                                                                                                                                                              \
+    /* Backward scan to locate a predecessor at a specific level.\
+     *                                                                                                                                                       \
+     * Currently unused: the splay rebalance was reworked to use only the                                                                                    \
+     * predecessors recorded by locate (which are EBR-pinned by the active                                                                                   \
+     * caller).  This function would dereference nodes that may have been                                                                                    \
+     * retired by concurrent removes, so it is no longer called from                                                                                         \
+     * _fix_skip_rebalance_.  Kept for future use; mark unused to keep the                                                                                   \
+     * -Werror=unused-function build clean. */                                                                                                              \
+    _SKIP_MAYBE_UNUSED                                                                                                                                       \
     static decl##_node_t *_skip_splay_find_pred_at_level_##decl(decl##_t *slist, decl##_node_t *target, size_t level)                                        \
     {                                                                                                                                                        \
         decl##_node_t *scan, *fwd;                                                                                                                           \
@@ -1193,11 +1202,19 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (m_total_hits < 4 || k_threshold < 1)                                                                                                             \
             return;                                                                                                                                          \
                                                                                                                                                              \
-        /* Process each node in the search path. path[1..len] are the                                                                                        \
-         * predecessors recorded during locate; path[0] is the match.                                                                                        \
-         * We only rebalance the actual nodes on the path, skipping                                                                                          \
-         * head and tail sentinels. */                                                                                                                       \
-        for (i = 1; i <= len; i++) {                                                                                                                         \
+        /* Process every node recorded in the path: path[0] is the matched\
+         * node (the hot key whose hit counter just incremented), path[1..len]\
+         * are the predecessors recorded by _skip_locate_ at successive levels.\
+         *\
+         * The matched node carries the only authoritative u_hits update from\
+         * the access that triggered this rebalance, so promotion can only\
+         * make progress when path[0] is included.  Predecessors are visited\
+         * for demotion: when one has accumulated hits historically (from\
+         * times it was the matched node) but those hits no longer justify\
+         * its current height relative to m_total_hits, demote it.\
+         *\
+         * Head and tail sentinels are skipped explicitly. */                                                                                                \
+        for (i = 0; i <= len; i++) {                                                                                                                         \
             node = path[i].node;                                                                                                                             \
             if (node == NULL || node == slist->slh_head || node == slist->slh_tail)                                                                          \
                 continue;                                                                                                                                    \
@@ -1229,8 +1246,22 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             if (u_hits <= (size_t)dsc_cond && node_height > 0) {                                                                                             \
                 size_t top = node_height;                                                                                                                    \
                                                                                                                                                              \
-                /* Step 1: Find predecessor at the top level. */                                                                                             \
-                pred = _skip_splay_find_pred_at_level_##decl(slist, node, top);                                                                              \
+                /* Step 1: Find predecessor at the top level.                                                                                              \
+                 *                                                                                                                                           \
+                 * Use the locate-recorded predecessor at level `top`, which                                                                                  \
+                 * is path[top + 1].node by locate's invariant.  This entry is                                                                                \
+                 * EBR-protected by the active pin and reading its atomic                                                                                     \
+                 * fields is safe.  We deliberately do not fall back to a                                                                                     \
+                 * backward scan: that would dereference nodes outside the                                                                                    \
+                 * locate path which may have been retired by other threads. */                                                                              \
+                pred = NULL;                                                                                                                                 \
+                if (top + 1 <= len && path[top + 1].node != NULL) {                                                                                          \
+                    decl##_node_t *cand = path[top + 1].node;                                                                                                \
+                    size_t cand_h = _skip_atomic_load(&cand->field.sle_height, memory_order_acquire);                                                        \
+                    if (cand_h >= top) {                                                                                                                     \
+                        pred = cand;                                                                                                                         \
+                    }                                                                                                                                        \
+                }                                                                                                                                            \
                 if (pred == NULL) {                                                                                                                          \
                     /* Cannot find predecessor; skip demotion this round.                                                                                    \
                      * This is safe: the node just stays at its current                                                                                      \
@@ -1338,45 +1369,25 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
                 /* Step 3: Link the new level into the skip chain.                                                                                           \
                  *                                                                                                                                           \
-                 * We need to find a predecessor at level new_h and CAS                                                                                      \
-                 * ourselves into the chain:                                                                                                                 \
-                 *   pred->levels[new_h].next: old_succ -> node                                                                                              \
-                 *   node->levels[new_h].next: (set to) old_succ                                                                                             \
+                 * Predecessor selection: the locate path recorded a                                                                                         \
+                 * predecessor at every level it traversed.  By locate's                                                                                     \
+                 * invariant, path[new_h+1].node is the predecessor at level                                                                                 \
+                 * new_h immediately less-than this node, with height >= new_h.                                                                              \
+                 * Use it directly: it is EBR-protected by the active pin                                                                                    \
+                 * (locate just visited it within this thread's pin) and we                                                                                  \
+                 * never need to dereference any *other* node's user data,                                                                                   \
+                 * which is the only way the rebalance could race with                                                                                       \
+                 * concurrent removes that retire nodes through EBR.                                                                                         \
                  *                                                                                                                                           \
-                 * Use path[i].node as a hint for the predecessor since                                                                                      \
-                 * path[i+1] (if it exists) would be the predecessor at                                                                                      \
-                 * the next higher level from the locate traversal. */                                                                                       \
+                 * If the path entry is not valid (height was concurrently                                                                                   \
+                 * demoted below new_h), give up this round.  Splay is a                                                                                     \
+                 * heuristic; the next access will retry. */                                                                                                 \
                 pred = NULL;                                                                                                                                 \
-                                                                                                                                                             \
-                /* Try to use path information first. path[i+1] if valid                                                                                     \
-                 * might be the predecessor at a higher level. However,                                                                                      \
-                 * paths can be stale, so we fall back to backward scan. */                                                                                  \
-                if (i + 1 <= len && path[i + 1].node != NULL) {                                                                                              \
-                    decl##_node_t *cand = path[i + 1].node;                                                                                                  \
+                if (new_h + 1 <= len && path[new_h + 1].node != NULL) {                                                                                      \
+                    decl##_node_t *cand = path[new_h + 1].node;                                                                                              \
                     size_t cand_h = _skip_atomic_load(&cand->field.sle_height, memory_order_acquire);                                                        \
                     if (cand_h >= new_h) {                                                                                                                   \
-                        /* Validate: cand's next at new_h should come                                                                                        \
-                         * after node in sort order (or be tail). */                                                                                         \
-                        decl##_node_t *cand_next = _skip_atomic_load(&cand->field.sle_levels[new_h].next, memory_order_acquire);                             \
-                        if (cand_next != NULL && !_SKIP_IS_MARKED(cand_next)) {                                                                              \
-                            int c = (cand_next == slist->slh_tail) ? 1 : _skip_compare_nodes_##decl(slist, cand_next, node, slist->slh_aux);                 \
-                            if (c >= 0) {                                                                                                                    \
-                                pred = cand;                                                                                                                 \
-                            }                                                                                                                                \
-                        }                                                                                                                                    \
-                    }                                                                                                                                        \
-                }                                                                                                                                            \
-                                                                                                                                                             \
-                /* Fall back to backward scan if path hint didn't work. */                                                                                   \
-                if (pred == NULL) {                                                                                                                          \
-                    pred = _skip_splay_find_pred_at_level_##decl(slist, node, new_h);                                                                        \
-                }                                                                                                                                            \
-                                                                                                                                                             \
-                /* If no predecessor found, try head. */                                                                                                     \
-                if (pred == NULL) {                                                                                                                          \
-                    size_t head_h = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire);                                             \
-                    if (head_h >= new_h) {                                                                                                                   \
-                        pred = slist->slh_head;                                                                                                              \
+                        pred = cand;                                                                                                                         \
                     }                                                                                                                                        \
                 }                                                                                                                                            \
                                                                                                                                                              \
@@ -1505,11 +1516,35 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             _skip_atomic_fetch_add(&curr->field.sle_levels[0].hits, 1, memory_order_relaxed);                                                                \
             _skip_atomic_fetch_add(&slist->slh_head->field.sle_levels[_skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_relaxed)].hits, 1,  \
                 memory_order_relaxed);                                                                                                                       \
-            _skip_rebalance_##decl(slist, len, path);                                                                                                        \
+            /* NB: rebalance is NOT called here.  remove() also goes through                                                                                 \
+             * locate, and rebalancing (specifically: promoting) a node that                                                                                 \
+             * is about to be removed creates upper-level forward pointers                                                                                   \
+             * the remove path won't clean up.  Read-only callers (search,                                                                                   \
+             * contains, position_eq) invoke _skip_rebalance_ themselves                                                                                     \
+             * after locate returns.  See the read-only wrappers below. */                                                                                   \
         } else {                                                                                                                                             \
             path[0].node = NULL;                                                                                                                             \
         }                                                                                                                                                    \
                                                                                                                                                              \
+        return len;                                                                                                                                          \
+    }                                                                                                                                                        \
+                                                                                                                                                             \
+    /**                                                                                                                                                      \
+     * -- _skip_locate_with_splay_                                                                                                                           \
+     *                                                                                                                                                       \
+     * Wrapper around _skip_locate_ that also invokes splay rebalancing                                                                                      \
+     * when the search hit a node.  Read-only callers (search, contains,                                                                                     \
+     * position_*) and update use this; remove and the physical-unlink                                                                                       \
+     * phase of remove use _skip_locate_ directly to avoid promoting a                                                                                       \
+     * node that is about to be removed (which would create upper-level                                                                                      \
+     * forward pointers the remove protocol won't clean up, leaving                                                                                          \
+     * dangling references that other threads dereference after EBR                                                                                          \
+     * frees the node). */                                                                                                                                   \
+    static size_t _skip_locate_with_splay_##decl(decl##_t *slist, decl##_node_t *q, _skiplist_path_##decl##_t path[])                                        \
+    {                                                                                                                                                        \
+        size_t len = _skip_locate_##decl(slist, q, path);                                                                                                    \
+        if (path[0].node != NULL)                                                                                                                            \
+            _skip_rebalance_##decl(slist, len, path);                                                                                                        \
         return len;                                                                                                                                          \
     }                                                                                                                                                        \
                                                                                                                                                              \
@@ -1540,6 +1575,14 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         len = _skip_locate_##decl(slist, n, path);                                                                                                           \
         if (len == 0)                                                                                                                                        \
             return ENOENT;                                                                                                                                   \
+                                                                                                                                                             \
+        /* If a duplicate was found, treat the access as a hit on the                                                                                        \
+         * existing node and let splay rebalance act on it.  Doing this                                                                                      \
+         * here (rather than inside _skip_locate_) is the same protocol                                                                                      \
+         * the read-only callers use; it keeps remove() and the physical                                                                                     \
+         * unlink phase free of accidental promotion. */                                                                                                     \
+        if (path[0].node != NULL)                                                                                                                            \
+            _skip_rebalance_##decl(slist, len, path);                                                                                                        \
                                                                                                                                                              \
         /* Reject duplicates unless flags is set. */                                                                                                         \
         if (path[0].node != NULL && flags == 0) {                                                                                                            \
@@ -1691,7 +1734,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
                                                                                                                                                              \
         return node;                                                                                                                                         \
@@ -1714,7 +1757,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
         do {                                                                                                                                                 \
             node = _skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire);                                                                 \
@@ -1743,7 +1786,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
         if (node == slist->slh_tail)                                                                                                                         \
             goto done;                                                                                                                                       \
@@ -1772,7 +1815,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
         if (node)                                                                                                                                            \
             goto done;                                                                                                                                       \
@@ -1799,7 +1842,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
         if (node == slist->slh_head)                                                                                                                         \
             node = NULL;                                                                                                                                     \
@@ -1858,7 +1901,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[0].node;                                                                                                                                 \
                                                                                                                                                              \
         if (node == NULL)                                                                                                                                    \

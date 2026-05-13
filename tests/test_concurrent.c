@@ -904,6 +904,110 @@ test_pool_contention(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Exercise the navigation/dup/update/position/to_array surface for the
+ * `conc` skiplist type.  Single-threaded sweep, no concurrency: this is
+ * here so the `conc` macro instantiations get full function coverage. */
+static MunitResult
+test_conc_api_breadth(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    setup_list_and_ebr(&list, &ebr);
+
+    int tid = ct_skip_ebr_register_conc(ebr);
+    ct_skip_ebr_pin_conc(ebr, tid);
+
+    /* Insert distinct keys plus a duplicate. */
+    for (int i = 1; i <= 10; i++) {
+        conc_node_t *n;
+        munit_assert_int(ct_skip_alloc_node_conc(&n), ==, 0);
+        n->key = i;
+        n->value = i * 10;
+        munit_assert_int(ct_skip_insert_conc(list, n), ==, 0);
+    }
+    {
+        conc_node_t *dup;
+        munit_assert_int(ct_skip_alloc_node_conc(&dup), ==, 0);
+        dup->key = 5;
+        dup->value = 999;
+        munit_assert_int(ct_skip_insert_dup_conc(list, dup), ==, 0);
+    }
+
+    /* update(): walk via query node. */
+    {
+        conc_node_t q;
+        memset(&q, 0, sizeof(q));
+        q.key = 3;
+        long new_v = 30000;
+        munit_assert_int(ct_skip_update_conc(list, &q, (void *)(uintptr_t)new_v), ==, 0);
+    }
+
+    /* head/tail/next/prev. */
+    munit_assert_not_null(ct_skip_tail_conc(list));
+    {
+        conc_node_t *first = ct_skip_head_conc(list);
+        conc_node_t *next = ct_skip_next_node_conc(list, first);
+        munit_assert_not_null(next);
+        conc_node_t *prev = ct_skip_prev_node_conc(list, ct_skip_tail_conc(list));
+        munit_assert_not_null(prev);
+        conc_node_t *pv = ct_skip_prev_validated_conc(list, ct_skip_tail_conc(list));
+        (void)pv;
+    }
+
+    /* position()/pos() variants. */
+    {
+        conc_node_t pq;
+        memset(&pq, 0, sizeof(pq));
+        pq.key = 5;
+        munit_assert_not_null(ct_skip_position_conc(list, SKIP_EQ, &pq));
+        munit_assert_not_null(ct_skip_position_lt_conc(list, &pq));
+        munit_assert_not_null(ct_skip_position_lte_conc(list, &pq));
+        munit_assert_not_null(ct_skip_position_gt_conc(list, &pq));
+        munit_assert_not_null(ct_skip_position_gte_conc(list, &pq));
+    }
+
+    /* to_array. */
+    {
+        conc_node_t **arr = ct_skip_to_array_conc(list);
+        munit_assert_not_null(arr);
+        size_t arr_len = (size_t)(uintptr_t)arr[-1];
+        munit_assert_size(arr_len, ==, ct_skip_length_conc(list));
+        free(arr - 1);
+    }
+
+    /* Pool free_node trampoline. */
+    {
+        _skip_pool_conc_t pool;
+        munit_assert_int(ct_skip_pool_init_conc(&pool, 16), ==, 0);
+        conc_node_t *n = ct_skip_pool_alloc_conc(&pool);
+        munit_assert_not_null(n);
+        ct_skip_pool_free_node_conc(&pool, list, n);
+        ct_skip_pool_destroy_conc(&pool);
+    }
+
+    /* sizeof_entry/archive_entry trampolines: invoke directly. */
+    {
+        conc_node_t a, b;
+        memset(&a, 0, sizeof(a));
+        memset(&b, 0, sizeof(b));
+        a.key = 1;
+        a.value = 11;
+        size_t sz = list->slh_fns.sizeof_entry(&a);
+        munit_assert_size(sz, >, 0);
+        int rc = list->slh_fns.archive_entry(&b, &a);
+        munit_assert_int(rc, ==, 0);
+    }
+
+    ct_skip_ebr_unpin_conc(ebr, tid);
+    ct_skip_free_conc(list);
+    free(list);
+    free(ebr);
+    return MUNIT_OK;
+}
+
 /* ===========================================================================
  * Test suite registration
  * ===========================================================================*/
@@ -915,6 +1019,7 @@ static MunitTest conc_test_suite_tests[] = {
     { (char *)"/mixed_workload", test_mixed_workload, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/ebr_correctness", test_ebr_correctness, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_contention", test_pool_contention, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/conc_api_breadth", test_conc_api_breadth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 };
 

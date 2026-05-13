@@ -23,25 +23,34 @@ jobs:
       - name: Install toolchain
         run: |
           apt-get update
-          apt-get install -y build-essential pkg-config valgrind
+          apt-get install -y build-essential pkg-config valgrind gcovr python3
           if [ "${{ matrix.cc }}" = "clang" ]; then
             apt-get install -y clang
           fi
-      - name: Unit + concurrent tests
+      - name: Default build + tests
         env:
           CC: ${{ matrix.cc }}
         run: |
           make test
           make test_concurrent
+          make test_single
+          make test_splay
           make examples
           make bench/bench
       - name: TSAN (gcc only)
         if: matrix.cc == 'gcc'
         env:
           CC: gcc
-        run: make test_tsan
+        run: |
+          make test_tsan
+          make test_tsan_splay
       - name: Valgrind (gcc only)
         if: matrix.cc == 'gcc'
         env:
           CC: gcc
         run: make valgrind
+      - name: Coverage (gcc only)
+        if: matrix.cc == 'gcc'
+        env:
+          CC: gcc
+        run: make coverage

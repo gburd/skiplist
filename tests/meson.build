@@ -5,6 +5,11 @@ cc = meson.get_compiler('c')
 # checks inside the implementation.
 test_args = ['-DDEBUG', '-DSKIPLIST_DIAGNOSTIC']
 
+# Splay-rebalance variant args: same baseline plus the opt-in flag that
+# enables the adaptive-height rebalance pass.  This exercises the
+# signature feature of the library.
+splay_args = test_args + ['-DSKIPLIST_SPLAY_REBALANCE']
+
 # munit is vendored under tests/.
 munit_lib = static_library('munit',
   'munit.c',
@@ -35,3 +40,38 @@ test_concurrent = executable('test_concurrent',
   link_args : ['-lm'],
 )
 test('concurrent', test_concurrent, timeout : 120)
+
+# Splay variants: identical sources, compiled with SKIPLIST_SPLAY_REBALANCE
+# defined so the adaptive-height rebalance pass is exercised in CI.
+test_unit_splay = executable('test_skiplist_splay',
+  'test.c',
+  include_directories : [include_directories('.')],
+  link_with : munit_lib,
+  dependencies : [skiplist_dep, dependency('threads')],
+  c_args : splay_args,
+  link_args : ['-lm'],
+)
+test('unit-splay', test_unit_splay, timeout : 120)
+
+test_concurrent_splay = executable('test_concurrent_splay',
+  'test_concurrent.c',
+  include_directories : [include_directories('.')],
+  link_with : munit_lib,
+  dependencies : [skiplist_dep, dependency('threads')],
+  c_args : splay_args,
+  link_args : ['-lm'],
+)
+test('concurrent-splay', test_concurrent_splay, timeout : 120)
+
+# Single-threaded mode: SKIPLIST_SINGLE_THREADED replaces all C11
+# atomics with plain operations and disables EBR.  Builds its own
+# munit instance because the flag has global header effect.
+test_single = executable('test_single',
+  'test_single.c',
+  'munit.c',
+  include_directories : [include_directories('.')],
+  dependencies : [skiplist_dep],
+  c_args : test_args,
+  link_args : ['-lm'],
+)
+test('single', test_single, timeout : 120)
