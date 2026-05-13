@@ -28,61 +28,48 @@ examples/ex09
 examples/ex10
 examples/mls
 examples/mls.c
-examples/ex1
-examples/ex2
-examples/ex1_sl
-examples/ex2_sl
-examples/ex1_sl.c
-examples/ex2_sl.c
 
 # Benchmark binaries
 bench/bench
 
-# Editor / IDE
-.vscode/
-.idea/
+# Coverage reports
+coverage-report/
+
+# Editor / IDE swap and backup files
 *.swp
 *.swo
 *~
 *.iml
 *.iws
 
-# Build tool caches
+# Build tool caches and out-of-tree builds
 .cache/
 .direnv/
 build/
+builddir*/
 cmake-build*/
 compile_commands.json
 .cmake_dirty
 Testing/
 
-# Agent / tooling cruft
-.claude/
-.mcp.json
-CLAUDE.md
+# Autoconf / Autotools generated files
+autom4te.cache/
+config.log
+config.status
+configure
+Makefile.in
+aclocal.m4
 
-# Shell dotfiles (devcontainer leaks)
-.bash_profile
-.bashrc
-.profile
-.zprofile
-.zshrc
-.gitconfig
-.gitmodules
-.ripgreprc
-
-# Bare git artifacts (devcontainer leaks)
-HEAD
-config
-hooks/
-objects/
-refs/
+# Meson generated files
+meson-info/
+meson-logs/
+meson-private/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Misc
+# Misc scratch
 tmp/
 *.dat
 *.db
