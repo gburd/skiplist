@@ -385,7 +385,6 @@ thread_mixed_workload(void *arg)
 
     int insert_idx = 0;
     int delete_idx = 0;
-    int search_count = 0;
 
     /*
      * Interleave operations: for every 4 iterations, do 1 insert, 1 delete,
@@ -433,7 +432,6 @@ thread_mixed_workload(void *arg)
             /* Result may or may not be found -- we just check for no crash. */
             (void)ct_skip_position_eq_conc(ctx->list, &query);
             ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
-            search_count++;
         }
     }
     ctx->result = 0;

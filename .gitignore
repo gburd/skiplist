@@ -54,7 +54,9 @@ Testing/
 
 # Autoconf / Autotools generated files
 autom4te.cache/
+build-aux/
 config.log
+config.mk
 config.status
 configure
 Makefile.in

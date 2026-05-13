@@ -1,0 +1,18 @@
+# config.mk.in -- substituted by ./configure into config.mk.
+# The Makefile includes this file if it exists, overriding defaults.
+
+prefix         = @prefix@
+exec_prefix    = @exec_prefix@
+PREFIX         = @prefix@
+INCLUDEDIR     = @includedir@
+LIBDIR         = @libdir@
+
+CC             = @CC@
+INSTALL        = @INSTALL@
+
+PTHREAD_FLAGS  = @PTHREAD_FLAGS@
+LIBM           = @LIBM@
+
+# Extra flags injected by --enable-sanitizers / --enable-coverage.
+EXTRA_CFLAGS   = @EXTRA_CFLAGS@
+EXTRA_LDFLAGS  = @EXTRA_LDFLAGS@

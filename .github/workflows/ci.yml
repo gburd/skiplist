@@ -1,23 +1,119 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
 jobs:
-  test:
+  # Compile and run unit, concurrent, and (gcc-only) TSAN tests with
+  # both gcc and clang.  The Makefile already enables -Werror, so any
+  # new warning fails the job.
+  build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         cc: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and test
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+          if [ "${{ matrix.cc }}" = "clang" ]; then
+            sudo apt-get install -y clang
+          fi
+
+      - name: Compiler version
         env:
           CC: ${{ matrix.cc }}
-        run: |
-          make test
-          make test_concurrent
-          make examples
-          make bench
-      - name: TSAN
+        run: $CC --version
+
+      - name: Unit tests (ASan + UBSan + LSan)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make test
+
+      - name: Concurrent tests
+        env:
+          CC: ${{ matrix.cc }}
+        run: make test_concurrent
+
+      - name: Examples
+        env:
+          CC: ${{ matrix.cc }}
+        run: make examples
+
+      - name: Benchmark (compile only, smoke test)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make bench/bench
+
+      - name: ThreadSanitizer (gcc only -- clang TSAN runtime not in CI image)
         if: matrix.cc == 'gcc'
         env:
           CC: gcc
         run: make test_tsan
+
+  # Valgrind cannot coexist with AddressSanitizer; the Makefile builds a
+  # separate non-sanitized binary for this job.  Concurrent tests are
+  # skipped here -- valgrind serializes threads and the TSAN job already
+  # covers the multi-threaded case.
+  valgrind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain + valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential valgrind
+      - name: Run unit tests under valgrind
+        run: make valgrind
+
+  # Meson/ninja path: parity with the Makefile, plus exposes the
+  # b_sanitize matrix.  When this job lands the package is consumable
+  # via 'meson setup builddir && ninja -C builddir test'.
+  meson:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [none, address, thread, undefined]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install meson + ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config
+      - name: Configure
+        run: |
+          if [ "${{ matrix.sanitizer }}" = "none" ]; then
+            meson setup builddir
+          else
+            meson setup builddir -Db_sanitize=${{ matrix.sanitizer }}
+          fi
+      - name: Build
+        run: ninja -C builddir
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+  # Autotools path: parity with the Makefile via 'configure && make'.
+  autotools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install autoconf + automake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake build-essential pkg-config
+      - name: Bootstrap
+        run: ./autogen.sh
+      - name: Configure
+        run: ./configure
+      - name: Build & test
+        run: |
+          make check
+          make distcheck

@@ -116,7 +116,7 @@ print_list(arc_t *list, const char *label)
     size_t idx;
     SKIPLIST_FOREACH_H2T(arc, sl_, entry, list, cur, idx)
     {
-        printf("    %d -> \"%s\"\n", cur->key, cur->value ? cur->value : "(null)");
+        printf("    [%zu] %d -> \"%s\"\n", idx, cur->key, cur->value ? cur->value : "(null)");
     }
 }
 

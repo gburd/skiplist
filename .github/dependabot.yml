@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # Track flake.lock updates via Dependabot's nix support (preview).
+  # Falls back to no-op if Dependabot's nix support is not yet GA.
+  - package-ecosystem: "nix"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "nix"
+    labels:
+      - "dependencies"
+      - "nix"

@@ -1,55 +1,106 @@
 {
-  description = "A Concurrent Skip List library for key/value pairs.";
+  description = "Header-only C splay-list with lock-free concurrency.";
 
   inputs = {
-    # nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
-    utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, ... }
-    @inputs: inputs.utils.lib.eachSystem [
-      "x86_64-linux" "i686-linux" "aarch64-linux" "x86_64-darwin"
-    ] (system:
-      let pkgs = import nixpkgs {
-            inherit system;
-            overlays = [];
-            config.allowUnfree = true;
-          };
-      in {
-        flake-utils.inputs.systems.follows = "system";
-        devShell = pkgs.mkShell rec {
+  outputs = { self, nixpkgs, flake-utils }:
+    let
+      # Supported systems.  Linux + Darwin cover developer machines and
+      # CI; FreeBSD is included because the implementation is portable
+      # C11 with no Linux-specific syscalls.
+      systems = [
+        "x86_64-linux"
+        "i686-linux"
+        "aarch64-linux"
+        "riscv64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+    in
+    flake-utils.lib.eachSystem systems (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+        inherit (pkgs) lib stdenv;
+
+        isLinux = stdenv.hostPlatform.isLinux;
+
+        # Tools needed on every supported platform.
+        commonTools = with pkgs; [
+          # Build systems
+          gnumake
+          meson
+          ninja
+          autoconf
+          automake
+          libtool
+          pkg-config
+
+          # Compilers (stdenv already provides one; expose the other so
+          # both gcc and clang are available for matrix-style local
+          # testing).
+          gcc
+          clang
+
+          # Documentation / formatting
+          clang-tools
+          graphviz-nox
+
+          # Coverage
+          gcovr
+          lcov
+
+          # Misc
+          ed
+          gettext
+          m4
+          perl
+          python3
+          ripgrep
+        ];
+
+        # Tools that don't reliably build on non-Linux platforms.
+        linuxTools = with pkgs; lib.optionals isLinux [
+          gdb
+          valgrind
+        ];
+
+        # Static glibc is only meaningful on Linux.
+        linuxBuildInputs = with pkgs; lib.optionals isLinux [
+          libbacktrace
+          glibc.out
+          glibc.static
+        ];
+      in
+      {
+        devShells.default = pkgs.mkShell {
           name = "skiplist";
-          packages = with pkgs; [
-            act
-            autoconf
-            clang
-            ed
-            gcc
-            gdb
-            gettext
-            graphviz-nox
-            libtool
-            m4
-            perl
-            pkg-config
-            python3
-            ripgrep
-            valgrind
-          ];
-
-          buildInputs = with pkgs; [
-            libbacktrace
-            glibc.out
-            glibc.static
-          ];
-
-          shellHook = let
-            icon = "f121";
-          in ''
-        export PS1="$(echo -e '\u${icon}') {\[$(tput sgr0)\]\[\033[38;5;228m\]\w\[$(tput sgr0)\]\[\033[38;5;15m\]} (${name}) \\$ \[$(tput sgr0)\]"
-        '';
+          packages = commonTools ++ linuxTools;
+          buildInputs = linuxBuildInputs;
+          shellHook = ''
+            echo "skiplist development shell (${system})"
+            echo "  cc:    $(${stdenv.cc}/bin/cc --version | head -1)"
+            echo "  meson: $(meson --version)"
+            echo "  ninja: $(ninja --version 2>/dev/null || echo missing)"
+          '';
         };
-        DOCKER_BUILDKIT = 1;
+
+        # Header-only library: 'nix build' installs the public header
+        # plus the pkg-config file via meson.
+        packages.default = stdenv.mkDerivation {
+          pname = "skiplist";
+          version = "1.0.0";
+          src = ./.;
+          nativeBuildInputs = with pkgs; [ meson ninja pkg-config ];
+          meta = with lib; {
+            description = "Header-only C splay-list with lock-free concurrency";
+            homepage = "https://codeberg.org/gregburd/skiplist";
+            license = [ licenses.isc licenses.mit ];
+            platforms = systems;
+            maintainers = [ ];
+          };
+        };
       });
 }

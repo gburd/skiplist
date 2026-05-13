@@ -65,7 +65,7 @@ print_list(snap_t *list, const char *label)
     size_t idx;
     SKIPLIST_FOREACH_H2T(snap, sl_, entry, list, cur, idx)
     {
-        printf(" %d=\"%s\"", cur->key, cur->value);
+        printf(" [%zu] %d=\"%s\"", idx, cur->key, cur->value);
     }
     printf("\n");
 }

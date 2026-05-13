@@ -125,7 +125,7 @@ main(void)
     size_t idx;
     SKIPLIST_FOREACH_H2T(viz, sl_, entry, list, cur, idx)
     {
-        printf("  key=%d, value=\"%s\"\n", cur->key, cur->value);
+        printf("  [%zu] key=%d, value=\"%s\"\n", idx, cur->key, cur->value);
     }
 
     /* Close the DOT file. */
