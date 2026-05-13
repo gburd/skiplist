@@ -1,55 +1,83 @@
+# Skiplist -- header-only C splay-list with lock-free concurrency
+#
+# Build system #1 of 2.  This Makefile is the canonical entry for
+# Unix-like systems and CI.  A meson.build is also provided for
+# downstream consumers that prefer meson/ninja; see README for details.
+#
+# Targets:
+#   make test            -- build and run the unit-test suite
+#   make test_concurrent -- build and run multi-threaded tests
+#   make test_tsan       -- run multi-threaded tests under ThreadSanitizer
+#   make test_all        -- all of the above
+#   make examples        -- build all examples (ex01..ex10)
+#   make bench           -- build and run the benchmark suite
+#   make coverage        -- gcov coverage over include/sl.h
+#   make valgrind        -- run unit tests under valgrind (single-threaded)
+#   make format          -- clang-format the tree
+#   make install         -- install header + pkg-config file
+#   make clean           -- remove build artefacts
+#
+# Variables (override on the command line):
+#   CC=clang             -- pick compiler
+#   PREFIX=/opt          -- install prefix (default /usr/local)
 
-PREFIX ?= /usr/local
+PREFIX     ?= /usr/local
 INCLUDEDIR ?= $(PREFIX)/include
+LIBDIR     ?= $(PREFIX)/lib
 
-OBJS =
-STATIC_LIB =
-SHARED_LIB =
+CC         ?= cc
 
-# https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
-#CFLAGS = -Wall -Wextra -Wpedantic -Of -std=c99 -Iinclude/ -fPIC
-#CFLAGS = -Wall -Wextra -Wpedantic -Og -g -std=c99 -Iinclude/ -fPIC
-CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined -fsanitize-address-use-after-scope -std=c11 -Iinclude/ -fPIC
-#CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=all -fhardened -std=c99 -Iinclude/ -fPIC
-#env ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=verbosity=1:log_threads=1 ./examples/mls
+# Shared warning flags for all targets.  -Werror keeps the worktree
+# warning-free under both gcc and clang; tighten or relax via WARNFLAGS.
+WARNFLAGS  ?= -Wall -Wextra -Wpedantic -Werror
 
-TEST_FLAGS = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC
+# Default debug-with-sanitizers build.  -Og keeps debug-info-friendly
+# generation while still defining __OPTIMIZE__ so glibc's
+# _FORTIFY_SOURCE checks are satisfied on hardened distros.
+SAN_FLAGS   = -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined \
+              -fsanitize-address-use-after-scope
+CFLAGS      = $(WARNFLAGS) -Og -g $(SAN_FLAGS) -std=c11 -Iinclude/ -fPIC
 
-TESTS = tests/test
-TEST_OBJS = tests/test.o tests/munit.o
+# Test-only additions (DEBUG enables internal asserts; SKIPLIST_DIAGNOSTIC
+# enables runtime invariant checks in the implementation).
+TEST_FLAGS  = -Itests/ -DDEBUG -DSKIPLIST_DIAGNOSTIC
+
+# ThreadSanitizer cannot be combined with AddressSanitizer; use a
+# distinct flag set for that target.
+TSAN_CFLAGS = $(WARNFLAGS) -Og -g -fsanitize=thread -std=c11 -Iinclude/ -fPIC
+
+# Optimised, NDEBUG benchmark build.
+BENCH_CFLAGS = $(WARNFLAGS) -O2 -std=c11 -Iinclude/ -fPIC -DNDEBUG
+
+# Coverage build: no sanitizers (incompatible with --coverage on some
+# toolchains), no optimisation, full debug info, gcov instrumentation.
+COV_CFLAGS  = $(WARNFLAGS) -O0 -g --coverage -std=c11 -Iinclude/ -fPIC
+
 EXAMPLES = examples/ex01 examples/ex02 examples/ex03 examples/ex04 \
            examples/ex05 examples/ex06 examples/ex07 examples/ex08 \
            examples/ex09 examples/ex10
 
-.PHONY: all shared static clean test test_concurrent test_tsan test_all examples mls coverage bench install uninstall format
+.PHONY: all clean test test_concurrent test_tsan test_all examples mls coverage \
+        bench valgrind install uninstall format
 
-all: static shared
+# Header-only library: no .a / .so / .o to produce.  "all" builds
+# everything that exercises the header, which is the meaningful default.
+all: test test_concurrent examples bench
 
-static: $(STATIC_LIB)
+# ----------------------------------------------------------------------
+# Tests
+# ----------------------------------------------------------------------
 
-shared: $(SHARED_LIB)
-
-$(STATIC_LIB): $(OBJS)
-	ar rcs $(STATIC_LIB) $?
-
-$(SHARED_LIB): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $? -shared
-
-examples: $(EXAMPLES)
-
-mls: examples/mls
-
-test: $(TESTS)
+test: tests/test
 	./tests/test
-#	env LSAN_OPTIONS=verbosity=1:log_threads=1 ./tests/test
 
-tests/test: $(TEST_OBJS) $(STATIC_LIB)
+tests/test: tests/test.o tests/munit.o
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 test_concurrent: tests/test_concurrent
 	./tests/test_concurrent
 
-tests/test_concurrent: tests/test_concurrent.o tests/munit.o $(STATIC_LIB)
+tests/test_concurrent: tests/test_concurrent.o tests/munit.o
 	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
 
 test_tsan: tests/test_concurrent_tsan
@@ -60,18 +88,51 @@ tests/test_concurrent_tsan: tests/test_concurrent.c tests/munit.c include/sl.h
 
 test_all: test test_concurrent test_tsan
 
-COV_CFLAGS = -Wall -Wextra -Wpedantic -O0 -g --coverage -std=c11 -Iinclude/ -fPIC
-BENCH_CFLAGS = -Wall -Wextra -Wpedantic -O2 -std=c11 -Iinclude/ -fPIC -DNDEBUG
-TSAN_CFLAGS = -Wall -Wextra -Wpedantic -Og -g -fsanitize=thread -std=c11 -Iinclude/ -fPIC
+tests/%.o: tests/%.c include/sl.h
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $<
 
-coverage:
-	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
-	rm -f tests/*.gcda tests/*.gcno
-	$(CC) $(COV_CFLAGS) -c -o tests/test_cov.o tests/test.c
-	$(CC) $(COV_CFLAGS) -c -o tests/munit_cov.o tests/munit.c
-	$(CC) tests/test_cov.o tests/munit_cov.o -o tests/test_cov $(COV_CFLAGS) $(TEST_FLAGS) -lm -pthread
-	./tests/test_cov
-	gcov -r -b tests/test_cov.gcda 2>/dev/null | grep -A1 "^File.*sl\.h"
+# ----------------------------------------------------------------------
+# Examples
+# ----------------------------------------------------------------------
+
+examples: $(EXAMPLES)
+
+examples/ex01: examples/ex01.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex02: examples/ex02.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex03: examples/ex03.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex04: examples/ex04.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex05: examples/ex05.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex06: examples/ex06.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex07: examples/ex07.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex08: examples/ex08.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm
+examples/ex09: examples/ex09.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm -pthread
+examples/ex10: examples/ex10.o
+	$(CC) $^ -o $@ $(CFLAGS) -lm -pthread
+
+examples/%.o: examples/%.c include/sl.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Preprocessor expansion of ex01.c, useful for inspecting macro output.
+mls: examples/mls
+
+examples/mls.c: examples/ex01.c include/sl.h
+	$(CC) $(CFLAGS) -C -E examples/ex01.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
+
+examples/mls: examples/mls.c
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -o $@ examples/mls.c -lm -pthread
+
+# ----------------------------------------------------------------------
+# Benchmark
+# ----------------------------------------------------------------------
 
 bench: bench/bench
 	./bench/bench
@@ -79,80 +140,60 @@ bench: bench/bench
 bench/bench: bench/bench.c include/sl.h
 	$(CC) $(BENCH_CFLAGS) bench/bench.c -o bench/bench -lm -pthread
 
+# ----------------------------------------------------------------------
+# Coverage / valgrind
+# ----------------------------------------------------------------------
+
+coverage:
+	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
+	rm -f tests/*.gcda tests/*.gcno
+	$(CC) $(COV_CFLAGS) $(TEST_FLAGS) -c -o tests/test_cov.o tests/test.c
+	$(CC) $(COV_CFLAGS) $(TEST_FLAGS) -c -o tests/munit_cov.o tests/munit.c
+	$(CC) tests/test_cov.o tests/munit_cov.o -o tests/test_cov $(COV_CFLAGS) $(TEST_FLAGS) -lm -pthread
+	./tests/test_cov
+	gcov -r -b tests/test_cov.gcda 2>/dev/null | grep -A1 "^File.*sl\.h" || true
+
+# Valgrind cannot be combined with AddressSanitizer.  Build a separate
+# unsanitized binary just for this target.
+valgrind: tests/test_valgrind
+	valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 ./tests/test_valgrind
+
+tests/test_valgrind: tests/test.c tests/munit.c include/sl.h
+	$(CC) $(WARNFLAGS) -Og -g -std=c11 -Iinclude/ $(TEST_FLAGS) -o $@ tests/test.c tests/munit.c -lm -pthread
+
+# ----------------------------------------------------------------------
+# Install / pkg-config
+# ----------------------------------------------------------------------
+
 install: skiplist.pc
 	install -d $(DESTDIR)$(INCLUDEDIR)
 	install -m 644 include/sl.h $(DESTDIR)$(INCLUDEDIR)/sl.h
-	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
-	install -m 644 skiplist.pc $(DESTDIR)$(PREFIX)/lib/pkgconfig/skiplist.pc
+	install -d $(DESTDIR)$(LIBDIR)/pkgconfig
+	install -m 644 skiplist.pc $(DESTDIR)$(LIBDIR)/pkgconfig/skiplist.pc
 
 uninstall:
 	rm -f $(DESTDIR)$(INCLUDEDIR)/sl.h
-	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/skiplist.pc
+	rm -f $(DESTDIR)$(LIBDIR)/pkgconfig/skiplist.pc
 
 skiplist.pc: skiplist.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
 	    -e 's|@INCLUDEDIR@|$(INCLUDEDIR)|g' \
+	    -e 's|@LIBDIR@|$(LIBDIR)|g' \
 	    skiplist.pc.in > skiplist.pc
 
-clean:
-	rm -f $(OBJS) $(TEST_OBJS)
-	rm -f examples/mls.c
-	rm -f $(STATIC_LIB)
-	rm -f $(SHARED_LIB)
-	rm -f $(TESTS)
-	rm -f $(EXAMPLES)
-	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
-	rm -f tests/*.gcda tests/*.gcno *.gcov
-	rm -f tests/test_concurrent tests/test_concurrent.o
-	rm -f tests/test_concurrent_tsan tests/test_concurrent_tsan.o tests/munit_tsan.o
-	rm -f bench/bench
-	rm -f skiplist.pc
-	rm -f examples/*.o
+# ----------------------------------------------------------------------
+# Format / clean
+# ----------------------------------------------------------------------
 
 format:
 	clang-format -i include/*.h tests/*.c tests/*.h examples/*.c bench/*.c
 
-%.o: src/%.c
-	$(CC) $(CFLAGS) -c -o $@ $^
-
-tests/%.o: tests/%.c
-	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $^
-
-examples/ex01: examples/ex01.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex02: examples/ex02.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex03: examples/ex03.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex04: examples/ex04.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex05: examples/ex05.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex06: examples/ex06.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex07: examples/ex07.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex08: examples/ex08.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm
-
-examples/ex09: examples/ex09.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm -pthread
-
-examples/ex10: examples/ex10.o
-	$(CC) $^ -o $@ $(CFLAGS) -lm -pthread
-
-examples/%.o: examples/%.c
-	$(CC) $(CFLAGS) -c -o $@ $^
-
-examples/mls.c: examples/ex01.c
-	$(CC) $(CFLAGS) -C -E examples/ex01.c | sed -e '1,7d' -e '/^# [0-9]* "/d' | clang-format > examples/mls.c
-
-examples/mls: examples/mls.o $(STATIC_LIB)
-	$(CC) $^ -o $@ $(CFLAGS) $(TEST_FLAGS) -lm -pthread
+clean:
+	rm -f tests/*.o tests/test tests/test_concurrent tests/test_concurrent_tsan
+	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
+	rm -f tests/test_valgrind
+	rm -f tests/*.gcda tests/*.gcno *.gcov
+	rm -f examples/*.o $(EXAMPLES)
+	rm -f examples/mls examples/mls.c
+	rm -f bench/bench
+	rm -f skiplist.pc

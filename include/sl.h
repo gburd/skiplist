@@ -72,8 +72,10 @@ extern "C" {
 /* Compiler attribute portability */
 #ifdef __GNUC__
 #define _SKIP_PRINTF_ATTR(fmt, args) __attribute__((format(printf, fmt, args)))
+#define _SKIP_MAYBE_UNUSED __attribute__((unused))
 #else
 #define _SKIP_PRINTF_ATTR(fmt, args)
+#define _SKIP_MAYBE_UNUSED
 #endif
 
 /* __typeof__ portability (MSVC lacks it in C mode).
@@ -714,7 +716,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                                                       \
      * Wraps the `free_entry_blk` code into `slh_fns.free_entry`.                                                                                            \
      */                                                                                                                                                      \
-    static void _skip_free_entry_fn_##decl(decl##_node_t *node)                                                                                              \
+    static void _skip_free_entry_fn_##decl(decl##_node_t *node _SKIP_MAYBE_UNUSED)                                                                       \
     {                                                                                                                                                        \
         free_entry_blk;                                                                                                                                      \
     }                                                                                                                                                        \
@@ -724,7 +726,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                                                       \
      * Wraps the `update_entry_blk` code into `slh_fns.update_entry`.                                                                                        \
      */                                                                                                                                                      \
-    static int _skip_update_entry_fn_##decl(decl##_node_t *node, void *value)                                                                                \
+    static int _skip_update_entry_fn_##decl(decl##_node_t *node _SKIP_MAYBE_UNUSED, void *value _SKIP_MAYBE_UNUSED)                                       \
     {                                                                                                                                                        \
         int rc = 0;                                                                                                                                          \
         update_entry_blk;                                                                                                                                    \
@@ -736,7 +738,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                                                       \
      * Wraps the `archive_entry_blk` code into `slh_fns.archive_entry`.                                                                                      \
      */                                                                                                                                                      \
-    static int _skip_archive_entry_fn_##decl(decl##_node_t *dest, const decl##_node_t *src)                                                                  \
+    static int _skip_archive_entry_fn_##decl(decl##_node_t *dest _SKIP_MAYBE_UNUSED, const decl##_node_t *src _SKIP_MAYBE_UNUSED)                            \
     {                                                                                                                                                        \
         int rc = 0;                                                                                                                                          \
         archive_entry_blk;                                                                                                                                   \
@@ -748,7 +750,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                                                       \
      * Wraps the `sizeof_entry_blk` code into `slh_fns.sizeof_entry`.                                                                                        \
      */                                                                                                                                                      \
-    static size_t _skip_sizeof_entry_fn_##decl(decl##_node_t *node)                                                                                          \
+    static size_t _skip_sizeof_entry_fn_##decl(decl##_node_t *node _SKIP_MAYBE_UNUSED)                                                                       \
     {                                                                                                                                                        \
         size_t bytes = 0;                                                                                                                                    \
         sizeof_entry_blk;                                                                                                                                    \
@@ -1168,6 +1170,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         return NULL;                                                                                                                                         \
     }                                                                                                                                                        \
                                                                                                                                                              \
+    /* Only called when SKIPLIST_SPLAY_REBALANCE is defined; mark to silence  \
+     * -Wunused-function in the common case where it is left disabled.       */ \
+    _SKIP_MAYBE_UNUSED                                                                                                                                       \
     static void _fix_skip_rebalance_##decl(decl##_t *slist, size_t len, _skiplist_path_##decl##_t path[])                                                    \
     {                                                                                                                                                        \
         size_t i, node_height, delta_height;                                                                                                                 \
@@ -3464,6 +3469,7 @@ _skip_read_le64(const uint8_t *src)
     /* -- _skip_dot_width_                                                                                                                 \
      * Counts how many nodes lie between `from` and `to` via sle_prev.                                                                     \
      */                                                                                                                                    \
+    _SKIP_MAYBE_UNUSED                                                                                                                     \
     static size_t _skip_dot_width_##decl(decl##_t *slist, decl##_node_t *from, decl##_node_t *to)                                          \
     {                                                                                                                                      \
         size_t w = 1;                                                                                                                      \

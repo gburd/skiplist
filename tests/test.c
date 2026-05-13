@@ -1,6 +1,4 @@
 #define MUNIT_ENABLE_ASSERT_ALIASES
-#pragma GCC push_options
-#pragma GCC optimize("O0")
 
 #include <string.h>
 
