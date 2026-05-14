@@ -73,6 +73,7 @@ The full test matrix passes locally and in CI:
 | Unit (splay rebalance enabled)     |    33 | pass   |
 | Concurrent (splay rebalance)       |     7 | pass   |
 | TSAN (splay rebalance)             |     7 | pass   |
+| Splay-verify (Aksenov height target) |   2 | pass   |
 | Single-threaded mode               |     6 | pass   |
 | ASan + LSan + UBSan                |    33 | pass   |
 | Valgrind                           |    33 | pass   |
@@ -607,6 +608,73 @@ epoch-based reclamation.  The Aksenov design accepts that splay is a
 heuristic and a CAS failure is acceptable; we revert the height bump
 and try again on the next access.
 
+### Verification
+
+`tests/test_splay_verify.c` is the canonical empirical check that the
+implementation reproduces the paper's predicted behavior.  It builds a
+200-key list, issues 20,000 lookups Bernoulli-distributed between a
+chosen hot key and uniformly-spread cold keys, and compares the hot
+key's final height against the theoretical target.  Sample output:
+
+```
+Aksenov 2020 splay-list height verification
+  workload: n=200 keys, total accesses=20000
+  target:   h = K - 1 - log2(1/p) (+/- 1 level)
+
+  case                       K     h   expect   result    delta
+  ---------------------- ----- -----   ------   ------    -----
+  p=1.000 (pure hot)        14    13       13     PASS       +0
+  p=0.500 (half-hot)         7     6        5     PASS       +1
+  p=0.250 (quarter)          7     4        4     PASS       +0
+  p=0.125 (eighth)           7     3        3     PASS       +0
+  p=0.062 (sixteenth)        7     2        2     PASS       +0
+  p=0.005 (cold)             7     0        0     PASS       +0
+```
+
+Reading the table:
+
+- `K` is the head's current height.  The structure grows the head
+  whenever a node is promoted past the existing top level; with a
+  pure-hot workload this drives `K` to roughly `log2(T)`, hence the
+  larger value in the first row.
+- `h` is the hot key's final height.
+- `expect = K - 1 + log2(p)` (where `log2(p) <= 0`, clamped at 0).
+- A `+/-1` tolerance is allowed because the rebalance fires only every
+  `SKIPLIST_SPLAY_INTERVAL` accesses and adjusts by a single level per
+  pass; a setting that has not yet converged can lag the target by one
+  rung.  In practice five of the six cases land exactly on target and
+  one (`p=0.5`) lands one above.
+
+Splay is intentionally lazy: a node's height is re-evaluated only
+when that node is accessed.  The verification test interleaves hot
+and cold accesses with a deterministic LCG so the algorithm sees
+both regimes during settling.  A naive "all hot first, then all cold"
+driver leaves the hot key over-promoted because no later access on
+it triggers a demotion.
+
+### What this implies for access cost
+
+A standard skip-list search costs `O(log_2 n)` regardless of access
+pattern.  The splay-list converts that to `O(log_2(1/p))` for a key
+with hit ratio `p`: a key hit half the time settles at depth 1, a key
+hit a quarter of the time at depth 2, and so on.  Under heavily
+skewed workloads (Zipfian, time-localized hot sets) the average
+search cost approaches the entropy of the access distribution, which
+can be much smaller than `log n`.
+
+**This does not make a splay-list as fast as a B+tree.** A B+tree's
+search cost is `O(log_b n)` where `b` is the fanout (typically 100 to
+200), and each level is a single cache-line read plus an in-node
+binary search -- a layout that the splay-list's pointer-chase per
+level cannot match on cache locality.  The two structures optimize
+orthogonal axes: the splay-list optimizes for the *information
+content* of the access pattern, the B+tree for *cache-line layout*.
+Splay-list wins on heavily skewed workloads where most accesses hit
+a small hot set; the B+tree wins on uniform-random or scan-heavy
+workloads where its cache layout dominates.  For the access patterns
+where a B+tree shines (fanout-heavy in-memory indexes), reach for an
+ART, CSB+, or Masstree instead.
+
 
 ## Examples Walkthrough
 
@@ -763,6 +831,8 @@ Mirror workflow at `.forgejo/workflows/ci.yml` for Codeberg.
 include/sl.h               The implementation (single header)
 tests/test.c               Single-threaded unit tests
 tests/test_concurrent.c    Multi-threaded tests
+tests/test_single.c        SKIPLIST_SINGLE_THREADED build exercise
+tests/test_splay_verify.c  Aksenov 2020 height-target verification
 tests/munit.{c,h}          Vendored test harness
 examples/ex01..ex10        Progressive examples
 bench/bench.c              Throughput / latency benchmark
@@ -778,9 +848,16 @@ flake.nix                  Nix dev shell + package output
 .forgejo/workflows/ci.yml  Codeberg / Forgejo Actions mirror
 .github/dependabot.yml     CI dependency updates
 skiplist.pc.in             pkg-config template
+DESIGN.md                  Architectural rationale and design history
 LICENSE                    Dual ISC OR MIT
 README.md                  This file
 ```
+
+For the architectural rationale -- why the macro layer, why the
+Fraser/Harris variant, why splay rebalance only fires from read-only
+paths, the comparison to B+trees and ART, and what changed between
+each `archive/*` branch and the current `main` -- see
+[`DESIGN.md`](DESIGN.md).
 
 
 ## License

@@ -63,6 +63,20 @@ test_concurrent_splay = executable('test_concurrent_splay',
 )
 test('concurrent-splay', test_concurrent_splay, timeout : 120)
 
+# Aksenov 2020 height-target verification.  Confirms hot keys settle
+# at the paper's specified depth log2(1/p) below the head, +/-1 level
+# tolerance for rebalance-interval lag.  Skipped when the splay flag
+# is not defined.
+test_splay_verify = executable('test_splay_verify',
+  'test_splay_verify.c',
+  include_directories : [include_directories('.')],
+  link_with : munit_lib,
+  dependencies : [skiplist_dep, dependency('threads')],
+  c_args : splay_args,
+  link_args : ['-lm'],
+)
+test('splay-verify', test_splay_verify, timeout : 120)
+
 # Single-threaded mode: SKIPLIST_SINGLE_THREADED replaces all C11
 # atomics with plain operations and disables EBR.  Builds its own
 # munit instance because the flag has global header effect.

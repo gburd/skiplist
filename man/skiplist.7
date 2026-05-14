@@ -28,9 +28,13 @@ deletion and epoch-based reclamation (EBR) for safe memory reuse.
 When enabled at compile time via
 .B SKIPLIST_SPLAY_REBALANCE,
 node heights adapt to the observed access distribution: hot keys
-are promoted toward the head, cold keys are demoted.  Trades a
-small per-access overhead for a near-optimal layout under skewed
-workloads.
+are promoted toward the head, cold keys are demoted.  A node hit
+with frequency p settles at depth log2(1/p) below the head, the
+information-theoretic optimum for search cost (Aksenov, Alistarh,
+Drozdova, Mohtashami, "The Splay-List", 2020).  Verified empirically
+by
+.B tests/test_splay_verify.c
+across hit ratios from p=1.0 down to p=0.005.
 .SH "DATA STRUCTURE"
 A skiplist is a singly- or doubly-linked sorted list where some
 nodes also carry forward pointers at higher
@@ -168,6 +172,12 @@ metadata installed alongside the header.
 .SH "SEE ALSO"
 .BR sl.h (3),
 .BR pkg-config (1)
+.PP
+For architectural rationale (why the macro layer, why the
+Fraser/Harris variant, why splay rebalance is gated to read-only
+call paths, comparison to B+trees and ART), see
+.B DESIGN.md
+in the source distribution.
 .PP
 Project home page:
 .UR https://codeberg.org/gregburd/skiplist

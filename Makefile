@@ -111,16 +111,24 @@ tests/test_concurrent_tsan: tests/test_concurrent.c tests/munit.c include/sl.h
 # of this implementation; run the full suite a second time with the splay
 # flag defined so any regression in the rebalance algorithm fires both an
 # /splay_behavior assertion (in tests/test.c) and exercises the splay path
-# under concurrent + sanitizer pressure.
-test_splay: tests/test_splay tests/test_concurrent_splay
+# under concurrent + sanitizer pressure.  Also runs the Aksenov 2020
+# height-target verification (tests/test_splay_verify.c).
+test_splay: tests/test_splay tests/test_concurrent_splay tests/test_splay_verify
 	./tests/test_splay
 	./tests/test_concurrent_splay
+	./tests/test_splay_verify
 
 tests/test_splay: tests/test.c tests/munit.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o $@ tests/test.c tests/munit.c -lm -pthread
 
 tests/test_concurrent_splay: tests/test_concurrent.c tests/munit.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o $@ tests/test_concurrent.c tests/munit.c -lm -pthread
+
+# Aksenov 2020 height-target verification.  SKIPLIST_SPLAY_REBALANCE
+# is required for the test to do real work; without it, the test
+# returns MUNIT_SKIP for the aksenov_target case.
+tests/test_splay_verify: tests/test_splay_verify.c tests/munit.c include/sl.h
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o $@ tests/test_splay_verify.c tests/munit.c -lm -pthread
 
 test_tsan_splay: tests/test_concurrent_tsan_splay
 	./tests/test_concurrent_tsan_splay
@@ -332,9 +340,11 @@ format:
 clean:
 	rm -f tests/*.o tests/test tests/test_concurrent tests/test_concurrent_tsan
 	rm -f tests/test_splay tests/test_concurrent_splay tests/test_concurrent_tsan_splay
+	rm -f tests/test_splay_verify
 	rm -f tests/test_single
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent.o
+	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single
 	rm -f tests/test_valgrind
 	rm -f tests/*.gcda tests/*.gcno *.gcov
 	rm -f examples/*.o $(EXAMPLES)
