@@ -17,7 +17,7 @@ jobs:
       matrix:
         cc: [gcc, clang]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install toolchain
         run: |
@@ -81,7 +81,7 @@ jobs:
   valgrind:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install toolchain + valgrind
         run: |
           sudo apt-get update
@@ -99,7 +99,7 @@ jobs:
       matrix:
         sanitizer: [none, address, thread, undefined]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install meson + ninja
         run: |
           sudo apt-get update
@@ -120,7 +120,7 @@ jobs:
   autotools:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install autoconf + automake
         run: |
           sudo apt-get update
@@ -143,7 +143,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install gcc + gcovr
         run: |
           sudo apt-get update
