@@ -823,6 +823,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
     int prefix##skip_alloc_node_##decl(decl##_node_t **node)                                                                                                 \
     {                                                                                                                                                        \
         decl##_node_t *n;                                                                                                                                    \
+        *node = NULL; /* always write out-param so callers never see it uninitialized */                                                                     \
         /* Calculate the size of the struct sle within decl##_node_t, multiply                                                                               \
            by array size. (16/24 bytes on 32/64 bit systems) */                                                                                              \
         size_t sle_arr_sz = sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT;                                                                   \
@@ -4191,8 +4192,8 @@ _skip_read_le64(const uint8_t *src)
     int prefix##skip_pool_alloc_node_##decl(_skip_pool_##decl##_t *pool, decl##_node_t **node)                       \
     {                                                                                                                \
         decl##_node_t *n = prefix##skip_pool_alloc_##decl(pool);                                                     \
+        *node = n; /* always write out-param (NULL on exhaustion) */                                                \
         if (n != NULL) {                                                                                             \
-            *node = n;                                                                                               \
             return 0;                                                                                                \
         }                                                                                                            \
         /* Pool exhausted -- return ENOMEM.                                */                                        \

@@ -160,9 +160,9 @@ thread_concurrent_insert(void *arg)
         rc = ct_skip_insert_conc(ctx->list, node);
         ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
         if (rc != 0) {
-            /* Duplicate or error -- should not happen with disjoint ranges. */
+            /* Duplicate or error -- should not happen with disjoint ranges.
+               skip_free_node already frees node; do not free it twice. */
             ct_skip_free_node_conc(ctx->list, node);
-            free(node);
             ctx->result = -1;
             return NULL;
         }
@@ -408,9 +408,9 @@ thread_mixed_workload(void *arg)
             ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
             if (rc != 0) {
                 /* Could fail if another thread races -- not an error for
-                   overlapping ranges, but we use disjoint ranges here. */
+                   overlapping ranges, but we use disjoint ranges here.
+                   skip_free_node already frees node; do not free it twice. */
                 ct_skip_free_node_conc(ctx->list, node);
-                free(node);
             }
             insert_idx++;
         } else if (op == 1 && delete_idx < MIXED_OPS_PER_THREAD) {
