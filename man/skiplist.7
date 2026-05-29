@@ -65,7 +65,11 @@ embed
 in their node structure, and invoke
 .B SKIPLIST_DECL
 to generate a family of functions named
-.IB prefix _skip_ operation _ decl ().
+.IB prefix skip_ operation _ decl ()
+(for example, prefix
+.B api_
+yields
+.BR api_skip_init_ex ).
 The preprocessor approach is verbose to read but eliminates the
 runtime cost of indirect function dispatch that a plain-C
 implementation would otherwise require.
@@ -105,8 +109,13 @@ across multiple threads.  Three correctness ingredients:
 .TP
 \fBMarked pointers.\fR
 The lowest bit of each forward pointer flags a logically-deleted
-node.  Readers skip marked nodes; the next writer to traverse the
-predecessor unlinks the corpse.
+node.  Readers skip marked nodes, and the iterators and ordered
+lookups unmark before dereferencing.  A remover marks the node at
+every level, then physically unlinks it from every level (by
+pointer identity, retrying until it is unreachable) before
+retiring it, so reclamation never frees a still-reachable node.
+Insert cooperates by help-unlinking any marked successor it would
+otherwise link in front of.
 .TP
 \fBCompare-and-swap chains.\fR
 Inserts splice in bottom-up: a CAS at level 0 establishes
@@ -141,8 +150,10 @@ under single-threaded mode it happens immediately on
 .PP
 The optional pool allocator
 .RB ( SKIPLIST_DECL_POOL )
-provides a fixed-capacity slab with cache-line-aligned slots and
-a lock-free free list.  Allocations beyond the configured
+provides a fixed-capacity slab with cache-line-aligned slots.
+Each slot is claimed by its own atomic compare-and-swap, so the
+allocator has no shared free-list head and is free of the ABA
+problem.  Allocations beyond the configured
 capacity fall back to
 .BR malloc (3).
 For sequential-insert workloads the pool typically improves

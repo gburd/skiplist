@@ -61,8 +61,14 @@ provide correctness:
 
 1. **Marked pointers.**  A logically deleted node is identified by
    a tag bit in its forward pointers (`_SKIP_MARK`).  Readers skip
-   marked nodes; the next writer to traverse the predecessor
-   physically unlinks the corpse.
+   marked nodes (the iterators and ordered lookups unmark before
+   dereferencing).  A remover marks the node at every level, then
+   physically unlinks it from every level by pointer identity --
+   retrying until it is unreachable from the head -- *before* it is
+   retired, so epoch-based reclamation never frees a node that a
+   concurrent traversal can still reach.  Insert cooperates by
+   help-unlinking any marked successor it would otherwise link in
+   front of, so a marked node never gains a fresh predecessor.
 2. **CAS-based linking.**  Inserts splice into level 0 with a
    compare-and-swap on the predecessor's `next[0]` pointer; that
    CAS is the linearization point.  Upper levels are linked
@@ -192,16 +198,20 @@ unit.
 ## Pool allocator
 
 `SKIPLIST_DECL_POOL` adds a fixed-capacity slab allocator with
-cache-line-aligned slots and a lock-free Treiber-stack free list.
+cache-line-aligned slots.  Each slot is claimed by its own atomic
+compare-and-swap on a per-slot state word, guided by a rotating
+cursor; there is no shared free-list head, so the allocator is
+free of the ABA problem (no version tag that could ever wrap).
 The motivation: `malloc`/`free` per node dominates throughput at
 small node sizes and creates allocator pressure that interacts
 badly with concurrent inserts.  Allocations beyond the configured
 capacity fall back to `malloc`, so the pool is a fast path with
 graceful degradation rather than a hard cap.
 
-The pool is wired to the list via `skip_set_pool_`; subsequent
-calls to `skip_alloc_node_` and `skip_free_node_` route through
-the pool transparently.
+The pool is used explicitly: `skip_pool_alloc_node_` claims a node
+(returning `ENOMEM` when exhausted) and `skip_pool_free_node_`
+returns it, so callers choose per-allocation whether to draw from
+the pool or fall back to `skip_alloc_node_`.
 
 
 ## Snapshots (MVCC)

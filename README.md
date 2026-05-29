@@ -68,11 +68,12 @@ The full test matrix passes locally and in CI:
 | Suite                              | Tests | Status |
 |------------------------------------|-------|--------|
 | Unit (default)                     |    33 | pass   |
-| Concurrent (default)               |     7 | pass   |
-| TSAN (default)                     |     7 | pass   |
+| Concurrent (default)               |    13 | pass   |
+| TSAN (default)                     |    13 | pass   |
+| Property-based (Hegel/hegel-c)     |     9 | pass   |
 | Unit (splay rebalance enabled)     |    33 | pass   |
-| Concurrent (splay rebalance)       |     7 | pass   |
-| TSAN (splay rebalance)             |     7 | pass   |
+| Concurrent (splay rebalance)       |    13 | pass   |
+| TSAN (splay rebalance)             |    13 | pass   |
 | Splay-verify (Aksenov height target) |   2 | pass   |
 | Single-threaded mode               |     6 | pass   |
 | ASan + LSan + UBSan                |    33 | pass   |
@@ -84,7 +85,7 @@ and Windows (MSVC) are supported by the portability shims in `sl.h`.
 
 Coverage on the implementation surface (`include/sl.h` plus the
 three test translation units that instantiate its macros): 97% line,
-99% function, 58% branch.  Branch coverage of lock-free CAS retry and
+99% function, 61% branch.  Branch coverage of lock-free CAS retry and
 EBR contention paths is hard to exercise deterministically and is
 tracked separately rather than gated.
 
@@ -150,15 +151,17 @@ int main(void)
     ex_t list;
     api_skip_init_ex(&list);
 
-    struct ex_node *n = api_skip_alloc_node_ex(&list);
+    ex_node_t *n;
+    api_skip_alloc_node_ex(&n);
     n->key = 42;
     n->value = strdup("forty-two");
     api_skip_insert_ex(&list, n);
 
-    struct ex_node query = { .key = 42 };
-    struct ex_node *found = api_skip_contains_ex(&list, &query);
+    ex_node_t query = { .key = 42 };
+    ex_node_t *found = api_skip_position_eq_ex(&list, &query);
+    (void)found;
 
-    api_skip_destroy_ex(&list);
+    api_skip_free_ex(&list);
     return 0;
 }
 ```
@@ -183,13 +186,13 @@ The simplest path; works out of the box without `./configure`.
 
 ```sh
 make test              # 33 unit tests under ASan + LSan + UBSan
-make test              # 33 unit tests under ASan + LSan + UBSan
-make test_concurrent   # 7 concurrent tests under ASan + LSan + UBSan
-make test_tsan         # 7 concurrent tests under ThreadSanitizer
+make test_concurrent   # 13 concurrent tests under ASan + LSan + UBSan
+make test_tsan         # 13 concurrent tests under ThreadSanitizer
+make test_property     # 9 Hegel property tests (needs hegel-c; see below)
 make test_splay        # full suite with -DSKIPLIST_SPLAY_REBALANCE
 make test_tsan_splay   # TSAN with splay rebalancing
 make test_single       # SKIPLIST_SINGLE_THREADED build (6 tests)
-make test_all          # all of the above
+make test_all          # all of the above (except test_property)
 make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
 make bench             # build and run the benchmark suite
@@ -337,21 +340,25 @@ typedef struct my {
        function-pointer dispatch table */
 } my_t;
 
-void          api_skip_init_my(my_t *list);
-void          api_skip_destroy_my(my_t *list);
-size_t        api_skip_length_my(const my_t *list);
-my_node_t    *api_skip_alloc_node_my(my_t *list);
+int           api_skip_init_my(my_t *list);
+void          api_skip_free_my(my_t *list);
+void          api_skip_release_my(my_t *list);
+size_t        api_skip_length_my(my_t *list);
+int           api_skip_is_empty_my(my_t *list);
+int           api_skip_alloc_node_my(my_node_t **out);
 void          api_skip_free_node_my(my_t *list, my_node_t *node);
 int           api_skip_insert_my(my_t *list, my_node_t *node);
 int           api_skip_insert_dup_my(my_t *list, my_node_t *node);
-my_node_t    *api_skip_remove_my(my_t *list, my_node_t *query);
+int           api_skip_remove_node_my(my_t *list, my_node_t *query);
 my_node_t    *api_skip_position_eq_my(my_t *list, my_node_t *query);
 my_node_t    *api_skip_position_lt_my(my_t *list, my_node_t *query);
+my_node_t    *api_skip_position_lte_my(my_t *list, my_node_t *query);
 my_node_t    *api_skip_position_gt_my(my_t *list, my_node_t *query);
-my_node_t    *api_skip_first_my(my_t *list);
-my_node_t    *api_skip_last_my(my_t *list);
-my_node_t    *api_skip_next_my(my_t *list, my_node_t *node);
-my_node_t    *api_skip_prev_my(my_t *list, my_node_t *node);
+my_node_t    *api_skip_position_gte_my(my_t *list, my_node_t *query);
+my_node_t    *api_skip_head_my(my_t *list);
+my_node_t    *api_skip_tail_my(my_t *list);
+my_node_t    *api_skip_next_node_my(my_t *list, my_node_t *node);
+my_node_t    *api_skip_prev_node_my(my_t *list, my_node_t *node);
 /* ... */
 ```
 
@@ -364,13 +371,16 @@ seeds the random-height PRNG.
 a node with the same key already exists (use `insert_dup` to allow
 duplicates).
 
-`remove` searches by key, unlinks the matching node, and returns it to
-the caller.  Under concurrent mode the node is not freed immediately;
-EBR is responsible for retiring it once all readers have moved on.
+`remove_node` searches by key, physically unlinks the matching node
+from every level, and reports success.  Under concurrent mode the node
+is retired through EBR rather than freed immediately; because it is
+fully unlinked before being retired, reclamation never frees a node a
+concurrent traversal can still reach.
 
-`destroy` walks the list and frees every node.  In concurrent mode,
-the caller is responsible for ensuring no other thread is operating on
-the list.
+`free` walks the list and frees every node plus the sentinels.  In
+concurrent mode, the caller is responsible for ensuring no other thread
+is operating on the list.  `release` is the same but keeps the
+sentinels, leaving an empty reusable list.
 
 ### Iteration
 
@@ -438,15 +448,23 @@ significantly for sequential insert workloads (roughly 2-3x in the
 benchmark suite).
 
 ```c
-SKIPLIST_DECL_POOL(my, api_, entry, /* capacity = */ 4096)
+SKIPLIST_DECL_POOL(my, api_, entry, /* capacity hint = */ 4096)
 
-api_pool_my_t pool;
-api_pool_init_my(&pool);
+_skip_pool_my_t pool;
+api_skip_pool_init_my(&pool, 4096);
 my_t list;
 api_skip_init_my(&list);
-api_skip_set_pool_my(&list, &pool);
-/* now alloc_node_my() pulls from the pool */
-api_pool_destroy_my(&pool);
+
+my_node_t *node;
+if (api_skip_pool_alloc_node_my(&pool, &node) == 0) {  /* else ENOMEM */
+    node->key = 42;
+    api_skip_insert_my(&list, node);
+}
+/* free a node back to the pool (runs your free block first): */
+/* api_skip_pool_free_node_my(&pool, &list, node); */
+
+api_skip_free_my(&list);
+api_skip_pool_destroy_my(&pool);
 ```
 
 ### Snapshots (MVCC)
@@ -459,13 +477,13 @@ snapshot remains intact.
 ```c
 SKIPLIST_DECL_SNAPSHOTS(my, api_, entry)
 
-api_snap_my_t s1;
-api_skip_snapshot_my(&list, &s1);    /* freeze an era */
+api_skip_snapshots_init_my(&list);       /* enable snapshots */
+uint64_t era = api_skip_snapshot_my(&list);  /* freeze an era */
 
-api_skip_put_my(&list, 7, "after");  /* mutates current */
+api_skip_put_my(&list, 7, "after");      /* mutates current */
 
-api_skip_restore_my(&list, &s1);     /* rewind to s1 */
-api_skip_release_my(&list, &s1);     /* free preserved state */
+api_skip_restore_snapshot_my(&list, era);    /* rewind to era */
+api_skip_release_snapshots_my(&list);        /* free preserved state */
 ```
 
 Era counters are 64-bit; wrap-around handling is built in.
@@ -482,16 +500,17 @@ epoch.
 ```c
 SKIPLIST_DECL_EBR(my, api_)
 
-api_ebr_my_t ebr;
-api_ebr_init_my(&ebr);
+_skip_ebr_my_t ebr;
+api_skip_ebr_init_my(&ebr);
+api_skip_ebr_attach_my(&list, &ebr);   /* removals now defer via EBR */
 
-int tid = api_ebr_register_my(&ebr);
-api_ebr_pin_my(&ebr, tid);
-my_node_t *n = api_skip_remove_my(&list, &q);
-if (n) api_ebr_retire_my(&ebr, tid, n);
-api_ebr_unpin_my(&ebr, tid);
+int tid = api_skip_ebr_register_my(&ebr);
+api_skip_ebr_pin_my(&ebr, tid);
+api_skip_remove_node_my(&list, &q);    /* auto-retires the node via EBR */
+api_skip_ebr_unpin_my(&ebr, tid);
+api_skip_ebr_unregister_my(&ebr, tid); /* release the slot for reuse */
 
-api_ebr_destroy_my(&ebr);
+api_skip_ebr_drain_my(&ebr);           /* at shutdown, no threads active */
 ```
 
 EBR is mutually exclusive with `SKIPLIST_SINGLE_THREADED` and will
@@ -516,26 +535,29 @@ unbounded allocation.
 
 ```c
 FILE *fp = fopen("snapshot.bin", "wb");
-api_skip_archive_write_my(&list, fp);
+api_skip_serialize_my(&list, fp);
 fclose(fp);
 
 fp = fopen("snapshot.bin", "rb");
 my_t restored;
 api_skip_init_my(&restored);
-api_skip_archive_read_my(&restored, fp);
+api_skip_deserialize_my(&restored, fp);
 fclose(fp);
 ```
 
 ### Validation and Visualization
 
 `SKIPLIST_DECL_VALIDATE(decl, prefix, field)` adds
-`api_skip_validate_my()` which walks every level checking
-sortedness, height invariants, and forward/backward pointer
-consistency.  Returns the number of errors found.
+`_skip_integrity_check_my(&list, flags)` which walks every level
+checking sortedness, height invariants, and forward/backward pointer
+consistency.  Returns the number of errors found.  `flags` bit 0
+skips concurrent-only checks for single-threaded use; bit 1 exits on
+the first error.
 
 `SKIPLIST_DECL_DOT(decl, prefix, field)` adds
-`api_skip_dot_my(FILE *fp)` and friends which write the structure as
-a GraphViz DOT graph.  Convert with `dot -Tpdf out.dot -o out.pdf`.
+`api_skip_dot_my(FILE *os, my_t *list, size_t nsg, char *msg, fn)` and
+`api_skip_dot_end_my(FILE *os, size_t nsg)` which write the structure
+as a GraphViz DOT graph.  Convert with `dot -Tpdf out.dot -o out.pdf`.
 
 
 ## Concurrency Model
@@ -825,18 +847,29 @@ comparator at runtime.
 
 ## Testing and CI
 
-The test infrastructure uses the vendored
+The unit and concurrent suites use the vendored
 [munit](https://nemequ.github.io/munit/) framework
-(`tests/munit.{c,h}`).
+(`tests/munit.{c,h}`); the property suite uses
+[hegel-c](https://github.com/gburd/hegel-c).
 
-- `tests/test.c` -- 28 single-threaded tests covering init, insert,
+- `tests/test.c` -- 33 single-threaded tests covering init, insert,
   duplicate insert, search, remove, the access API, navigation, edge
   cases, splay behavior, memory management, the pool allocator, EBR
   basics, validation, head-height growth/shrink, a 100k-key stress
-  test, snapshots (5 sub-tests), and archive (3 sub-tests).
-- `tests/test_concurrent.c` -- 6 multi-threaded tests covering
+  test, snapshots, archive, and the breadth of the generated API.
+- `tests/test_concurrent.c` -- 13 multi-threaded tests covering
   concurrent insert / search / delete, a mixed workload, EBR
-  correctness, and pool contention.
+  correctness, pool contention, and a race-validation suite
+  (overlapping inserts, shared-key insert/delete churn, pool claim
+  exclusivity, EBR register/unregister churn, readers vs writers,
+  and iteration during mutation), run under both ASan and TSAN.
+- `tests/test_property.c` -- 9 Hegel property tests: a stateful model
+  test against a reference map, archive round-trip, `position_*`
+  boundary semantics, duplicate keys, deserialize robustness,
+  navigation, snapshot/restore MVCC, pool integrity, and EBR slot
+  reuse.  Built by `make test_property`, which needs a local hegel-c
+  checkout and the hegel-core server (override `HEGEL_DIR` etc.; see
+  the Makefile).
 
 CI runs three independent jobs on every push and pull request:
 
@@ -854,7 +887,8 @@ Mirror workflow at `.forgejo/workflows/ci.yml` for Codeberg.
 ```
 include/sl.h               The implementation (single header)
 tests/test.c               Single-threaded unit tests
-tests/test_concurrent.c    Multi-threaded tests
+tests/test_concurrent.c    Multi-threaded + race-validation tests
+tests/test_property.c      Hegel (hegel-c) property tests
 tests/test_single.c        SKIPLIST_SINGLE_THREADED build exercise
 tests/test_splay_verify.c  Aksenov 2020 height-target verification
 tests/munit.{c,h}          Vendored test harness

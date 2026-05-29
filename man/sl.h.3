@@ -2,7 +2,7 @@
 .\" SPDX-License-Identifier: ISC OR MIT
 .\" Copyright (c) 2024-2026 Gregory Burd <greg@burd.me>
 .\"
-.TH SL.H 3 "May 2026" "skiplist 1.0" "Library Functions Manual"
+.TH SL.H 3 "May 2026" "skiplist 1.1" "Library Functions Manual"
 .SH NAME
 sl.h, SKIPLIST_ENTRY, SKIPLIST_DECL, SKIPLIST_DECL_ACCESS,
 SKIPLIST_DECL_SNAPSHOTS, SKIPLIST_DECL_EBR, SKIPLIST_DECL_POOL,
@@ -25,11 +25,11 @@ header-only sorted-list generator with lock-free concurrency
 .B SKIPLIST_DECL_ACCESS(\fIdecl\fB, \fIprefix\fB,
 .BI "    " key_field ", " key_type ,
 .BI "    " value_field ", " value_type ,
-.BI "    " query_blk ", " replace_blk );
+.BI "    " query_blk ", " return_blk );
 .PP
 .B SKIPLIST_DECL_SNAPSHOTS(\fIdecl\fB, \fIprefix\fB, \fIfield\fB);
 .B SKIPLIST_DECL_EBR(\fIdecl\fB, \fIprefix\fB);
-.B SKIPLIST_DECL_POOL(\fIdecl\fB, \fIprefix\fB, \fIfield\fB, \fIcapacity\fB);
+.B SKIPLIST_DECL_POOL(\fIdecl\fB, \fIprefix\fB, \fIfield\fB, \fIcapacity_hint\fB);
 .B SKIPLIST_DECL_ARCHIVE(\fIdecl\fB, \fIprefix\fB, \fIfield\fB,
 .BI "    " write_blk ", " read_blk );
 .B SKIPLIST_DECL_VALIDATE(\fIdecl\fB, \fIprefix\fB, \fIfield\fB);
@@ -53,13 +53,20 @@ generator emits a list type
 .BI "" decl _t,
 a node type
 .BI "" decl _node_t,
+a position-operator enum
+.BI "skip_pos_" decl _t,
 and a family of functions named
 .IB prefix skip_ operation _ decl ().
 .PP
 The remaining
 .B SKIPLIST_DECL_*
 macros are independent feature layers that may be added on top
-of the core declaration.
+of the core declaration; each must be invoked after
+.B SKIPLIST_DECL
+for the same
+.I decl
+and
+.IR prefix .
 .SH "CORE: SKIPLIST_DECL"
 .SS Arguments
 .TP
@@ -112,81 +119,131 @@ to zero on success.  Used by
 .I sizeof_blk
 Code block that sets
 .B bytes
-to the on-disk size of
+to the serialized size of
 .BR node ,
 used by
 .BR SKIPLIST_DECL_ARCHIVE .
 .SS "Generated functions"
 .TP
-.BI "void " prefix "skip_init_" decl "(" decl "_t *list);"
-Initialize a freshly-declared list.
+.BI "int " prefix "skip_init_" decl "(" decl "_t *list);"
+Initialize a freshly-declared list.  Returns 0 on success or
+.B ENOMEM
+if the sentinel nodes could not be allocated.
 .TP
-.BI "void " prefix "skip_destroy_" decl "(" decl "_t *list);"
-Walk the list freeing every node.  Caller must guarantee no
-other thread is operating on the list.
+.BI "void " prefix "skip_free_" decl "(" decl "_t *list);"
+Free every node and the head/tail sentinels.  The list is
+invalid afterwards until re-initialized.  Caller must guarantee
+no other thread is operating on the list.
 .TP
-.BI "size_t " prefix "skip_length_" decl "(const " decl "_t *list);"
-Number of nodes in the list, excluding the head and tail
-sentinels.
+.BI "void " prefix "skip_release_" decl "(" decl "_t *list);"
+Free every node but keep the sentinels, leaving an empty,
+reusable list.
 .TP
-.BI "" decl "_node_t *" prefix "skip_alloc_node_" decl "(" decl "_t *list);"
-Allocate a node.  Pulls from the configured pool if one was
-attached via
-.BI prefix skip_set_pool_ decl ();
-otherwise calls
-.BR malloc (3).
+.BI "size_t " prefix "skip_length_" decl "(" decl "_t *list);"
+.TQ
+.BI "int " prefix "skip_is_empty_" decl "(" decl "_t *list);"
+Number of user nodes, and a non-zero/zero emptiness test.
+.TP
+.BI "int " prefix "skip_alloc_node_" decl "(" decl "_node_t **out);"
+Allocate a node via
+.BR calloc (3),
+storing it through
+.BR out .
+Returns 0 or
+.BR ENOMEM .
 .TP
 .BI "void " prefix "skip_free_node_" decl "(" decl "_t *list, " decl "_node_t *n);"
-Free a node.  Under EBR, prefer
-.BI prefix ebr_retire_ decl ()
+Run
+.I free_blk
+on
+.B n
+and free its storage.  Under EBR, prefer
+.BI prefix skip_ebr_retire_ decl ()
 which defers reclamation until safe.
 .TP
 .BI "int " prefix "skip_insert_" decl "(" decl "_t *list, " decl "_node_t *n);"
 Insert
-.B n
-into
-.BR list .
-Returns 0 on success, non-zero if a node with the same key
-already exists.
+.BR n .
+Returns 0 on success, or
+.B EEXIST
+if a node with the same key already exists.
 .TP
 .BI "int " prefix "skip_insert_dup_" decl "(" decl "_t *list, " decl "_node_t *n);"
 Like
-.BR insert ,
+.BR skip_insert_ ,
 but allows duplicate keys.
 .TP
-.BI "" decl "_node_t *" prefix "skip_remove_" decl "(" decl "_t *list, " decl "_node_t *q);"
+.BI "int " prefix "skip_remove_node_" decl "(" decl "_t *list, " decl "_node_t *query);"
 Locate the node matching
-.B q
-by key, unlink it, and return it.  Returns
-.B NULL
-if no match.  Under concurrent mode the returned node is
-unlinked but still in use by other readers; retire via EBR.
+.B query
+by key and unlink it.  Returns 0 on success,
+.B ENOENT
+if no match.  When EBR is attached the node is retired through
+the EBR limbo list; otherwise it is freed immediately.
+.TP
+.BI "int " prefix "skip_update_" decl "(" decl "_t *list, " decl "_node_t *query, void *value);"
+Find the node matching
+.B query
+and apply
+.I update_blk
+with
+.BR value .
+Returns 0,
+.BR ENOENT ", or " EINVAL .
 .TP
 .BI "" decl "_node_t *" prefix "skip_position_eq_" decl "(" decl "_t *l, " decl "_node_t *q);"
-Find a node equal to
-.BR q .
-Returns
-.B NULL
-if absent.
+Node equal to
+.BR q ,
+or
+.BR NULL .
 .TP
 .BI "" decl "_node_t *" prefix "skip_position_lt_" decl "(" decl "_t *l, " decl "_node_t *q);"
-Find the largest node strictly less than
-.BR q .
-.TP
+.TQ
+.BI "" decl "_node_t *" prefix "skip_position_lte_" decl "(" decl "_t *l, " decl "_node_t *q);"
+.TQ
 .BI "" decl "_node_t *" prefix "skip_position_gt_" decl "(" decl "_t *l, " decl "_node_t *q);"
-Find the smallest node strictly greater than
+.TQ
+.BI "" decl "_node_t *" prefix "skip_position_gte_" decl "(" decl "_t *l, " decl "_node_t *q);"
+Last node strictly less than, last node less than or equal to,
+first node strictly greater than, and first node greater than
+or equal to
 .BR q .
+Each returns
+.B NULL
+when no such node exists.
 .TP
-.BI "" decl "_node_t *" prefix "skip_first_" decl "(" decl "_t *list);"
-.TQ
-.BI "" decl "_node_t *" prefix "skip_last_" decl "(" decl "_t *list);"
-First and last user node (excluding sentinels).
+.BI "" decl "_node_t *" prefix "skip_position_" decl "(" decl "_t *l, skip_pos_" decl "_t op, " decl "_node_t *q);"
+Dispatch to one of the above by
+.IR op :
+.BR SKIP_EQ ", " SKIP_LT ", " SKIP_LTE ", " SKIP_GT ", or " SKIP_GTE .
 .TP
-.BI "" decl "_node_t *" prefix "skip_next_" decl "(" decl "_t *l, " decl "_node_t *n);"
+.BI "" decl "_node_t *" prefix "skip_head_" decl "(" decl "_t *list);"
 .TQ
-.BI "" decl "_node_t *" prefix "skip_prev_" decl "(" decl "_t *l, " decl "_node_t *n);"
-Walk to the next or previous node.  Both are O(1) per step
-because level 0 is doubly linked.
+.BI "" decl "_node_t *" prefix "skip_tail_" decl "(" decl "_t *list);"
+First and last user node (excluding sentinels), or
+.B NULL
+if the list is empty.
+.TP
+.BI "" decl "_node_t *" prefix "skip_next_node_" decl "(" decl "_t *l, " decl "_node_t *n);"
+.TQ
+.BI "" decl "_node_t *" prefix "skip_prev_node_" decl "(" decl "_t *l, " decl "_node_t *n);"
+Walk to the next or previous node, or
+.B NULL
+at the ends.  Both are O(1) per step because level 0 is doubly
+linked.
+.TP
+.BI "" decl "_node_t *" prefix "skip_prev_validated_" decl "(" decl "_t *l, " decl "_node_t *n);"
+Backward step that validates the (advisory)
+.B sle_prev
+hint under concurrency, falling back to a forward scan from the
+head if the hint is stale.
+.TP
+.BI "" decl "_node_t **" prefix "skip_to_array_" decl "(" decl "_t *list);"
+Heap-allocated, NULL-terminated array of node pointers in
+ascending order; element
+.B [-1]
+holds the length.  Caller frees the array.  Not safe under
+concurrent mutation.
 .SH "ITERATION MACROS"
 .B SKIPLIST_FOREACH_H2T
 walks head-to-tail (ascending);
@@ -195,103 +252,222 @@ walks tail-to-head (descending).  Both expand into
 .B for
 loops that bind
 .B elm
-to each node and increment
+to each node and advance
 .B iter
-as a counter.  Do not insert or remove nodes during iteration;
-under concurrent mode hold an EBR pin around the loop.
+as a counter.  Both unmark pointers before dereferencing, so a
+pinned reader may iterate safely while other threads mutate the
+list; however the iterator does not provide a coherent
+point-in-time view.  Do not insert or remove nodes through the
+loop variable during iteration.
 .SH "SKIPLIST_DECL_ACCESS"
-Generates a higher-level key/value API on top of an existing
-.BR SKIPLIST_DECL .
+Generates a higher-level key/value API.  The
+.I query_blk
+builds a stack query node named
+.B query
+from a key
+.BR k ;
+the
+.I return_blk
+extracts a value from a found
+.BR node .
 Adds:
 .TP
 .BI "int " prefix "skip_put_" decl "(" decl "_t *l, " ktype " k, " vtype " v);"
-Insert or update.
+Insert a new key/value pair.  Returns 0, or non-zero (e.g.
+.BR EEXIST )
+if the key already exists; the rejected node is freed.
+.TP
+.BI "int " prefix "skip_dup_" decl "(" decl "_t *l, " ktype " k, " vtype " v);"
+Insert allowing duplicate keys.
 .TP
 .BI "int " prefix "skip_set_" decl "(" decl "_t *l, " ktype " k, " vtype " v);"
-Update only; fails if the key is absent.
+Update the value of an existing key in place.  Returns
+.B ENOENT
+if the key is absent.
 .TP
-.BI "int " prefix "skip_get_" decl "(" decl "_t *l, " ktype " k, " vtype " *out);"
-Lookup; returns non-zero on hit.
+.BI "" vtype " " prefix "skip_get_" decl "(" decl "_t *l, " ktype " k);"
+Return the value for
+.BR k ,
+or
+.BI ( vtype )0
+if absent.
 .TP
 .BI "int " prefix "skip_contains_" decl "(" decl "_t *l, " ktype " k);"
-Membership test.
+Return 1 if
+.B k
+is present, 0 otherwise.
 .TP
-.BI "int " prefix "skip_del_" decl "(" decl "_t *l, " ktype " k);"
-Delete by key.
+.BI "" decl "_node_t *" prefix "skip_pos_" decl "(" decl "_t *l, skip_pos_" decl "_t op, " ktype " k);"
+Position a cursor relative to
+.B k
+using
+.IR op ,
+returning the node or
+.B NULL
+(never a sentinel).
 .SH "SKIPLIST_DECL_SNAPSHOTS"
-Adds MVCC point-in-time snapshots:
+Adds MVCC point-in-time snapshots.  Mutations made while a
+snapshot is active preserve the pre-image of each touched node.
 .TP
-.BI "void " prefix "skip_snapshot_" decl "(" decl "_t *l, " prefix "snap_" decl "_t *out);"
-Capture the current era.
+.BI "void " prefix "skip_snapshots_init_" decl "(" decl "_t *l);"
+Enable snapshot support.  Call once before taking snapshots.
 .TP
-.BI "int " prefix "skip_restore_" decl "(" decl "_t *l, " prefix "snap_" decl "_t *snap);"
-Roll back to a previously-captured era.
+.BI "uint64_t " prefix "skip_snapshot_" decl "(" decl "_t *l);"
+Take a snapshot; returns the era identifying it.
 .TP
-.BI "void " prefix "skip_release_" decl "(" decl "_t *l, " prefix "snap_" decl "_t *snap);"
-Release the preserved nodes belonging to
-.BR snap .
+.BI "" decl "_t *" prefix "skip_restore_snapshot_" decl "(" decl "_t *l, size_t era);"
+Restore the list to the state at
+.BR era ,
+discarding later changes.  Returns the list, or
+.B NULL
+on allocation failure.
+.TP
+.BI "void " prefix "skip_release_snapshots_" decl "(" decl "_t *l);"
+Release all preserved nodes and disable snapshots.
+.PP
+Snapshots are a single-threaded feature; do not combine them
+with concurrent lock-free mutation.
 .SH "SKIPLIST_DECL_EBR"
-Adds an epoch-based reclamation manager:
+Adds an epoch-based reclamation manager that generates the type
+.BI "_skip_ebr_" decl _t.
+Incompatible with
+.BR SKIPLIST_SINGLE_THREADED .
 .TP
-.BI "void " prefix "ebr_init_" decl "(" prefix "ebr_" decl "_t *e);"
+.BI "void " prefix "skip_ebr_init_" decl "(_skip_ebr_" decl "_t *e);"
+Initialize the EBR state.
+.TP
+.BI "void " prefix "skip_ebr_attach_" decl "(" decl "_t *l, _skip_ebr_" decl "_t *e);"
+Attach EBR to a list so removals defer reclamation.
+.TP
+.BI "int " prefix "skip_ebr_register_" decl "(_skip_ebr_" decl "_t *e);"
+Register the calling thread, returning a
+.I tid
+(0-based) or
+.B -1
+if all slots are in use.  Slots freed by
+.B skip_ebr_unregister_
+are recycled.
+.TP
+.BI "void " prefix "skip_ebr_unregister_" decl "(_skip_ebr_" decl "_t *e, int tid);"
+Release a thread's slot for reuse after its final unpin.
+.TP
+.BI "void " prefix "skip_ebr_pin_" decl "(_skip_ebr_" decl "_t *e, int tid);"
 .TQ
-.BI "void " prefix "ebr_destroy_" decl "(" prefix "ebr_" decl "_t *e);"
-Initialize and tear down the EBR state.
-.TP
-.BI "int " prefix "ebr_register_" decl "(" prefix "ebr_" decl "_t *e);"
-Register the calling thread.  Returns the
-.IR tid
-to pass to subsequent calls.  At most
-.B SKIPLIST_EBR_MAX_THREADS
-threads may register concurrently.
-.TP
-.BI "void " prefix "ebr_pin_" decl "(" prefix "ebr_" decl "_t *e, int tid);"
-.TQ
-.BI "void " prefix "ebr_unpin_" decl "(" prefix "ebr_" decl "_t *e, int tid);"
+.BI "void " prefix "skip_ebr_unpin_" decl "(_skip_ebr_" decl "_t *e, int tid);"
 Bracket each list operation with a pin/unpin pair.  Inside a
-pinned region, retired nodes are guaranteed live.
+pinned region, nodes reachable at pin time stay live.
 .TP
-.BI "void " prefix "ebr_retire_" decl "(" prefix "ebr_" decl "_t *e, int tid, " decl "_node_t *n);"
+.BI "void " prefix "skip_ebr_retire_" decl "(_skip_ebr_" decl "_t *e, " decl "_t *l, " decl "_node_t *n);"
 Schedule
 .B n
-for reclamation.
+for reclamation once every thread has advanced past the current
+epoch.  Called automatically by
+.BI prefix skip_remove_node_ decl ()
+when EBR is attached.
+.TP
+.BI "void " prefix "skip_ebr_drain_" decl "(_skip_ebr_" decl "_t *e);"
+Force-free all retired nodes.  Call only at shutdown when no
+threads are active.
 .SH "SKIPLIST_DECL_POOL"
-Adds a fixed-capacity slab allocator:
+Adds a fixed-capacity slab allocator generating the type
+.BI "_skip_pool_" decl _t.
+Each slot is claimed by an independent per-slot atomic CAS, so
+the allocator has no shared free-list head and is free of the
+ABA problem.
 .TP
-.BI "void " prefix "pool_init_" decl "(" prefix "pool_" decl "_t *p);"
+.BI "int " prefix "skip_pool_init_" decl "(_skip_pool_" decl "_t *p, size_t capacity);"
 .TQ
-.BI "void " prefix "pool_destroy_" decl "(" prefix "pool_" decl "_t *p);"
+.BI "void " prefix "skip_pool_destroy_" decl "(_skip_pool_" decl "_t *p);"
+Initialize with
+.B capacity
+slots (returns 0 or errno) and tear down.
 .TP
-.BI "void " prefix "skip_set_pool_" decl "(" decl "_t *l, " prefix "pool_" decl "_t *p);"
-Bind the pool to a list.  Subsequent
-.BI prefix skip_alloc_node_ decl ()
-calls draw from the pool until exhausted, then fall back to
-.BR malloc (3).
+.BI "int " prefix "skip_pool_alloc_node_" decl "(_skip_pool_" decl "_t *p, " decl "_node_t **out);"
+Claim a node into
+.BR out ,
+returning 0 or
+.B ENOMEM
+when the pool is exhausted (the caller may then fall back to
+.BI prefix skip_alloc_node_ decl ()).
+.TP
+.BI "void " prefix "skip_pool_free_node_" decl "(_skip_pool_" decl "_t *p, " decl "_t *l, " decl "_node_t *n);"
+Run
+.I free_blk
+then return the node to the pool, or
+.BR free (3)
+it if it is not from the pool.
+.TP
+.BI "int " prefix "skip_pool_is_from_" decl "(_skip_pool_" decl "_t *p, " decl "_node_t *n);"
+Non-zero if
+.B n
+belongs to the pool.
+.PP
+The lower-level
+.BI prefix skip_pool_alloc_ decl ()
+and
+.BI prefix skip_pool_free_ decl ()
+operate without running the user free block.
 .SH "SKIPLIST_DECL_ARCHIVE"
 Adds binary serialization driven by user-supplied per-node
-write/read code blocks.  Generates:
+write/read code blocks.  The
+.I write_blk
+receives a scratch buffer
+.B buf
+of capacity
+.B bufsize
+(sized from
+.IR sizeof_blk )
+and sets
+.BR bytes ;
+the
+.I read_blk
+receives the record
+.B buf
+and its length
+.B bytes
+and must validate
+.B bytes
+before reading.  Generates:
 .TP
-.BI "int " prefix "skip_archive_write_" decl "(" decl "_t *l, FILE *fp);"
+.BI "int " prefix "skip_serialize_" decl "(" decl "_t *l, FILE *fp);"
 .TQ
-.BI "int " prefix "skip_archive_read_" decl "(" decl "_t *l, FILE *fp);"
-Round-trip a list to and from a binary stream.  The library
-writes and reads a header containing magic, length, and the
-per-node size; the user blocks are responsible for the payload.
+.BI "int " prefix "skip_deserialize_" decl "(" decl "_t *l, FILE *fp);"
+Round-trip a list to and from a binary stream (magic
+.BR SKPL ,
+version, node count, then per-node length-prefixed records).
+Returns 0 or an errno.  Records larger than
+.B SKIPLIST_ARCHIVE_MAX_RECORD
+are rejected.
 .SH "SKIPLIST_DECL_VALIDATE"
 Adds:
 .TP
-.BI "int " prefix "skip_validate_" decl "(" decl "_t *l);"
-Walks every level checking sortedness, level-height invariants,
-and forward/backward pointer consistency.  Returns the number of
-errors found.  Intended for use under
-.B SKIPLIST_DIAGNOSTIC
-or in test suites; not for production hot paths.
+.BI "int _skip_integrity_check_" decl "(" decl "_t *l, int flags);"
+Walk every level checking sortedness, height invariants, and
+forward/backward pointer consistency.  Returns the number of
+errors found.
+.B flags
+bit 0 skips concurrent-only checks (marked pointers,
+forward-chain-to-tail) for single-threaded use; bit 1 makes it
+exit on the first error.  Intended for tests and
+.BR SKIPLIST_DIAGNOSTIC
+builds, not production hot paths.
 .SH "SKIPLIST_DECL_DOT"
-Adds:
+Adds GraphViz DOT output.  The node-label callback type is
+.BI "skip_sprintf_node_" decl _t,
+a
+.B "void (*)(" decl "_node_t *, char *)"
+that writes a description into a
+.B char[2048]
+buffer.
 .TP
-.BI "int " prefix "skip_dot_" decl "(" decl "_t *l, FILE *fp);"
-Write the current structure as a GraphViz DOT graph.  Convert
-with
+.BI "int " prefix "skip_dot_" decl "(FILE *os, " decl "_t *l, size_t nsg, char *msg, skip_sprintf_node_" decl "_t fn);"
+Write one subgraph;
+.B nsg
+is the subgraph counter (0 for the first list); returns the
+next counter.
+.TP
+.BI "void " prefix "skip_dot_end_" decl "(FILE *os, size_t nsg);"
+Finalize the DOT document.  Convert with
 .BR dot (1):
 .BI "dot -Tpdf out.dot -o out.pdf" .
 .SH "COMPILE-TIME FLAGS"
@@ -306,14 +482,19 @@ dependency.  Mutually exclusive with
 .B SKIPLIST_SPLAY_REBALANCE
 Enable adaptive splay rebalancing.  Off by default.
 .TP
-.B SKIPLIST_MAX_HEIGHT (default 64)
-Maximum tower height.
+.B "SKIPLIST_MAX_HEIGHT (default 64)"
+Maximum tower height; must be <= 64.
 .TP
-.B SKIPLIST_SPLAY_INTERVAL (default 64)
+.B "SKIPLIST_SPLAY_INTERVAL (default 64)"
 Operations between rebalance passes.  Must be a power of two.
 .TP
-.B SKIPLIST_EBR_MAX_THREADS (default 128)
+.B "SKIPLIST_EBR_MAX_THREADS (default 128)"
 Maximum threads that may register with EBR concurrently.
+.TP
+.B "SKIPLIST_ARCHIVE_MAX_RECORD (default 1<<28)"
+Upper bound, in bytes, on a single serialized node record.
+Serialize refuses to emit, and deserialize refuses to accept, a
+larger record.
 .TP
 .B SKIPLIST_DIAGNOSTIC
 Enable runtime invariant checks inside the implementation.
@@ -350,34 +531,39 @@ int main(void) {
     ex_t list;
     api_skip_init_ex(&list);
 
-    struct ex_node *n = api_skip_alloc_node_ex(&list);
+    ex_node_t *n;
+    api_skip_alloc_node_ex(&n);
     n->key = 42;
     n->value = strdup("forty-two");
     api_skip_insert_ex(&list, n);
 
-    api_skip_destroy_ex(&list);
+    api_skip_free_ex(&list);
 }
 .fi
 .SH "RETURN VALUES"
 Functions returning
 .B int
-follow the convention of zero on success, non-zero on failure.
-Functions returning
+follow the convention of zero on success and a positive
+.BR errno (3)
+value on failure.  Functions returning
 .BI "" decl "_node_t *"
 return
 .B NULL
 when the requested node is absent or when allocation fails.
 .SH "THREAD SAFETY"
-By default all operations are safe to call concurrently from
-multiple threads, with the constraint that
-.BI prefix skip_destroy_ decl ()
-requires exclusive access.  Iteration via
+By default insert, search, and remove are safe to call
+concurrently from multiple threads under EBR pinning, with the
+constraint that
+.BI prefix skip_free_ decl ()
+requires exclusive access.  A removed node is physically
+unlinked from every level before it is retired, so epoch-based
+reclamation never frees a still-reachable node.  Iteration via
 .B SKIPLIST_FOREACH_*
-is read-only and safe under EBR pinning, but the library does
-not guarantee a coherent point-in-time view of the entire list:
-concurrent inserts and removes may become visible to the
-iterator partway through a walk.  For coherent snapshots use
+is read-only and safe under EBR pinning, but does not guarantee a
+coherent point-in-time view of the whole list; for that use
 .BR SKIPLIST_DECL_SNAPSHOTS .
+Snapshots, archive, validate, and DOT are single-threaded
+features.
 .SH "SEE ALSO"
 .BR skiplist (7),
 .BR pkg-config (1),
