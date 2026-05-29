@@ -23,6 +23,9 @@ tests/test_concurrent_tsan_splay
 tests/test_single
 tests/test_splay
 tests/test_valgrind
+tests/test_property
+tests/.hegel/
+.hegel/
 
 # Example binaries
 examples/ex01

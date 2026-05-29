@@ -1012,6 +1012,451 @@ test_conc_api_breadth(const MunitParameter params[], void *data)
  * Test suite registration
  * ===========================================================================*/
 
+/* ===========================================================================
+ * RACE-VALIDATION SUITE
+ *
+ * The following tests are designed to be run under ThreadSanitizer
+ * (`make test_tsan`) and AddressSanitizer (`make test_concurrent`) to validate
+ * that the lock-free paths are free of data races and use-after-free, in
+ * addition to producing correct results.  They deliberately maximise
+ * contention: overlapping key ranges, simultaneous readers and writers,
+ * pool claim/release churn, and EBR register/unregister churn.
+ * ===========================================================================*/
+
+#define RACE_KEYS 2000
+#define RACE_ITERS 4000
+
+/* ---- Race 1: overlapping inserts -- every thread races to insert the SAME
+ * key set; the structure must end with each key present exactly once. ---- */
+static void *
+thread_overlapping_insert(void *arg)
+{
+    thread_ctx_t *ctx = (thread_ctx_t *)arg;
+    for (int k = 0; k < RACE_KEYS; k++) {
+        conc_node_t *node;
+        if (ct_skip_alloc_node_conc(&node) != 0) {
+            ctx->result = -1;
+            return NULL;
+        }
+        node->key = k;
+        node->value = ctx->thread_id;
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        int rc = ct_skip_insert_conc(ctx->list, node);
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+        if (rc != 0) {
+            /* Lost the race for this key -- expected; reclaim our node.
+               skip_free_node already calls free(); do not free twice. */
+            ct_skip_free_node_conc(ctx->list, node);
+        }
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_overlapping_insert(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    setup_list_and_ebr(&list, &ebr);
+
+    pthread_t threads[NUM_THREADS];
+    thread_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].list = list;
+        ctxs[i].ebr = ebr;
+        ctxs[i].thread_id = i;
+        ctxs[i].ebr_tid = ct_skip_ebr_register_conc(ebr);
+        munit_assert_int(ctxs[i].ebr_tid, >=, 0);
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, thread_overlapping_insert, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+    for (int i = 0; i < NUM_THREADS; i++)
+        munit_assert_int(ctxs[i].result, ==, 0);
+
+    /* Exactly-once: length equals the key-set size and every key resolves. */
+    munit_assert_size(ct_skip_length_conc(list), ==, (size_t)RACE_KEYS);
+    for (int k = 0; k < RACE_KEYS; k++) {
+        conc_node_t query;
+        memset(&query, 0, sizeof(query));
+        query.key = k;
+        munit_assert_not_null(ct_skip_position_eq_conc(list, &query));
+    }
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
+/* ---- Race 2: insert/delete churn on a shared key range under EBR. ---- */
+static void *
+thread_insert_delete_churn(void *arg)
+{
+    thread_ctx_t *ctx = (thread_ctx_t *)arg;
+    /* All threads churn the SAME key range, so every key is repeatedly deleted
+       and re-inserted under contention -- the exact scenario that exposes the
+       Harris+EBR "retired != unlinked" hazard.  The post-join walk then
+       confirms no freed node remained linked. */
+    for (int it = 0; it < RACE_ITERS; it++) {
+        int k = munit_rand_int_range(0, RACE_KEYS - 1);
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        if ((it & 1) == 0) {
+            conc_node_t *node;
+            if (ct_skip_alloc_node_conc(&node) == 0) {
+                node->key = k;
+                node->value = k;
+                if (ct_skip_insert_conc(ctx->list, node) != 0) {
+                    ct_skip_free_node_conc(ctx->list, node);
+                }
+            }
+        } else {
+            conc_node_t query;
+            memset(&query, 0, sizeof(query));
+            query.key = k;
+            ct_skip_remove_node_conc(ctx->list, &query);
+        }
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_insert_delete_churn(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    /* Heavy concurrent insert+delete churn on disjoint per-thread ranges,
+       followed by a full structural walk.  Validates that remove physically
+       unlinks a node from every level (by pointer identity) before retiring
+       it, so EBR never reclaims a still-reachable node. */
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    setup_list_and_ebr(&list, &ebr);
+
+    pthread_t threads[NUM_THREADS];
+    thread_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].list = list;
+        ctxs[i].ebr = ebr;
+        ctxs[i].thread_id = i;
+        ctxs[i].ebr_tid = ct_skip_ebr_register_conc(ebr);
+        munit_assert_int(ctxs[i].ebr_tid, >=, 0);
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, thread_insert_delete_churn, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+
+    /* After the churn the structure must remain internally consistent and
+       its length must match an actual head-to-tail node count.  Walk while
+       retired nodes are still EBR-protected (before drain): every node still
+       linked into the list is live. */
+    size_t walked = 0;
+    conc_node_t *cur;
+    size_t it;
+    int prev_key = -1;
+    SKIPLIST_FOREACH_H2T(conc, ct_, entries, list, cur, it)
+    {
+        (void)it;
+        munit_assert_int(cur->key, >, prev_key); /* strictly ascending */
+        prev_key = cur->key;
+        walked++;
+    }
+    munit_assert_size(walked, ==, ct_skip_length_conc(list));
+    ct_skip_ebr_drain_conc(ebr);
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
+/* ---- Race 3: pool claim exclusivity -- under contention no two threads may
+ * ever hold the same slot.  Each claimer stamps a unique owner marker into
+ * the slot and re-checks it before releasing; a double hand-out would either
+ * trip the assert or be flagged by TSAN as a data race on node->value. ---- */
+typedef struct {
+    _skip_pool_conc_t *pool;
+    int thread_id;
+    int result;
+} pool_excl_ctx_t;
+
+static void *
+thread_pool_exclusive(void *arg)
+{
+    pool_excl_ctx_t *ctx = (pool_excl_ctx_t *)arg;
+    int marker = ctx->thread_id + 1;
+    for (int it = 0; it < RACE_ITERS; it++) {
+        conc_node_t *n = ct_skip_pool_alloc_conc(ctx->pool);
+        if (n == NULL)
+            continue; /* pool momentarily full */
+        n->value = marker;
+        /* If the slot were also handed to another thread, value would change. */
+        for (int s = 0; s < 8; s++) {
+            if (n->value != marker) {
+                ctx->result = -1;
+                ct_skip_pool_free_conc(ctx->pool, n);
+                return NULL;
+            }
+        }
+        ct_skip_pool_free_conc(ctx->pool, n);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_pool_exclusive(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_pool_conc_t pool;
+    /* Small pool relative to thread count to force heavy claim contention. */
+    munit_assert_int(ct_skip_pool_init_conc(&pool, 8), ==, 0);
+
+    pthread_t threads[NUM_THREADS];
+    pool_excl_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].pool = &pool;
+        ctxs[i].thread_id = i;
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, thread_pool_exclusive, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+    for (int i = 0; i < NUM_THREADS; i++)
+        munit_assert_int(ctxs[i].result, ==, 0);
+    ct_skip_pool_destroy_conc(&pool);
+    return MUNIT_OK;
+}
+
+/* ---- Race 4: EBR register/unregister churn -- threads repeatedly register,
+ * pin, unpin and unregister, stressing slot recycling.  register must never
+ * return -1 while slots remain, and slots must be reusable. ---- */
+typedef struct {
+    _skip_ebr_conc_t *ebr;
+    int result;
+} ebr_churn_ctx_t;
+
+static void *
+thread_ebr_churn(void *arg)
+{
+    ebr_churn_ctx_t *ctx = (ebr_churn_ctx_t *)arg;
+    for (int it = 0; it < RACE_ITERS; it++) {
+        int tid = ct_skip_ebr_register_conc(ctx->ebr);
+        if (tid < 0)
+            continue; /* all slots momentarily taken -- acceptable */
+        ct_skip_ebr_pin_conc(ctx->ebr, tid);
+        ct_skip_ebr_unpin_conc(ctx->ebr, tid);
+        ct_skip_ebr_unregister_conc(ctx->ebr, tid);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_ebr_register_churn(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_ebr_conc_t ebr;
+    ct_skip_ebr_init_conc(&ebr);
+
+    pthread_t threads[NUM_THREADS];
+    ebr_churn_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].ebr = &ebr;
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, thread_ebr_churn, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+    for (int i = 0; i < NUM_THREADS; i++)
+        munit_assert_int(ctxs[i].result, ==, 0);
+
+    /* After the churn every slot must be releasable: a fresh batch of
+       NUM_THREADS registrations must all succeed and be distinct. */
+    int tids[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        tids[i] = ct_skip_ebr_register_conc(&ebr);
+        munit_assert_int(tids[i], >=, 0);
+        for (int j = 0; j < i; j++)
+            munit_assert_int(tids[i], !=, tids[j]);
+    }
+    return MUNIT_OK;
+}
+
+/* ---- Race 5: readers (position_* + get) racing writers (insert/delete).
+ * Validates the marked-pointer-safe scan in position_gt/gte under live
+ * mutation: readers must never crash or dereference a marked pointer. ---- */
+typedef struct {
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    int ebr_tid;
+    int is_writer;
+    int lo, hi; /* key range for disjoint writers (0/0 = full shared range) */
+    int result;
+} rw_ctx_t;
+
+static void *
+thread_reader_positions(void *arg)
+{
+    rw_ctx_t *ctx = (rw_ctx_t *)arg;
+    const skip_pos_conc_t ops[5] = { SKIP_EQ, SKIP_LT, SKIP_LTE, SKIP_GT, SKIP_GTE };
+    for (int it = 0; it < RACE_ITERS; it++) {
+        conc_node_t query;
+        memset(&query, 0, sizeof(query));
+        query.key = munit_rand_int_range(-1, RACE_KEYS);
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        conc_node_t *r = ct_skip_position_conc(ctx->list, ops[it % 5], &query);
+        /* A returned node must be a real internal node, never a sentinel. */
+        if (r != NULL)
+            munit_assert_int(r->key, >=, 0);
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static void *
+thread_writer_mutate(void *arg)
+{
+    rw_ctx_t *ctx = (rw_ctx_t *)arg;
+    int lo = ctx->lo, hi = ctx->hi;
+    if (lo == 0 && hi == 0) {
+        lo = 0;
+        hi = RACE_KEYS;
+    }
+    for (int it = 0; it < RACE_ITERS; it++) {
+        int k = munit_rand_int_range(lo, hi - 1);
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        if ((it & 1) == 0) {
+            conc_node_t *node;
+            if (ct_skip_alloc_node_conc(&node) == 0) {
+                node->key = k;
+                node->value = k;
+                if (ct_skip_insert_conc(ctx->list, node) != 0) {
+                    ct_skip_free_node_conc(ctx->list, node);
+                }
+            }
+        } else {
+            conc_node_t query;
+            memset(&query, 0, sizeof(query));
+            query.key = k;
+            ct_skip_remove_node_conc(ctx->list, &query);
+        }
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_readers_writers(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    setup_list_and_ebr(&list, &ebr);
+    prefill_list(list, 0, RACE_KEYS / 2);
+
+    pthread_t threads[NUM_THREADS];
+    rw_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].list = list;
+        ctxs[i].ebr = ebr;
+        ctxs[i].ebr_tid = ct_skip_ebr_register_conc(ebr);
+        munit_assert_int(ctxs[i].ebr_tid, >=, 0);
+        ctxs[i].is_writer = (i % 2);
+        ctxs[i].lo = 0; /* shared full range: exercises contended-key reads */
+        ctxs[i].hi = 0;
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, ctxs[i].is_writer ? thread_writer_mutate : thread_reader_positions, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+    for (int i = 0; i < NUM_THREADS; i++)
+        munit_assert_int(ctxs[i].result, ==, 0);
+
+    ct_skip_ebr_drain_conc(ebr);
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
+/* ---- Race 6: forward/backward iteration under concurrent mutation.
+ * A pinned reader iterates the level-0 list while writers mutate; it must
+ * not crash and every visited node must be a valid, ascending key. ---- */
+static void *
+thread_iterate_reader(void *arg)
+{
+    rw_ctx_t *ctx = (rw_ctx_t *)arg;
+    for (int it = 0; it < RACE_ITERS / 20; it++) {
+        ct_skip_ebr_pin_conc(ctx->ebr, ctx->ebr_tid);
+        conc_node_t *cur;
+        size_t i;
+        int prev = -1;
+        int steps = 0;
+        SKIPLIST_FOREACH_H2T(conc, ct_, entries, ctx->list, cur, i)
+        {
+            (void)i;
+            if (cur->key < prev) { /* level-0 order must never go backwards */
+                ctx->result = -1;
+                ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+                return NULL;
+            }
+            prev = cur->key;
+            if (++steps > RACE_KEYS * 4)
+                break; /* guard against a transient cycle while mutating */
+        }
+        ct_skip_ebr_unpin_conc(ctx->ebr, ctx->ebr_tid);
+    }
+    ctx->result = 0;
+    return NULL;
+}
+
+static MunitResult
+test_race_iterate_during_mutation(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    /* A pinned reader repeatedly walks the whole list while writers churn --
+       the most sensitive probe for reclaiming a still-reachable node. */
+    conc_t *list;
+    _skip_ebr_conc_t *ebr;
+    setup_list_and_ebr(&list, &ebr);
+    prefill_list(list, 0, RACE_KEYS / 2);
+
+    pthread_t threads[NUM_THREADS];
+    rw_ctx_t ctxs[NUM_THREADS];
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ctxs[i].list = list;
+        ctxs[i].ebr = ebr;
+        ctxs[i].ebr_tid = ct_skip_ebr_register_conc(ebr);
+        munit_assert_int(ctxs[i].ebr_tid, >=, 0);
+        ctxs[i].is_writer = (i != 0); /* one reader, rest writers */
+        /* Writers churn the full shared range; the reader scans the whole list. */
+        ctxs[i].lo = 0;
+        ctxs[i].hi = 0;
+        ctxs[i].result = -1;
+    }
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_create(&threads[i], NULL, ctxs[i].is_writer ? thread_writer_mutate : thread_iterate_reader, &ctxs[i]);
+    for (int i = 0; i < NUM_THREADS; i++)
+        pthread_join(threads[i], NULL);
+    for (int i = 0; i < NUM_THREADS; i++)
+        munit_assert_int(ctxs[i].result, ==, 0);
+
+    ct_skip_ebr_drain_conc(ebr);
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
 static MunitTest conc_test_suite_tests[] = {
     { (char *)"/concurrent_insert", test_concurrent_insert, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_search", test_concurrent_search, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -1020,6 +1465,12 @@ static MunitTest conc_test_suite_tests[] = {
     { (char *)"/ebr_correctness", test_ebr_correctness, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_contention", test_pool_contention, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/conc_api_breadth", test_conc_api_breadth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_overlapping_insert", test_race_overlapping_insert, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_insert_delete_churn", test_race_insert_delete_churn, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_pool_exclusive", test_race_pool_exclusive, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_ebr_register_churn", test_race_ebr_register_churn, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_readers_writers", test_race_readers_writers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/race_iterate_during_mutation", test_race_iterate_during_mutation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 };
 

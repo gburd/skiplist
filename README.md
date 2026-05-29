@@ -278,6 +278,7 @@ nix build                    # produce ./result with the installed header
 | `SKIPLIST_MAX_HEIGHT`         | `64`           | Maximum tower height; must be a positive integer <= 64                  |
 | `SKIPLIST_SPLAY_INTERVAL`     | `64`           | Accesses between rebalance passes; must be a power of two               |
 | `SKIPLIST_EBR_MAX_THREADS`    | `128`          | Maximum threads that may register with EBR concurrently                 |
+| `SKIPLIST_ARCHIVE_MAX_RECORD` | `1<<28`        | Upper bound (bytes) on a single serialized node record                  |
 | `SKIPLIST_DIAGNOSTIC`         | not defined    | Enable runtime invariant checks inside the implementation               |
 | `DEBUG`                       | not defined    | Enable internal `assert()` calls                                        |
 
@@ -427,10 +428,14 @@ api_skip_del_my(&list, 42);
 ### Pool Allocator
 
 `SKIPLIST_DECL_POOL(decl, prefix, field, capacity)` adds a fixed-size
-slab allocator with cache-line-aligned slots and a lock-free free
-list.  When the pool is full, allocations fall back to `malloc`.
-Throughput improves significantly for sequential insert workloads
-(roughly 2-3x in the benchmark suite).
+slab allocator with cache-line-aligned slots.  Allocation claims a slot
+by CAS-ing that slot's own state word from free to used, guided by a
+rotating cursor for O(1)-amortised probing.  Because there is no shared
+recyclable free-list head, the allocator is unconditionally free of the
+ABA problem -- there is no version tag that could ever wrap.  When the
+pool is full, allocations fall back to `malloc`.  Throughput improves
+significantly for sequential insert workloads (roughly 2-3x in the
+benchmark suite).
 
 ```c
 SKIPLIST_DECL_POOL(my, api_, entry, /* capacity = */ 4096)
@@ -500,6 +505,15 @@ The library writes a header (magic, length, sizeof-record) and walks
 the list invoking `write_blk` for each node; on read it reconstructs
 the list invoking `read_blk` to materialize each node.
 
+`write_blk` receives a scratch buffer sized from your `sizeof` block
+(`bufsize` gives its capacity) and must not write past it.  `read_blk`
+receives the deserialized record and its length `bytes`, and **must
+validate `bytes` before reading** -- the length comes from the input
+stream and may be hostile.  Records larger than
+`SKIPLIST_ARCHIVE_MAX_RECORD` (default 256 MiB, overridable) are
+rejected on both read and write so a malformed archive cannot drive an
+unbounded allocation.
+
 ```c
 FILE *fp = fopen("snapshot.bin", "wb");
 api_skip_archive_write_my(&list, fp);
@@ -531,13 +545,23 @@ a GraphViz DOT graph.  Convert with `dot -Tpdf out.dot -o out.pdf`.
 Concurrent insert, search, and remove follow the Fraser/Harris design:
 
 - **Marked pointers** -- the lowest bit of each `next` pointer flags
-  a logically-deleted node.  Readers skip marked nodes; the next
-  writer to traverse the predecessor unlinks the corpse.
+  a logically-deleted node.  Readers skip marked nodes, and both the
+  forward iterators and the `position_*` scans unmark before
+  dereferencing, so a marked pointer is never followed into.
 - **Compare-and-swap (CAS) chains** -- inserts splice in bottom-up
   with a CAS at level 0, then opportunistically link upper levels.
   A failure on level >0 leaves a node valid but at lower height; a
   later splay pass corrects the imbalance.
-- **Two-phase delete** -- mark the node, then physically unlink.
+- **Two-phase delete** -- mark the node at every level (level 0 last,
+  the linearization point), then physically unlink it.  The remover
+  unlinks the node from every level *by pointer identity*, retrying
+  until the node is unreachable from the head, before retiring it.
+  This preserves the invariant that a retired node is already fully
+  unlinked, which epoch-based reclamation relies on -- otherwise a
+  thread could pin and then follow a stale link into a reclaimed node.
+  Insert cooperates by help-unlinking any logically-deleted successor
+  it would otherwise link in front of, so a marked node never gains a
+  fresh predecessor.
 
 The level-0 list is doubly linked, so iteration in either direction is
 O(1) per step.  Upper levels are singly linked.

@@ -78,7 +78,7 @@ EXAMPLES = examples/ex01 examples/ex02 examples/ex03 examples/ex04 \
 MAN_PAGES = man/skiplist.7 man/sl.h.3
 
 .PHONY: all clean distclean test test_concurrent test_tsan test_all examples mls coverage \
-        test_splay test_tsan_splay test_single \
+        test_splay test_tsan_splay test_single test_property \
         bench valgrind install uninstall format man
 
 # Header-only library: no .a / .so / .o to produce.  "all" builds
@@ -144,6 +144,47 @@ test_single: tests/test_single
 
 tests/test_single: tests/test_single.c tests/munit.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -o $@ tests/test_single.c tests/munit.c -lm
+
+# ----------------------------------------------------------------------
+# Property-based tests (Hegel / hegel-c).  Opt-in: requires a local
+# hegel-c checkout and the hegel-core server binary.  Paths are derived
+# from the hegel-c CMake build cache and may be overridden on the command
+# line, e.g.:
+#
+#   make test_property HEGEL_DIR=/path/to/hegel
+#   make test_property HEGEL_INC=... HEGEL_LIBDIR=... CBOR_INC=... \
+#                      CBOR_LIBDIR=... ZLIB_LIBDIR=... HEGEL_SERVER_BIN=...
+#
+# The property suite drives sl.h against an independent reference model
+# and exercises the archive round-trip and deserialize-robustness paths.
+# ----------------------------------------------------------------------
+HEGEL_DIR        ?= $(HOME)/ws/hegel
+HEGEL_INC        ?= $(HEGEL_DIR)/c/include
+HEGEL_LIBDIR     ?= $(HEGEL_DIR)/c/build
+HEGEL_SERVER_BIN ?= $(HEGEL_DIR)/result/bin/hegel
+HEGEL_CACHE      := $(HEGEL_DIR)/c/build/CMakeCache.txt
+CBOR_INC         ?= $(shell sed -n 's/^CBOR_INCLUDEDIR:INTERNAL=//p' $(HEGEL_CACHE) 2>/dev/null)
+CBOR_LIBDIR      ?= $(shell sed -n 's/^CBOR_LIBDIR:INTERNAL=//p' $(HEGEL_CACHE) 2>/dev/null)
+ZLIB_LIBPATH     ?= $(shell sed -n 's#^ZLIB_LIBRARY_RELEASE:FILEPATH=##p' $(HEGEL_CACHE) 2>/dev/null)
+ZLIB_LIBDIR      ?= $(patsubst %/,%,$(dir $(ZLIB_LIBPATH)))
+
+# Reuse the project sanitizer set so the properties catch memory errors in
+# sl.h.  LeakSanitizer is disabled at runtime below because hegel-c leaks its
+# own per-draw generator/CBOR allocations (an upstream issue, not in sl.h).
+PROP_CFLAGS  = $(WARNFLAGS) -Og -g $(SAN_FLAGS) -std=c11 -Iinclude/ -I$(HEGEL_INC) -I$(CBOR_INC)
+PROP_LDFLAGS = -L$(HEGEL_LIBDIR) -L$(CBOR_LIBDIR) -L$(ZLIB_LIBDIR) -lhegel -lcbor -lz -lm
+
+test_property: tests/test_property
+	@mkdir -p tests/.hegel
+	@printf '#!/bin/sh\nexec "%s" --stdio "$$@"\n' '$(HEGEL_SERVER_BIN)' > tests/.hegel/server
+	@chmod +x tests/.hegel/server
+	HEGEL_SERVER_COMMAND=$(CURDIR)/tests/.hegel/server \
+	  LD_LIBRARY_PATH="$(HEGEL_LIBDIR):$(CBOR_LIBDIR):$(ZLIB_LIBDIR):$$LD_LIBRARY_PATH" \
+	  ASAN_OPTIONS=detect_leaks=0 \
+	  ./tests/test_property
+
+tests/test_property: tests/test_property.c include/sl.h
+	$(CC) $(PROP_CFLAGS) -o $@ tests/test_property.c $(PROP_LDFLAGS)
 
 test_all: test test_concurrent test_tsan test_splay test_tsan_splay test_single
 
@@ -342,6 +383,8 @@ clean:
 	rm -f tests/test_splay tests/test_concurrent_splay tests/test_concurrent_tsan_splay
 	rm -f tests/test_splay_verify
 	rm -f tests/test_single
+	rm -f tests/test_property
+	rm -rf tests/.hegel
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent.o
 	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single

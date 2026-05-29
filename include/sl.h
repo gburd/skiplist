@@ -470,7 +470,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *   }
  */
 #define SKIPLIST_FOREACH_H2T(decl, prefix, field, list, elm, iter) \
-    for (iter = 0, (elm) = (list)->slh_head; ((elm) = _skip_atomic_load(&(elm)->field.sle_levels[0].next, memory_order_acquire)) != (list)->slh_tail; iter++)
+    for (iter = 0, (elm) = (list)->slh_head; ((elm) = _SKIP_UNMARK(_skip_atomic_load(&(elm)->field.sle_levels[0].next, memory_order_acquire))) != (list)->slh_tail; iter++)
 
 /**
  * SKIPLIST_FOREACH_T2H(decl, prefix, field, list, elm, iter) -- Iterate tail-to-head.
@@ -497,7 +497,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  */
 #define SKIPLIST_FOREACH_T2H(decl, prefix, field, list, elm, iter)                                      \
     for (iter = _skip_atomic_load(&(list)->slh_length, memory_order_relaxed), (elm) = (list)->slh_tail; \
-         ((elm) = _skip_atomic_load(&(elm)->field.sle_prev, memory_order_acquire)) != (list)->slh_head; iter--)
+         ((elm) = _SKIP_UNMARK(_skip_atomic_load(&(elm)->field.sle_prev, memory_order_acquire))) != (list)->slh_head; iter--)
 
 /* Iterate over the next pointers in a node from bottom to top (B2T) or top to bottom (T2B). */
 #define _SKIP_ALL_ENTRIES_T2B(field, elm) for (size_t lvl = slist->slh_head->field.sle_height - 1; lvl != SIZE_MAX; lvl--)
@@ -603,7 +603,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  * Generated types:
  *   decl##_t           -- The skiplist type
  *   decl##_node_t      -- The node type
- *   skip_pos_##decl_t  -- Position enum (SKIP_EQ, SKIP_LT, SKIP_LTE, SKIP_GT, SKIP_GTE)
+ *   skip_pos_##decl##_t  -- Position enum (SKIP_EQ, SKIP_LT, SKIP_LTE, SKIP_GT, SKIP_GTE)
  *
  * Generated functions:
  *   int    prefix##skip_init_##decl(decl##_t *slist)
@@ -642,7 +642,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
 #define SKIPLIST_DECL(decl, prefix, field, compare_entries_blk, free_entry_blk, update_entry_blk, archive_entry_blk, sizeof_entry_blk)                       \
                                                                                                                                                              \
     /* Used when positioning a cursor within a Skiplist. */                                                                                                  \
-    typedef enum { SKIP_EQ = 0, SKIP_LTE = -1, SKIP_LT = -2, SKIP_GTE = 1, SKIP_GT = 2 } skip_pos_##decl_t;                                                  \
+    typedef enum { SKIP_EQ = 0, SKIP_LTE = -1, SKIP_LT = -2, SKIP_GTE = 1, SKIP_GT = 2 } skip_pos_##decl##_t;                                                  \
                                                                                                                                                              \
     /* Skiplist node type */                                                                                                                                 \
     typedef struct decl##_node decl##_node_t;                                                                                                                \
@@ -793,15 +793,26 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      */                                                                                                                                                      \
     static int _skip_toss_##decl(decl##_t *slist, size_t max)                                                                                                \
     {                                                                                                                                                        \
+        /* Integer geometric draw: each consumed random bit is a fair coin;                                                                                   \
+           the level is the run of 1-bits before the first 0.  This yields                                                                                    \
+           P(level=k) = 0.5^(k+1) for k < max, identical to the previous                                                                                       \
+           floating-point formulation but without any libm/FP dependency on                                                                                   \
+           the insert hot path. */                                                                                                                            \
         size_t level = 0;                                                                                                                                    \
-        double probability = 0.5;                                                                                                                            \
-                                                                                                                                                             \
-        double random_value = (double)_##decl##_xorshift32(&slist->slh_prng_state) / UINT32_MAX;                                                             \
-        while (random_value < probability && level < max) {                                                                                                  \
+        uint32_t bits = _##decl##_xorshift32(&slist->slh_prng_state);                                                                                         \
+        int avail = 32;                                                                                                                                      \
+        while (level < max) {                                                                                                                                \
+            if (avail == 0) {                                                                                                                                \
+                bits = _##decl##_xorshift32(&slist->slh_prng_state);                                                                                          \
+                avail = 32;                                                                                                                                  \
+            }                                                                                                                                                \
+            if ((bits & 1u) == 0)                                                                                                                            \
+                break;                                                                                                                                       \
+            bits >>= 1;                                                                                                                                      \
+            avail--;                                                                                                                                         \
             level++;                                                                                                                                         \
-            probability *= 0.5;                                                                                                                              \
         }                                                                                                                                                    \
-        return level;                                                                                                                                        \
+        return (int)level;                                                                                                                                   \
     }                                                                                                                                                        \
                                                                                                                                                              \
     /**                                                                                                                                                      \
@@ -1634,6 +1645,32 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             }                                                                                                                                                \
         }                                                                                                                                                    \
                                                                                                                                                              \
+        /* Phase 5b: help-unlink a logically-deleted successor.                                                                                              \
+         *                                                                                                                                                   \
+         * locate returned an unmarked successor, but it may have been marked                                                                                 \
+         * by a concurrent remove between locate and the CAS above.  If we                                                                                    \
+         * leave a marked node reachable only through us, its remover (which                                                                                  \
+         * may already have finished its own unlink pass) will retire it and                                                                                  \
+         * EBR will free it while it is still linked off `n` -- a dangling                                                                                     \
+         * pointer for the next traversal.  Splice out any marked successors                                                                                  \
+         * now.  The caller's EBR pin keeps those nodes alive while we touch                                                                                   \
+         * them.  In single-threaded use no successor is ever marked, so this                                                                                  \
+         * loop exits immediately. */                                                                                                                         \
+        for (;;) {                                                                                                                                           \
+            decl##_node_t *s = _skip_atomic_load(&n->field.sle_levels[0].next, memory_order_acquire);                                                         \
+            if (s == NULL || s == slist->slh_tail || _SKIP_IS_MARKED(s))                                                                                     \
+                break;                                                                                                                                       \
+            decl##_node_t *s_next = _skip_atomic_load(&s->field.sle_levels[0].next, memory_order_acquire);                                                    \
+            if (!_SKIP_IS_MARKED(s_next))                                                                                                                    \
+                break; /* successor is live */                                                                                                              \
+            decl##_node_t *expected = s;                                                                                                                     \
+            if (!_skip_atomic_cas_strong(&n->field.sle_levels[0].next, &expected, _SKIP_UNMARK(s_next), memory_order_release, memory_order_relaxed)) {        \
+                /* Someone changed n's successor (incl. marking n itself); re-evaluate. */                                                                    \
+                if (_SKIP_IS_MARKED(expected))                                                                                                               \
+                    break;                                                                                                                                   \
+            }                                                                                                                                                \
+        }                                                                                                                                                    \
+                                                                                                                                                             \
         /* Phase 6: Link at higher levels (1 .. new_height). */                                                                                              \
         for (i = 1; i <= new_height; i++) {                                                                                                                  \
             for (;;) {                                                                                                                                       \
@@ -1680,6 +1717,29 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             } else if (!_SKIP_IS_MARKED(succ_at_0) && succ_at_0 == slist->slh_tail) {                                                                        \
                 decl##_node_t *old_prev = path[1].node;                                                                                                      \
                 _skip_atomic_cas_strong(&slist->slh_tail->field.sle_prev, &old_prev, n, memory_order_relaxed, memory_order_relaxed);                         \
+            }                                                                                                                                                \
+        }                                                                                                                                                    \
+                                                                                                                                                             \
+        /* Phase 6b: help-unlink logically-deleted successors at every upper   \
+         * level, mirroring phase 5b.  A freshly inserted node must never leave \
+         * a marked node reachable only through it at ANY level: that marked    \
+         * node's remover may already have finished its unlink pass, so it      \
+         * would be retired and freed by EBR while a concurrent locate still     \
+         * traverses this level into it.  The caller's EBR pin keeps the marked  \
+         * successors alive while we splice them out. */                         \
+        for (size_t _hl = 1; _hl <= new_height; _hl++) {                                                                                                     \
+            for (;;) {                                                                                                                                       \
+                decl##_node_t *s = _skip_atomic_load(&n->field.sle_levels[_hl].next, memory_order_acquire);                                                   \
+                if (s == NULL || s == slist->slh_tail || _SKIP_IS_MARKED(s))                                                                                 \
+                    break;                                                                                                                                   \
+                decl##_node_t *s_next = _skip_atomic_load(&s->field.sle_levels[_hl].next, memory_order_acquire);                                              \
+                if (!_SKIP_IS_MARKED(s_next))                                                                                                                \
+                    break;                                                                                                                                   \
+                decl##_node_t *expected = s;                                                                                                                 \
+                if (!_skip_atomic_cas_strong(&n->field.sle_levels[_hl].next, &expected, _SKIP_UNMARK(s_next), memory_order_release, memory_order_relaxed)) {  \
+                    if (_SKIP_IS_MARKED(expected))                                                                                                           \
+                        break;                                                                                                                               \
+                }                                                                                                                                            \
             }                                                                                                                                                \
         }                                                                                                                                                    \
                                                                                                                                                              \
@@ -1759,10 +1819,22 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
         _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
         node = path[1].node;                                                                                                                                 \
-        do {                                                                                                                                                 \
-            node = _skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire);                                                                 \
+        /* Scan level 0 for the first live node >= query.  Unmark before                                                                                     \
+           dereferencing and skip logically-deleted nodes so a concurrent                                                                                     \
+           delete (which sets the low mark bit on next pointers) can never                                                                                    \
+           feed a marked address to the comparator. */                                                                                                       \
+        for (;;) {                                                                                                                                           \
+            node = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire));                                                    \
+            if (node == NULL || node == slist->slh_tail) {                                                                                                   \
+                node = slist->slh_tail;                                                                                                                      \
+                break;                                                                                                                                       \
+            }                                                                                                                                                \
+            if (_SKIP_IS_MARKED(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire)))                                                    \
+                continue; /* node is logically deleted; advance past it */                                                                                   \
             cmp = _skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                                            \
-        } while (cmp < 0);                                                                                                                                   \
+            if (cmp >= 0)                                                                                                                                    \
+                break;                                                                                                                                       \
+        }                                                                                                                                                    \
                                                                                                                                                              \
         if (node == slist->slh_tail)                                                                                                                         \
             return NULL;                                                                                                                                     \
@@ -1790,10 +1862,21 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         node = path[1].node;                                                                                                                                 \
         if (node == slist->slh_tail)                                                                                                                         \
             goto done;                                                                                                                                       \
-        do {                                                                                                                                                 \
-            node = _skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire);                                                                 \
+        /* Scan level 0 for the first live node > query, unmarking before                                                                                    \
+           any dereference and skipping logically-deleted nodes (see                                                                                         \
+           position_gte for the rationale). */                                                                                                               \
+        for (;;) {                                                                                                                                           \
+            node = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire));                                                    \
+            if (node == NULL || node == slist->slh_tail) {                                                                                                   \
+                node = slist->slh_tail;                                                                                                                      \
+                break;                                                                                                                                       \
+            }                                                                                                                                                \
+            if (_SKIP_IS_MARKED(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire)))                                                    \
+                continue; /* node is logically deleted; advance past it */                                                                                   \
             cmp = _skip_compare_nodes_##decl(slist, node, query, slist->slh_aux);                                                                            \
-        } while (cmp <= 0 && node != slist->slh_tail);                                                                                                       \
+            if (cmp > 0)                                                                                                                                     \
+                break;                                                                                                                                       \
+        }                                                                                                                                                    \
     done:;                                                                                                                                                   \
                                                                                                                                                              \
         return (node == slist->slh_tail) ? NULL : node;                                                                                                      \
@@ -1855,7 +1938,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                                                       \
      * Position a cursor relative to `n`.                                                                                                                    \
      */                                                                                                                                                      \
-    decl##_node_t *prefix##skip_position_##decl(decl##_t *slist, skip_pos_##decl_t op, decl##_node_t *query)                                                 \
+    decl##_node_t *prefix##skip_position_##decl(decl##_t *slist, skip_pos_##decl##_t op, decl##_node_t *query)                                                 \
     {                                                                                                                                                        \
         decl##_node_t *node;                                                                                                                                 \
                                                                                                                                                              \
@@ -1916,13 +1999,86 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             if (np > 0)                                                                                                                                      \
                 return np;                                                                                                                                   \
                                                                                                                                                              \
-            /* Increase the list's era/age. */                                                                                                               \
-            slist->slh_snap.cur_era++;                                                                                                                       \
+            /* Stamp the live node with the new era so a later update in this   \
+               same snapshot era will NOT preserve a second pre-image: doing so \
+               would leak the extra copy on restore and revert the key to the   \
+               wrong (post-snapshot) value.  The preserved copy keeps the       \
+               pre-snapshot era and is what restore reinstalls. */              \
+            node->field.sle_era = ++slist->slh_snap.cur_era;                                                                                                 \
         }                                                                                                                                                    \
                                                                                                                                                              \
         slist->slh_fns.update_entry(node, value);                                                                                                            \
                                                                                                                                                              \
         return rc;                                                                                                                                           \
+    }                                                                                                                                                        \
+                                                                                                                                                             \
+    /**                                                                                                                                                      \
+     * -- _skip_unlink_fully_                                                                                                                                 \
+     *                                                                                                                                                       \
+     * Physically unlink an already-marked node from every level, matching by                                                                                \
+     * pointer identity, retrying until the node is unreachable from the head                                                                                 \
+     * at every level.  This MUST complete before the node is retired/freed:                                                                                  \
+     * epoch-based reclamation is only safe when retired => unlinked, otherwise a                                                                             \
+     * thread that pins later could still follow a link into a reclaimed node.                                                                                \
+     *                                                                                                                                                        \
+     * A single key-based locate() pass is insufficient: a concurrent insert can                                                                              \
+     * splice a fresh predecessor in front of the marked node, and when keys                                                                                  \
+     * repeat (delete + re-insert of the same key) a key-based search can walk                                                                                \
+     * past the marked node entirely.  Navigating by key into the node's region                                                                              \
+     * and then matching the exact pointer handles both: any predecessor that                                                                                 \
+     * still points at this node -- including a newly inserted one -- is found                                                                                \
+     * and CAS-unlinked.  Once a full sweep links to the node at no level and a                                                                               \
+     * level-0 verification scan cannot reach it, no new predecessor can appear                                                                              \
+     * (locate hands out only unmarked successors), so the node is permanently                                                                                \
+     * unreachable and safe to retire. */                                                                                                                    \
+    static void _skip_unlink_fully_##decl(decl##_t *slist, decl##_node_t *node)                                                                               \
+    {                                                                                                                                                        \
+        for (;;) {                                                                                                                                           \
+            int retry = 0;                                                                                                                                   \
+            size_t hh = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire);                                                          \
+            decl##_node_t *pred = slist->slh_head;                                                                                                           \
+            for (size_t lvl = hh; lvl != SIZE_MAX; lvl--) {                                                                                                  \
+                decl##_node_t *curr = _SKIP_UNMARK(_skip_atomic_load(&pred->field.sle_levels[lvl].next, memory_order_acquire));                               \
+                for (;;) {                                                                                                                                   \
+                    if (curr == slist->slh_tail || curr == NULL)                                                                                             \
+                        break;                                                                                                                               \
+                    if (curr == node) {                                                                                                                      \
+                        decl##_node_t *nsucc = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire));                      \
+                        decl##_node_t *expected = node;                                                                                                      \
+                        if (!_skip_atomic_cas_strong(&pred->field.sle_levels[lvl].next, &expected, nsucc, memory_order_release, memory_order_acquire))        \
+                            retry = 1; /* predecessor changed; re-sweep */                                                                                   \
+                        break;                                                                                                                               \
+                    }                                                                                                                                        \
+                    {                                                                                                                                        \
+                        int c = _skip_compare_nodes_##decl(slist, curr, node, slist->slh_aux);                                                                \
+                        if (c < 0 || (c == 0 && curr != node)) {                                                                                             \
+                            pred = curr;                                                                                                                     \
+                            curr = _SKIP_UNMARK(_skip_atomic_load(&pred->field.sle_levels[lvl].next, memory_order_acquire));                                  \
+                            continue;                                                                                                                        \
+                        }                                                                                                                                    \
+                    }                                                                                                                                        \
+                    break; /* curr is past the node's key; node not linked here */                                                                           \
+                }                                                                                                                                            \
+            }                                                                                                                                                \
+            if (retry)                                                                                                                                       \
+                continue;                                                                                                                                    \
+            /* Verify unreachability at level 0 by pointer over the key region. */                                                                           \
+            {                                                                                                                                                \
+                decl##_node_t *c0 = _SKIP_UNMARK(_skip_atomic_load(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire));                        \
+                int found = 0;                                                                                                                               \
+                while (c0 != slist->slh_tail && c0 != NULL) {                                                                                                 \
+                    if (c0 == node) {                                                                                                                        \
+                        found = 1;                                                                                                                           \
+                        break;                                                                                                                               \
+                    }                                                                                                                                        \
+                    if (_skip_compare_nodes_##decl(slist, c0, node, slist->slh_aux) > 0)                                                                      \
+                        break;                                                                                                                               \
+                    c0 = _SKIP_UNMARK(_skip_atomic_load(&c0->field.sle_levels[0].next, memory_order_acquire));                                                \
+                }                                                                                                                                            \
+                if (!found)                                                                                                                                  \
+                    break;                                                                                                                                   \
+            }                                                                                                                                                \
+        }                                                                                                                                                    \
     }                                                                                                                                                        \
                                                                                                                                                              \
     /**                                                                                                                                                      \
@@ -1993,9 +2149,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             succ = expected;                                                                                                                                 \
         }                                                                                                                                                    \
                                                                                                                                                              \
-        /* Phase 3: Physical unlinking via find. */                                                                                                          \
-        _SKIP_PATH_CLEAR(path);                                                                                                                              \
-        _skip_locate_##decl(slist, query, path);                                                                                                             \
+        /* Phase 3: Physically unlink the node from every level, by pointer
+         * identity, before it is retired.  EBR reclamation is only safe when
+         * retired => unlinked; a single key-based locate pass is not enough
+         * under concurrent insert/relink or repeated keys (see
+         * _skip_unlink_fully_). */                                                                                                                          \
+        _skip_unlink_fully_##decl(slist, node);                                                                                                              \
                                                                                                                                                              \
         /* Update backward pointer hint (best-effort). */                                                                                                    \
         {                                                                                                                                                    \
@@ -2138,6 +2297,11 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *          -- Initialize EBR state.  Must be called first.
  *   int  prefix##skip_ebr_register_##decl(_skip_ebr_##decl##_t *ebr)
  *          -- Register a thread.  Returns thread ID (0-based), or -1 if full.
+ *             Slots are reusable: a slot freed by skip_ebr_unregister_ may be
+ *             handed back out to a later registrant.
+ *   void prefix##skip_ebr_unregister_##decl(_skip_ebr_##decl##_t *ebr, int tid)
+ *          -- Release a thread's slot so it can be reused.  Call once, after
+ *             the thread's final unpin, before it exits.
  *   void prefix##skip_ebr_pin_##decl(_skip_ebr_##decl##_t *ebr, int tid)
  *          -- Enter a critical section (pin).  Nodes will not be freed while pinned.
  *   void prefix##skip_ebr_unpin_##decl(_skip_ebr_##decl##_t *ebr, int tid)
@@ -2151,10 +2315,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  */
 #define SKIPLIST_DECL_EBR(decl, prefix)                                                                                      \
                                                                                                                              \
-    /* Per-thread EBR state. */                                                                                              \
+    /* Per-thread EBR state.  `in_use` guards slot ownership so registration
+       can recycle slots released by skip_ebr_unregister_. */                                                            \
     typedef struct _skip_ebr_thread_##decl {                                                                                 \
         _SKIP_ATOMIC(uint64_t) local_epoch;                                                                                  \
         _SKIP_ATOMIC(int) active;                                                                                            \
+        _SKIP_ATOMIC(int) in_use;                                                                                            \
     } _skip_ebr_thread_##decl##_t;                                                                                           \
                                                                                                                              \
     /* A retired node waiting to be freed. */                                                                                \
@@ -2208,18 +2374,40 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      *                                                                                                                       \
      * Register a thread for EBR participation.  Returns a thread ID                                                         \
      * (0-based).  Must be called once per thread before pin/unpin.                                                          \
-     * Returns -1 if the maximum number of threads has been reached.                                                         \
+     * Returns -1 if all slots are in use.  Slots released by                                                                \
+     * skip_ebr_unregister_ are recycled.                                                                                    \
      */                                                                                                                      \
     int prefix##skip_ebr_register_##decl(_skip_ebr_##decl##_t *ebr)                                                          \
     {                                                                                                                        \
-        int tid = _skip_atomic_fetch_add(&ebr->thread_count, 1, memory_order_relaxed);                                       \
-        if (tid >= SKIPLIST_EBR_MAX_THREADS) {                                                                               \
-            _skip_atomic_fetch_sub(&ebr->thread_count, 1, memory_order_relaxed);                                             \
-            return -1;                                                                                                       \
+        for (int tid = 0; tid < SKIPLIST_EBR_MAX_THREADS; tid++) {                                                            \
+            int expected = 0;                                                                                                \
+            if (_skip_atomic_cas_strong(&ebr->threads[tid].in_use, &expected, 1, memory_order_acq_rel, memory_order_relaxed)) { \
+                _skip_atomic_store(&ebr->threads[tid].local_epoch, 0, memory_order_relaxed);                                  \
+                _skip_atomic_store(&ebr->threads[tid].active, 0, memory_order_relaxed);                                       \
+                /* Raise the high-water mark that bounds the try_advance scan. */                                            \
+                int tc = _skip_atomic_load(&ebr->thread_count, memory_order_relaxed);                                         \
+                while (tid + 1 > tc) {                                                                                       \
+                    if (_skip_atomic_cas_weak(&ebr->thread_count, &tc, tid + 1, memory_order_relaxed, memory_order_relaxed)) \
+                        break;                                                                                               \
+                }                                                                                                            \
+                return tid;                                                                                                  \
+            }                                                                                                                \
         }                                                                                                                    \
-        _skip_atomic_store(&ebr->threads[tid].local_epoch, 0, memory_order_relaxed);                                         \
-        _skip_atomic_store(&ebr->threads[tid].active, 0, memory_order_relaxed);                                              \
-        return tid;                                                                                                          \
+        return -1;                                                                                                           \
+    }                                                                                                                        \
+                                                                                                                             \
+    /**                                                                                                                      \
+     * -- skip_ebr_unregister_                                                                                               \
+     *                                                                                                                       \
+     * Release a thread's slot for reuse.  The caller must have unpinned and                                                 \
+     * must not use `tid` again afterwards.                                                                                  \
+     */                                                                                                                      \
+    void prefix##skip_ebr_unregister_##decl(_skip_ebr_##decl##_t *ebr, int tid)                                              \
+    {                                                                                                                        \
+        if (tid < 0 || tid >= SKIPLIST_EBR_MAX_THREADS)                                                                       \
+            return;                                                                                                          \
+        _skip_atomic_store(&ebr->threads[tid].active, 0, memory_order_release);                                               \
+        _skip_atomic_store(&ebr->threads[tid].in_use, 0, memory_order_release);                                              \
     }                                                                                                                        \
                                                                                                                              \
     /**                                                                                                                      \
@@ -2802,6 +2990,18 @@ _skip_read_le64(const uint8_t *src)
         ((uint64_t)src[5] << 40) | ((uint64_t)src[6] << 48) | ((uint64_t)src[7] << 56);
 }
 
+/*
+ * SKIPLIST_ARCHIVE_MAX_RECORD -- Upper bound (bytes) on a single serialized
+ * node record.  Serialization refuses to emit a record larger than this, and
+ * deserialization rejects any input claiming a larger record.  This bounds
+ * both the serialize scratch buffer and the deserialize allocation, so a
+ * malformed/hostile archive cannot drive an unbounded malloc or smuggle an
+ * absurd length past the reader.  Override before including sl.h.
+ */
+#ifndef SKIPLIST_ARCHIVE_MAX_RECORD
+#define SKIPLIST_ARCHIVE_MAX_RECORD ((uint64_t)1 << 28) /* 256 MiB */
+#endif
+
 #define SKIPLIST_DECL_ARCHIVE(decl, prefix, field, write_entry_blk, read_entry_blk)                 \
                                                                                                     \
     int prefix##skip_serialize_##decl(decl##_t *slist, FILE *fp)                                    \
@@ -2830,29 +3030,55 @@ _skip_read_le64(const uint8_t *src)
                 return EIO;                                                                         \
         }                                                                                           \
                                                                                                     \
-        /* Per-node data */                                                                         \
+        /* Per-node data.  The scratch buffer is sized from sizeof_entry and    \
+           grown as needed; the capacity is established BEFORE write_entry_blk  \
+           runs, so a record larger than any fixed buffer can never overflow    \
+           the scratch space.  write_entry_blk receives `bufsize` and must not  \
+           write past it. */                                                    \
         decl##_node_t *node;                                                                        \
         size_t i;                                                                                   \
-        uint8_t entry_buf[4096];                                                                    \
+        uint8_t *entry_buf = NULL;                                                                   \
+        size_t entry_cap = 0;                                                                       \
         SKIPLIST_FOREACH_H2T(decl, prefix, field, slist, node, i)                                   \
         {                                                                                           \
             (void)i;                                                                                \
-            uint8_t *buf = entry_buf;                                                               \
+            uint64_t need = (uint64_t)slist->slh_fns.sizeof_entry(node);                             \
+            if (need > SKIPLIST_ARCHIVE_MAX_RECORD) {                                                \
+                free(entry_buf);                                                                    \
+                return EOVERFLOW;                                                                   \
+            }                                                                                       \
+            if (need > entry_cap) {                                                                 \
+                uint8_t *nb = (uint8_t *)realloc(entry_buf, (size_t)need);                           \
+                if (nb == NULL) {                                                                   \
+                    free(entry_buf);                                                                \
+                    return ENOMEM;                                                                  \
+                }                                                                                   \
+                entry_buf = nb;                                                                     \
+                entry_cap = (size_t)need;                                                           \
+            }                                                                                       \
+            uint8_t *buf = entry_buf;                                                                \
             uint64_t bytes = 0;                                                                     \
-            const uint64_t bufsize = sizeof(entry_buf);                                             \
+            const uint64_t bufsize = (uint64_t)entry_cap;                                            \
             (void)bufsize;                                                                          \
             write_entry_blk;                                                                        \
-            if (bytes > sizeof(entry_buf))                                                          \
+            if (bytes > entry_cap) {                                                                \
+                free(entry_buf);                                                                    \
                 return EOVERFLOW;                                                                   \
+            }                                                                                       \
             {                                                                                       \
                 uint8_t bbuf[8];                                                                    \
                 _skip_write_le64(bbuf, bytes);                                                      \
-                if (fwrite(bbuf, 1, 8, fp) != 8)                                                    \
+                if (fwrite(bbuf, 1, 8, fp) != 8) {                                                  \
+                    free(entry_buf);                                                                \
                     return EIO;                                                                     \
+                }                                                                                   \
             }                                                                                       \
-            if (bytes > 0 && fwrite(buf, 1, (size_t)bytes, fp) != (size_t)bytes)                    \
+            if (bytes > 0 && fwrite(buf, 1, (size_t)bytes, fp) != (size_t)bytes) {                   \
+                free(entry_buf);                                                                    \
                 return EIO;                                                                         \
+            }                                                                                       \
         }                                                                                           \
+        free(entry_buf);                                                                            \
                                                                                                     \
         return 0;                                                                                   \
     }                                                                                               \
@@ -2897,6 +3123,12 @@ _skip_read_le64(const uint8_t *src)
                     return EIO;                                                                     \
                 bytes = _skip_read_le64(bbuf);                                                      \
             }                                                                                       \
+                                                                                                    \
+            /* Bound the attacker-controlled record size: reject absurd lengths \
+               rather than attempting a huge allocation, and give read_entry_blk \
+               a sane `bytes` it can validate against before consuming `buf`. */ \
+            if (bytes > SKIPLIST_ARCHIVE_MAX_RECORD)                                                \
+                return EINVAL;                                                                      \
                                                                                                     \
             uint8_t *buf = NULL;                                                                    \
             if (bytes > 0) {                                                                        \
@@ -3323,7 +3555,7 @@ _skip_read_le64(const uint8_t *src)
  *           -- Update the value for an existing key in place.
  *   int   prefix##skip_dup_##decl(decl##_t *slist, ktype key, vtype value)
  *           -- Insert key/value allowing duplicates.
- *   decl##_node_t *prefix##skip_pos_##decl(decl##_t *slist, skip_pos_##decl_t op, ktype key)
+ *   decl##_node_t *prefix##skip_pos_##decl(decl##_t *slist, skip_pos_##decl##_t op, ktype key)
  *           -- Position a cursor relative to key using op (SKIP_EQ, SKIP_LT,
  *              SKIP_LTE, SKIP_GT, SKIP_GTE).  Returns NULL if no match.
  */
@@ -3367,7 +3599,7 @@ _skip_read_le64(const uint8_t *src)
      *                                                                                       \
      * Position a "cursor" (get a "node") from the list that satisfies the                   \
      * condition (`op`) or return NULL if the condition cannot be satisfied.                 \
-     * The condition is a skip_pos_##decl_t enum type:                                       \
+     * The condition is a skip_pos_##decl##_t enum type:                                       \
      *                                                                                       \
      * SKIP_GT  -> greater than                                                              \
      * SKIP_GTE -> greater than or equal to                                                  \
@@ -3376,7 +3608,7 @@ _skip_read_le64(const uint8_t *src)
      * SKIP_LT  -> less than                                                                 \
      *                                                                                       \
      */                                                                                      \
-    decl##_node_t *prefix##skip_pos_##decl(decl##_t *slist, skip_pos_##decl_t op, ktype key) \
+    decl##_node_t *prefix##skip_pos_##decl(decl##_t *slist, skip_pos_##decl##_t op, ktype key) \
     {                                                                                        \
         decl##_node_t *node, query;                                                          \
                                                                                              \
@@ -3436,9 +3668,9 @@ _skip_read_le64(const uint8_t *src)
      */                                                                                      \
     int prefix##skip_set_##decl(decl##_t *slist, ktype key, vtype value)                     \
     {                                                                                        \
-        decl##_node_t node;                                                                  \
-        node.key = key;                                                                      \
-        return prefix##skip_update_##decl(slist, &node, (void *)(uintptr_t)value);           \
+        decl##_node_t query;                                                                 \
+        qblk;                                                                                \
+        return prefix##skip_update_##decl(slist, &query, (void *)(uintptr_t)value);           \
     }                                                                                        \
                                                                                              \
     /**                                                                                      \
@@ -3449,9 +3681,9 @@ _skip_read_le64(const uint8_t *src)
      */                                                                                      \
     int prefix##skip_del_##decl(decl##_t *slist, ktype key)                                  \
     {                                                                                        \
-        decl##_node_t node;                                                                  \
-        node.key = key;                                                                      \
-        return prefix##skip_remove_node_##decl(slist, &node);                                \
+        decl##_node_t query;                                                                 \
+        qblk;                                                                                \
+        return prefix##skip_remove_node_##decl(slist, &query);                               \
     }
 
 /**
@@ -3759,8 +3991,10 @@ _skip_read_le64(const uint8_t *src)
  *
  * Pre-allocates a contiguous block of memory for `capacity` node slots.
  * Each slot is cache-line aligned (64 bytes) to prevent false sharing.
- * The free list is managed via atomic CAS on an index (int32_t), avoiding
- * the ABA problem that plagues pointer-based lock-free stacks.
+ * Allocation claims a slot by CAS-ing its own per-slot state word from FREE
+ * to USED; a rotating cursor gives O(1)-amortised probing.  Because there is
+ * no shared recyclable free-list head, the allocator is unconditionally free
+ * of the ABA problem -- there is no version tag that could ever wrap.
  *
  * Using a pool eliminates malloc/free overhead during skiplist operations
  * and improves cache locality.  When the pool is exhausted, the pool
@@ -3814,32 +4048,16 @@ _skip_read_le64(const uint8_t *src)
         size_t capacity;                   /* total number of slots */                                               \
         size_t slot_size;                  /* bytes per slot (aligned to 64) */                                      \
         _SKIP_ALIGNAS(64) char *slots;     /* contiguous allocation for all slots */                                 \
-        _SKIP_ATOMIC(int32_t) free_head;   /* index of first free slot, -1 = empty */                                \
-        _SKIP_ATOMIC(int32_t) * next_free; /* per-slot free-list links (separate from slot data) */                  \
+        _SKIP_ATOMIC(uint32_t) * slot_state; /* per-slot state: 0 = free, 1 = used */                                \
+        _SKIP_ATOMIC(size_t) cursor;       /* rotating allocation hint (free-running) */                            \
     } _skip_pool_##decl##_t;                                                                                         \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
     /* _skip_pool_slot_ptr_ -- Return a pointer to the start of slot `i` */                                          \
     /* ------------------------------------------------------------------ */                                         \
-    static inline char *_skip_pool_slot_ptr_##decl(_skip_pool_##decl##_t *pool, int32_t i)                           \
+    static inline char *_skip_pool_slot_ptr_##decl(_skip_pool_##decl##_t *pool, size_t i)                            \
     {                                                                                                                \
-        return pool->slots + ((size_t)i * pool->slot_size);                                                          \
-    }                                                                                                                \
-                                                                                                                     \
-    /* ------------------------------------------------------------------ */                                         \
-    /* _skip_pool_next_free_ -- Read/write the next-free index for a     */                                          \
-    /*   slot.  Stored in a separate atomic array (not in the slot       */                                          \
-    /*   itself) to avoid data races between speculative free-list       */                                          \
-    /*   reads and concurrent node-data writes after CAS.                */                                          \
-    /* ------------------------------------------------------------------ */                                         \
-    static inline int32_t _skip_pool_get_next_free_##decl(_skip_pool_##decl##_t *pool, int32_t i)                    \
-    {                                                                                                                \
-        return _skip_atomic_load(&pool->next_free[i], memory_order_relaxed);                                         \
-    }                                                                                                                \
-                                                                                                                     \
-    static inline void _skip_pool_set_next_free_##decl(_skip_pool_##decl##_t *pool, int32_t i, int32_t next)         \
-    {                                                                                                                \
-        _skip_atomic_store(&pool->next_free[i], next, memory_order_relaxed);                                         \
+        return pool->slots + (i * pool->slot_size);                                                                  \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
@@ -3883,9 +4101,9 @@ _skip_read_le64(const uint8_t *src)
         if (pool->slots == NULL)                                                                                     \
             return ENOMEM;                                                                                           \
                                                                                                                      \
-        /* Allocate the separate free-list link array */                                                             \
-        pool->next_free = (_SKIP_ATOMIC(int32_t) *)calloc(capacity, sizeof(_SKIP_ATOMIC(int32_t)));                  \
-        if (pool->next_free == NULL) {                                                                               \
+        /* Allocate the per-slot state array (calloc -> all slots FREE). */                                          \
+        pool->slot_state = (_SKIP_ATOMIC(uint32_t) *)calloc(capacity, sizeof(_SKIP_ATOMIC(uint32_t)));               \
+        if (pool->slot_state == NULL) {                                                                              \
             _skip_aligned_free(pool->slots);                                                                         \
             pool->slots = NULL;                                                                                      \
             return ENOMEM;                                                                                           \
@@ -3894,47 +4112,40 @@ _skip_read_le64(const uint8_t *src)
         /* Zero the entire slab */                                                                                   \
         memset(pool->slots, 0, slot_size *capacity);                                                                 \
                                                                                                                      \
-        /* Build the free list: slot[0]->1, slot[1]->2, ..., slot[n-1]->-1 */                                        \
-        for (size_t i = 0; i < capacity - 1; i++) {                                                                  \
-            _skip_pool_set_next_free_##decl(pool, (int32_t)i, (int32_t)(i + 1));                                     \
-        }                                                                                                            \
-        _skip_pool_set_next_free_##decl(pool, (int32_t)(capacity - 1), -1);                                          \
-                                                                                                                     \
-        _skip_atomic_store(&pool->free_head, 0, memory_order_release);                                               \
+        _skip_atomic_store(&pool->cursor, 0, memory_order_release);                                                  \
                                                                                                                      \
         return 0;                                                                                                    \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
-    /* skip_pool_alloc_ -- Pop a slot from the free list (lock-free).     */                                         \
+    /* skip_pool_alloc_ -- Claim a free slot (lock-free, ABA-free).       */                                         \
     /*                                                                     */                                        \
-    /* Returns a fully zeroed node with sle_levels pointing into the      */                                         \
-    /* trailing portion of the same slot.  Returns NULL when the pool     */                                         \
-    /* is exhausted.                                                       */                                        \
+    /* Probes from a rotating cursor and CASes the first FREE slot's own  */                                         \
+    /* state word to USED.  Because each slot is claimed via its own      */                                         \
+    /* independent CAS (no shared recyclable head), no ABA window exists. */                                         \
+    /* Returns a fully zeroed node, or NULL when the pool is exhausted.   */                                         \
     /* ------------------------------------------------------------------ */                                         \
     decl##_node_t *prefix##skip_pool_alloc_##decl(_skip_pool_##decl##_t *pool)                                       \
     {                                                                                                                \
-        int32_t head, next;                                                                                          \
-        do {                                                                                                         \
-            head = _skip_atomic_load(&pool->free_head, memory_order_acquire);                                        \
-            if (head < 0)                                                                                            \
-                return NULL; /* pool exhausted */                                                                    \
-            next = _skip_pool_get_next_free_##decl(pool, head);                                                      \
-        } while (!_skip_atomic_cas_weak(&pool->free_head, &head, next, memory_order_acq_rel, memory_order_acquire)); \
-                                                                                                                     \
-        /* Zero the slot and initialize the node */                                                                  \
-        char *slot = _skip_pool_slot_ptr_##decl(pool, head);                                                         \
-        memset(slot, 0, sizeof(decl##_node_t) + sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT);      \
-                                                                                                                     \
-        decl##_node_t *node = (decl##_node_t *)slot;                                                                 \
-        node->field.sle_height = 0;                                                                                  \
-        node->field.sle_levels = (struct _skiplist_##decl##_level *)((uintptr_t)node + sizeof(decl##_node_t));       \
-                                                                                                                     \
-        return node;                                                                                                 \
+        size_t cap = pool->capacity;                                                                                 \
+        size_t start = _skip_atomic_fetch_add(&pool->cursor, 1, memory_order_relaxed);                               \
+        for (size_t t = 0; t < cap; t++) {                                                                           \
+            size_t i = (start + t) % cap;                                                                            \
+            uint32_t expected = 0;                                                                                   \
+            if (_skip_atomic_cas_strong(&pool->slot_state[i], &expected, 1u, memory_order_acq_rel, memory_order_relaxed)) { \
+                char *slot = _skip_pool_slot_ptr_##decl(pool, i);                                                    \
+                memset(slot, 0, sizeof(decl##_node_t) + sizeof(struct _skiplist_##decl##_level) * SKIPLIST_MAX_HEIGHT); \
+                decl##_node_t *node = (decl##_node_t *)slot;                                                         \
+                node->field.sle_height = 0;                                                                          \
+                node->field.sle_levels = (struct _skiplist_##decl##_level *)((uintptr_t)node + sizeof(decl##_node_t)); \
+                return node;                                                                                         \
+            }                                                                                                        \
+        }                                                                                                            \
+        return NULL; /* pool exhausted */                                                                            \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
-    /* skip_pool_free_ -- Push a slot back onto the free list (lock-free).*/                                         \
+    /* skip_pool_free_ -- Release a slot by flipping its state to FREE.   */                                         \
     /* ------------------------------------------------------------------ */                                         \
     void prefix##skip_pool_free_##decl(_skip_pool_##decl##_t *pool, decl##_node_t *node)                             \
     {                                                                                                                \
@@ -3942,11 +4153,9 @@ _skip_read_le64(const uint8_t *src)
         if (idx < 0)                                                                                                 \
             return; /* not from this pool, ignore */                                                                 \
                                                                                                                      \
-        int32_t head;                                                                                                \
-        do {                                                                                                         \
-            head = _skip_atomic_load(&pool->free_head, memory_order_acquire);                                        \
-            _skip_pool_set_next_free_##decl(pool, idx, head);                                                        \
-        } while (!_skip_atomic_cas_weak(&pool->free_head, &head, idx, memory_order_acq_rel, memory_order_acquire));  \
+        /* Release ordering publishes the caller's last writes to the slot   \
+           before it becomes claimable again. */                                                                     \
+        _skip_atomic_store(&pool->slot_state[idx], 0u, memory_order_release);                                        \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
@@ -3966,10 +4175,9 @@ _skip_read_le64(const uint8_t *src)
             return;                                                                                                  \
         _skip_aligned_free(pool->slots);                                                                             \
         pool->slots = NULL;                                                                                          \
-        free(pool->next_free);                                                                                       \
-        pool->next_free = NULL;                                                                                      \
+        free(pool->slot_state);                                                                                      \
+        pool->slot_state = NULL;                                                                                     \
         pool->capacity = 0;                                                                                          \
-        _skip_atomic_store(&pool->free_head, -1, memory_order_release);                                              \
     }                                                                                                                \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \

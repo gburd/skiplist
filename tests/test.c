@@ -103,18 +103,26 @@ SKIPLIST_DECL_ARCHIVE(
     },
     /* read_entry_blk */
     {
+        /* Validate the declared record size (`bytes`) before consuming `buf`.
+           Trusting the on-disk length without bounds checks is an out-of-bounds
+           read on malformed/hostile input. */
+        node->value = NULL;
         uint64_t off = 0;
-        memcpy(&node->key, buf + off, sizeof(node->key));
-        off += sizeof(node->key);
-        uint32_t slen;
-        memcpy(&slen, buf + off, sizeof(slen));
-        off += sizeof(slen);
-        if (slen > 0) {
-            node->value = (char *)malloc(slen + 1);
-            memcpy(node->value, buf + off, slen);
-            node->value[slen] = '\0';
+        if (bytes < sizeof(node->key) + sizeof(uint32_t)) {
+            node->key = 0;
         } else {
-            node->value = NULL;
+            memcpy(&node->key, buf + off, sizeof(node->key));
+            off += sizeof(node->key);
+            uint32_t slen;
+            memcpy(&slen, buf + off, sizeof(slen));
+            off += sizeof(slen);
+            if (slen > 0 && off + slen <= bytes) {
+                node->value = (char *)malloc(slen + 1);
+                if (node->value) {
+                    memcpy(node->value, buf + off, slen);
+                    node->value[slen] = '\0';
+                }
+            }
         }
     })
 
