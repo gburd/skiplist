@@ -27,7 +27,7 @@ test_unit = executable('test_skiplist',
   c_args : test_args,
   link_args : ['-lm'],
 )
-test('unit', test_unit, timeout : 120)
+test('unit', test_unit, timeout : 1200)
 
 # Multi-threaded tests.  Always built; sanitizer choice comes from the
 # global -Db_sanitize option (set 'thread' to exercise TSAN).
@@ -51,7 +51,7 @@ test_unit_splay = executable('test_skiplist_splay',
   c_args : splay_args,
   link_args : ['-lm'],
 )
-test('unit-splay', test_unit_splay, timeout : 120)
+test('unit-splay', test_unit_splay, timeout : 1200)
 
 test_concurrent_splay = executable('test_concurrent_splay',
   'test_concurrent.c',

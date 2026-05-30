@@ -1,5 +1,5 @@
 project('skiplist', 'c',
-  version : '1.0.0',
+  version : '1.1.2',
   license : 'ISC OR MIT',
   default_options : [
     'c_std=c11',
@@ -10,6 +10,15 @@ project('skiplist', 'c',
   ],
   meson_version : '>= 0.60.0',
 )
+
+# GCC 14+ emits -Wtsan for the seq_cst atomic_thread_fence used by the EBR
+# pin/advance protocol: ThreadSanitizer cannot model a standalone fence.
+# The fences are intentional and correct (validated under the Makefile's
+# -Og TSAN build), so under -O2 + -fsanitize=thread + werror we silence the
+# diagnostic.  Clang has no -Wtsan, so this is gated to GCC.
+if meson.get_compiler('c').get_id() == 'gcc' and get_option('b_sanitize').contains('thread')
+  add_project_arguments('-Wno-tsan', language : 'c')
+endif
 
 # This is a header-only library.  We declare it as a meson dependency
 # so downstream projects can `dependency('skiplist')` and inherit the
