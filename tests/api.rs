@@ -171,3 +171,30 @@ fn set_take_and_remove_paths() {
     assert!(!s.remove(&6));
     assert_eq!(s.last(), Some(&9));
 }
+
+#[test]
+fn ordering_and_hashing_traits() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let a: SplayMap<i32, i32> = (0..5).map(|i| (i, i)).collect();
+    let b: SplayMap<i32, i32> = (0..5).map(|i| (i, i)).collect();
+    let mut c = a.clone();
+    c.insert(5, 5);
+
+    assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+    assert_eq!(a.partial_cmp(&b), Some(std::cmp::Ordering::Equal));
+    assert!(a < c);
+
+    let hash = |m: &SplayMap<i32, i32>| {
+        let mut h = DefaultHasher::new();
+        m.hash(&mut h);
+        h.finish()
+    };
+    assert_eq!(hash(&a), hash(&b));
+
+    let s1: SplaySet<i32> = (0..3).collect();
+    let s2: SplaySet<i32> = (0..4).collect();
+    assert!(s1 < s2);
+    assert_eq!(s1.cmp(&s1.clone()), std::cmp::Ordering::Equal);
+}

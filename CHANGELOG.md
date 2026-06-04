@@ -23,7 +23,8 @@ safe Rust, ported from the C `sl.h` implementation.
   owning `into_iter`. Map and key/value iterators are double-ended and
   exact-size.
 - Standard trait impls: `Debug`, `Clone`, `Default`, `PartialEq`/`Eq`,
-  `Index`, `FromIterator`, `Extend`, and `IntoIterator` (by value, `&`, `&mut`).
+  `PartialOrd`/`Ord`, `Hash`, `Index`, `FromIterator`, `Extend`, and
+  `IntoIterator` (by value, `&`, `&mut`).
 - `Config` for tuning the rebalance interval and PRNG seed.
 - `serde` feature: `Serialize`/`Deserialize` for the map and set.
 - `dot` feature: `SplayMap::to_dot` for GraphViz visualization.

@@ -177,6 +177,24 @@ impl<T: PartialEq> PartialEq for SplaySet<T> {
 
 impl<T: Eq> Eq for SplaySet<T> {}
 
+impl<T: PartialOrd> PartialOrd for SplaySet<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.map.partial_cmp(&other.map)
+    }
+}
+
+impl<T: Ord> Ord for SplaySet<T> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.map.cmp(&other.map)
+    }
+}
+
+impl<T: core::hash::Hash> core::hash::Hash for SplaySet<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.map.hash(state);
+    }
+}
+
 impl<T: Ord> FromIterator<T> for SplaySet<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut set = Self::new();

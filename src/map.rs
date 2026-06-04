@@ -854,6 +854,27 @@ impl<K: PartialEq, V: PartialEq> PartialEq for SplayMap<K, V> {
 
 impl<K: Eq, V: Eq> Eq for SplayMap<K, V> {}
 
+impl<K: PartialOrd, V: PartialOrd> PartialOrd for SplayMap<K, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<K: Ord, V: Ord> Ord for SplayMap<K, V> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl<K: core::hash::Hash, V: core::hash::Hash> core::hash::Hash for SplayMap<K, V> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self.len());
+        for entry in self {
+            entry.hash(state);
+        }
+    }
+}
+
 impl<K: Ord, V> FromIterator<(K, V)> for SplayMap<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut map = Self::new();
