@@ -1,94 +1,27 @@
-# Build artifacts
-*.o
-*.a
-*.so
-*.dylib
-*.dll
-*.gcda
-*.gcno
-*.gcov
-skiplist.pc
+# Rust build artifacts
+/target
+**/*.rs.bk
+Cargo.lock
 
-# Test binaries
-tests/test
-tests/test_cov
-tests/test_cov_concurrent
-tests/test_cov_concurrent_splay
-tests/test_cov_single
-tests/test_cov_splay
-tests/test_concurrent
-tests/test_concurrent_splay
-tests/test_concurrent_tsan
-tests/test_concurrent_tsan_splay
-tests/test_single
-tests/test_splay
-tests/test_splay_verify
-tests/test_valgrind
-tests/test_property
-tests/test_model
-tests/test_model_splay
-tests/fuzz_deserialize
-tests/fuzz_deserialize_standalone
-tests/.hegel/
-.hegel/
+# cargo-fuzz
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/Cargo.lock
 
-# Example binaries
-examples/ex01
-examples/ex02
-examples/ex03
-examples/ex04
-examples/ex05
-examples/ex06
-examples/ex07
-examples/ex08
-examples/ex09
-examples/ex10
-examples/mls
-examples/mls.c
+# Coverage
+*.profraw
+/coverage-report
 
-# Benchmark binaries
-bench/bench
-
-# Coverage reports
-coverage-report/
-
-# Editor / IDE swap and backup files
+# Editor / OS
 *.swp
-*.swo
 *~
-*.iml
-*.iws
-
-# Build tool caches and out-of-tree builds
-.cache/
-.direnv/
-build/
-builddir*/
-cmake-build*/
-compile_commands.json
-.cmake_dirty
-Testing/
-
-# Autoconf / Autotools generated files
-autom4te.cache/
-build-aux/
-config.log
-config.mk
-config.status
-configure
-Makefile.in
-aclocal.m4
-
-# Meson generated files
-meson-info/
-meson-logs/
-meson-private/
-
-# OS
 .DS_Store
-Thumbs.db
 
-# Misc scratch
-tmp/
-*.dat
-*.db
+# Local tooling / agent artifacts (not part of the crate)
+/.direnv
+/.hegel
+/.agent
+/.idea
+/.vscode
+AGENTS.md

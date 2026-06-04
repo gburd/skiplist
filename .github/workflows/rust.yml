@@ -1,0 +1,79 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main, "ports/rust"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, "1.70.0", nightly]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Build (default features)
+        run: cargo build --verbose
+      - name: Build (no default features, no_std)
+        run: cargo build --no-default-features --verbose
+      - name: Test (all features)
+        run: cargo test --all-features --verbose
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (all features, all targets)
+        run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Clippy (no default features)
+        run: cargo clippy --no-default-features -- -D warnings
+      - name: Docs
+        run: cargo doc --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Miri (detect undefined behaviour)
+        run: cargo miri test --all-features
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage (fail under 90% lines)
+        run: cargo llvm-cov --all-features --fail-under-lines 90
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
