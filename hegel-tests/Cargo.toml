@@ -1,0 +1,18 @@
+[package]
+name = "splaylist-hegel-tests"
+version = "0.0.0"
+publish = false
+edition = "2021"
+# hegeltest (the `hegel` crate) requires a recent toolchain and a Hypothesis
+# server, so these property tests live outside the published crate to keep its
+# own `cargo test` self-contained and MSRV-clean. Run with:
+#   cd hegel-tests && cargo test
+rust-version = "1.86"
+
+[dependencies]
+splaylist = { path = ".." }
+
+[dev-dependencies]
+hegeltest = "0.14"
+
+[workspace]

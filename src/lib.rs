@@ -17,6 +17,12 @@
 //!
 //! # Which collection should I use?
 //!
+//! Note up front: on raw speed [`BTreeMap`](std::collections::BTreeMap) beats
+//! this and every other skip list — cache-friendly B-trees win on modern
+//! hardware. Adaptation lowers splaylist's cost on skewed reads relative to
+//! itself, but does not close that gap. Choose `splaylist` when you want a skip
+//! list with access-frequency adaptation specifically.
+//!
 //! - [`SplayMap`] / [`SplaySet`] — when your workload is **skewed** (a hot
 //!   subset of keys is accessed far more often than the rest) and
 //!   **single-threaded**. The adaptive towers pay off precisely when some

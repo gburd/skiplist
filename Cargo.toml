@@ -16,6 +16,8 @@ exclude = [
     "/.github",
     "/.forgejo",
     "/fuzz",
+    "/comparison",
+    "/hegel-tests",
     "/benches/results",
     "AGENTS.md",
     "/.agent",

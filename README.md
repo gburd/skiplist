@@ -15,8 +15,8 @@ forward pointers, giving `O(log n)` search, insert, and remove on average. A
 *splay list* (Aksenov et al., 2020) adds adaptivity: each node counts how often
 it is accessed, and the structure periodically reshapes itself so the expected
 search cost tracks the *entropy* of the access distribution rather than a flat
-`log n`. On a skewed workload — a hot subset of keys dominating — that is a
-measurable win.
+`log n`. In practice that lowers splaylist's *own* cost on skewed reads; it does
+not make it faster than `BTreeMap` (see [Benchmarks](#benchmarks)).
 
 This crate is the safe-Rust descendant of a C `sl.h` splay list. It contains
 **no `unsafe` code** (`#![forbid(unsafe_code)]`): nodes live in a single arena
@@ -50,12 +50,57 @@ let mid: Vec<_> = map.range(2..).map(|(k, _)| *k).collect();
 assert_eq!(mid, [2, 3]);
 ```
 
+## Benchmarks
+
+Honest summary up front: **`BTreeMap` is faster than every skip list measured
+here, including this one.** Skip lists lose to cache-friendly B-trees on modern
+hardware — that is a known, expected result, not a defect. Pick `splaylist`
+when you want a skip list with access-frequency adaptation, not as a drop-in
+speed upgrade over the standard library.
+
+Methodology (see [`comparison/benches/compare.rs`](comparison/benches/compare.rs)):
+keys and the full access sequence are generated once from a fixed seed and
+replayed verbatim against every implementation; `u64 -> u64`, `N = 100_000`;
+Criterion with `lto = "thin"`, `codegen-units = 1`. The skewed workload sends
+~80% of lookups to a *scattered* random 1% of keys (clustering them at the low
+end would be cheap in any skip list and would not isolate adaptation); every
+map is warmed with the identical read sequence first, and splaylist is
+additionally allowed to reach adapted steady state (its background rebalance
+cost is not charged to the measured lookups). Reproduce with `cd comparison &&
+cargo bench`.
+
+Median time per operation on one x86-64 Linux machine (lower is better; your
+numbers will differ):
+
+| Operation (per op)        | `BTreeMap` | `splaylist` | `skiplist` | `crossbeam-skiplist` |
+|---------------------------|-----------:|------------:|-----------:|---------------------:|
+| insert (random order)     |     ~79 ns |     ~328 ns |    ~415 ns |              ~259 ns |
+| lookup, uniform           |     ~42 ns |     ~263 ns |    ~218 ns |              ~152 ns |
+| lookup, skewed (adapted)  |     ~38 ns |     ~229 ns |    ~196 ns |              ~140 ns |
+| iterate (per element)     |    ~1.1 ns |     ~2.6 ns |    ~3.6 ns |               ~26 ns |
+
+`crossbeam-skiplist` is a concurrent, lock-free structure; measuring it
+single-threaded charges it atomic/epoch overhead it would amortize across
+threads, so treat its column as context, not a head-to-head.
+
+What the numbers show:
+
+- **`BTreeMap` wins across the board** by roughly 5–6x on lookups. If raw
+  ordered-map speed is all you need, use it.
+- **Among skip lists, `splaylist` is competitive**: fastest insert and
+  iteration of the three, slightly slower point lookups.
+- **Adaptation helps, modestly.** splaylist's own skewed-lookup latency is
+  ~13% better than its uniform latency (~229 ns vs ~263 ns) because hot keys
+  climb into taller towers. The benefit grows as the hot set gets more
+  concentrated and shrinks as access flattens; it does not close the gap to
+  `BTreeMap`.
+
 ## When should I use it?
 
 | Use case | Reach for |
 |----------|-----------|
-| Skewed, single-threaded access (a hot key subset) | **`splaylist`** |
-| Roughly uniform access | [`std::collections::BTreeMap`] — better constants |
+| You specifically want a skip list with access-frequency adaptation | **`splaylist`** |
+| You just need a fast ordered map/set | [`std::collections::BTreeMap`] — faster here (see [Benchmarks](#benchmarks)) |
 | Concurrent / lock-free ordered map | [`crossbeam-skiplist`] |
 
 `splaylist` is deliberately single-threaded. `SplayMap` is `Send` when `K` and
@@ -92,14 +137,24 @@ deterministic for tests and reproducible benchmarks.
 ## Correctness and testing
 
 - `#![forbid(unsafe_code)]` — the whole crate is safe Rust.
-- Differential property tests (`proptest`) check every operation against
-  `BTreeMap`/`BTreeSet`, including an aggressive mode that rebalances on every
-  mutation, and forward/reverse iteration and range equivalence.
+- Differential property tests (`proptest`, in `tests/`) check every operation
+  against `BTreeMap`/`BTreeSet`, including an aggressive mode that rebalances on
+  every mutation, plus forward/reverse iteration and range equivalence. These
+  are self-contained and run on every `cargo test`.
+- A Hegel (Hypothesis-backed) stateful model test lives in `hegel-tests/`
+  (a separate crate, since it needs a Hypothesis server): it drives a
+  `SplayMap` and a `BTreeMap` through random operation sequences and asserts
+  agreement after each step. Run with `cd hegel-tests && cargo test`.
 - Internal unit tests assert the structural invariants (level 0 is a complete,
   strictly-ascending, doubly-linked list; every upper level is a sorted
-  subsequence) hold under churn, and that hot keys end up taller than cold ones.
+  subsequence) hold under churn, that hot keys end up taller than cold ones,
+  and — as a regression guard — that heavy adaptation never collapses search
+  cost below `O(log n)`.
+- A `cargo fuzz` differential target lives in `fuzz/`.
 - `cargo miri test` is clean (no undefined behaviour), and `cargo deny` guards
   the dependency tree.
+- Comparison benchmarks against other Rust ordered maps live in `comparison/`
+  (see [Benchmarks](#benchmarks)).
 
 ## Minimum supported Rust version
 

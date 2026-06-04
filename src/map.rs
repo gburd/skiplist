@@ -49,8 +49,13 @@ pub(crate) struct Node<K, V> {
     pub(crate) key: K,
     pub(crate) value: V,
     /// `forward[l]` is the next node at level `l`, or [`NIL`]. Length is the
-    /// node's tower height (`>= 1`).
+    /// node's current tower height (`>= 1`).
     pub(crate) forward: Vec<usize>,
+    /// The randomized height this node was inserted with. Adaptation may grow
+    /// a node above this baseline (promotion) but never shrinks it below it, so
+    /// the geometric height distribution that guarantees `O(log n)` search is
+    /// always preserved.
+    pub(crate) base: usize,
     /// Level-0 predecessor (or [`NIL`] if this is the first node). Maintains a
     /// doubly-linked base list so iteration is bidirectional.
     pub(crate) prev: usize,
@@ -242,6 +247,7 @@ impl<K, V> SplayMap<K, V> {
             key,
             value,
             forward: alloc::vec![NIL; levels],
+            base: levels,
             prev: NIL,
             hits: Cell::new(1),
         };
@@ -695,39 +701,58 @@ impl<K: Ord, V> SplayMap<K, V> {
         }
     }
 
-    /// Desired tower height (number of levels, in `1..=self.level`) for a node
-    /// with `hits` accesses, following the splay-list target
-    /// `height ≈ K - 1 - log2(total / hits)`.
+    /// Desired tower height (number of levels, `>= 1`) for a node with `hits`
+    /// accesses, following the splay-list target `height ≈ K - log2(total /
+    /// hits)`.
+    ///
+    /// `K` is anchored to `log2(len)` — the natural height of a balanced skip
+    /// list of this size — rather than to the live `self.level`. Anchoring to
+    /// `self.level` creates a feedback loop (demotions shrink `self.level`,
+    /// which shrinks every node's target, which causes more demotions) that
+    /// collapses the structure toward a linked list. A stable anchor keeps the
+    /// distribution healthy, so search stays `O(log n)` even under heavy
+    /// adaptation.
     fn desired_levels(&self, hits: u64) -> usize {
         let total = self.total_hits.get();
-        if total == 0 || hits == 0 {
+        if self.len < 2 || total == 0 || hits == 0 {
             return 1;
         }
+        let k = (self.len as u64).ilog2().max(1) as usize;
         let ratio = (total / hits).max(1);
-        let log2 = ratio.ilog2() as usize;
-        let height = (self.level - 1).saturating_sub(log2);
-        height + 1
+        let drop = ratio.ilog2() as usize;
+        let levels = k.saturating_sub(drop) + 1;
+        levels.clamp(1, MAX_LEVEL - 1)
     }
 
     /// Promotes or demotes node `idx` by at most one level toward its desired
-    /// height.
+    /// height, but never below the node's randomized baseline (`base`), which
+    /// keeps the geometric height distribution — and `O(log n)` search — intact.
     fn adapt_node(&mut self, idx: usize) {
         let cur = self.node(idx).forward.len();
+        let base = self.node(idx).base.max(1);
         let desired = self.desired_levels(self.node(idx).hits.get());
         if desired > cur {
             self.promote(idx, cur);
-        } else if desired < cur && cur > 1 {
+        } else if desired < cur && cur > base {
             self.demote(idx, cur);
         }
     }
 
-    /// Adds level `new_lvl` (`= cur` levels) to node `idx`.
+    /// Adds one level (index `new_lvl == cur`) to node `idx`, growing the
+    /// structure's height if the node now reaches above the current top level.
     fn promote(&mut self, idx: usize, new_lvl: usize) {
-        if new_lvl >= self.level {
+        if new_lvl >= MAX_LEVEL {
             return;
         }
-        let key_ptr = idx;
-        let (update, _, _) = self.find_update(self.node(key_ptr).key.borrow());
+        if new_lvl >= self.level {
+            // Grow the head: the new upper levels start empty (point at the
+            // tail) until this node is spliced in below.
+            for entry in self.head.iter_mut().take(new_lvl + 1).skip(self.level) {
+                *entry = NIL;
+            }
+            self.level = new_lvl + 1;
+        }
+        let (update, _, _) = self.find_update(self.node(idx).key.borrow());
         let pred = update[new_lvl];
         let nxt = self.forward_from(pred, new_lvl);
         self.node_mut(idx).forward.push(nxt);
@@ -990,6 +1015,25 @@ mod tests {
             }
         }
 
+        /// Counts the nodes visited to locate `key` (a proxy for search cost).
+        /// Test-only.
+        fn search_steps(&self, key: &K) -> usize {
+            let mut steps = 0usize;
+            let mut pred = NIL;
+            for lvl in (0..self.level).rev() {
+                loop {
+                    let nxt = self.forward_from(pred, lvl);
+                    if nxt != NIL && self.node(nxt).key < *key {
+                        pred = nxt;
+                        steps += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            steps
+        }
+
         /// Checks the structural invariants and panics on any violation.
         /// Test-only; exercised by the unit tests below.
         fn check_invariants(&self) {
@@ -1086,4 +1130,45 @@ mod tests {
     }
 
     const MAX_PASSES: usize = 12;
+
+    #[test]
+    fn adaptation_never_collapses_search_cost() {
+        // A scattered hot set plus many rebalance passes must NOT degrade the
+        // structure toward a linked list: search cost stays O(log n) because
+        // demotion never drops a node below its randomized baseline height.
+        // (Regression test for a collapse found by the comparison benchmark.)
+        let n = 8_000u32;
+        let mut m = SplayMap::with_config(Config {
+            splay_interval: 64,
+            seed: 17,
+        });
+        for k in 0..n {
+            m.insert(k, k);
+        }
+        // Scattered hot set: every 97th key.
+        let hot: Vec<u32> = (0..n).filter(|k| k % 97 == 0).collect();
+        for _ in 0..20 {
+            for &k in &hot {
+                let _ = m.get(&k);
+            }
+        }
+        for _ in 0..30 {
+            m.rebalance();
+        }
+        m.check_invariants();
+
+        // log2(8000) ~ 13; allow a generous constant factor. A collapsed
+        // structure would visit thousands of nodes per search.
+        let bound = 8 * (n.ilog2() as usize + 1);
+        let mut worst = 0;
+        for k in 0..n {
+            let s = m.search_steps(&k);
+            worst = worst.max(s);
+            assert_eq!(m.get(&k), Some(&k), "key {k} must still be findable");
+        }
+        assert!(
+            worst <= bound,
+            "worst-case search visited {worst} nodes (bound {bound}); structure collapsed"
+        );
+    }
 }

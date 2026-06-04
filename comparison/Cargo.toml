@@ -1,0 +1,28 @@
+[package]
+name = "splaylist-comparison"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Standalone benchmark harness comparing splaylist against other pure-Rust
+# ordered maps. Kept out of the published crate so those comparison crates do
+# not enter splaylist's dependency tree or affect its MSRV. Run with:
+#   cd comparison && cargo bench
+
+[dependencies]
+splaylist = { path = "..", features = [] }
+skiplist = "1.1"
+crossbeam-skiplist = "0.1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "compare"
+harness = false
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
+[workspace]
