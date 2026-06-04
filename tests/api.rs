@@ -55,16 +55,19 @@ fn every_iterator_form() {
     let mut m: SplayMap<i32, i32> = (0..10).map(|i| (i, i * i)).collect();
 
     // keys / values forward and reverse.
-    assert_eq!(m.keys().copied().collect::<Vec<_>>(), (0..10).collect::<Vec<_>>());
+    assert_eq!(
+        m.keys().copied().collect::<Vec<_>>(),
+        (0..10).collect::<Vec<_>>()
+    );
     assert_eq!(
         m.keys().rev().copied().collect::<Vec<_>>(),
         (0..10).rev().collect::<Vec<_>>()
     );
-    assert_eq!(m.values().copied().collect::<Vec<_>>(), (0..10).map(|i| i * i).collect::<Vec<_>>());
     assert_eq!(
-        m.values().rev().next().copied(),
-        Some(81)
+        m.values().copied().collect::<Vec<_>>(),
+        (0..10).map(|i| i * i).collect::<Vec<_>>()
     );
+    assert_eq!(m.values().rev().next().copied(), Some(81));
 
     // ExactSize.
     assert_eq!(m.iter().len(), 10);

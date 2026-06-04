@@ -39,5 +39,8 @@ fn main() {
     println!("  hot keys are still found in ascending-order iteration,");
     println!("  but now sit in taller towers so their lookups are cheaper.");
     println!();
-    println!("  sample lookups: {:?}", hot.map(|k| (k, map.get(&k).copied())));
+    println!(
+        "  sample lookups: {:?}",
+        hot.map(|k| (k, map.get(&k).copied()))
+    );
 }
