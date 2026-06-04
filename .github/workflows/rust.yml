@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: [stable, "1.70.0", nightly]
+        rust: [stable, nightly]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -28,6 +28,31 @@ jobs:
         run: cargo build --no-default-features --verbose
       - name: Test (all features)
         run: cargo test --all-features --verbose
+
+  msrv:
+    name: build on MSRV (1.70)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.70.0"
+      # The library must compile on the MSRV. Tests/benches pull dev-deps that
+      # may require a newer toolchain, so they run on stable/nightly above.
+      - run: cargo build --all-features --verbose
+      - run: cargo build --no-default-features --verbose
+
+  hegel:
+    name: property tests (Hegel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run Hegel property suite
+        run: cargo test --manifest-path hegel-tests/Cargo.toml
 
   lint:
     runs-on: ubuntu-latest

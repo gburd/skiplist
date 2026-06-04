@@ -137,14 +137,15 @@ deterministic for tests and reproducible benchmarks.
 ## Correctness and testing
 
 - `#![forbid(unsafe_code)]` — the whole crate is safe Rust.
-- Differential property tests (`proptest`, in `tests/`) check every operation
-  against `BTreeMap`/`BTreeSet`, including an aggressive mode that rebalances on
-  every mutation, plus forward/reverse iteration and range equivalence. These
-  are self-contained and run on every `cargo test`.
-- A Hegel (Hypothesis-backed) stateful model test lives in `hegel-tests/`
-  (a separate crate, since it needs a Hypothesis server): it drives a
-  `SplayMap` and a `BTreeMap` through random operation sequences and asserts
-  agreement after each step. Run with `cd hegel-tests && cargo test`.
+- Property-based tests use [Hegel](https://docs.rs/hegeltest) (Hypothesis
+  under the hood). A stateful model test drives `SplayMap`/`SplaySet` through
+  random operation sequences against `BTreeMap`/`BTreeSet` oracles and asserts
+  agreement after every step (in default, aggressive, and disabled adaptation
+  modes), plus range and `into_iter` equivalence. They live in `hegel-tests/`
+  (a separate crate, since `hegeltest` needs a Hypothesis server); run with
+  `cd hegel-tests && cargo test`.
+- Example-based integration and unit tests run on every `cargo test` and are
+  self-contained (no server required).
 - Internal unit tests assert the structural invariants (level 0 is a complete,
   strictly-ascending, doubly-linked list; every upper level is a sorted
   subsequence) hold under churn, that hot keys end up taller than cold ones,

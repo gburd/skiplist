@@ -1,23 +1,26 @@
 //! Hegel (Hypothesis-backed) property tests for `splaylist`.
 //!
-//! The centerpiece is a stateful model test: a `SplayMap` is driven through a
-//! random sequence of operations alongside a `BTreeMap` oracle, and the two are
-//! required to agree after every step. This is the highest-value property for
-//! an ordered-map data structure.
+//! This is the crate's property-based test suite (it replaces an earlier
+//! `proptest` suite). The centerpiece is a stateful model test: a `SplayMap`
+//! is driven through a random sequence of operations alongside a `BTreeMap`
+//! oracle, and the two are required to agree after every step. A parallel set
+//! model checks `SplaySet` against `BTreeSet`.
 //!
 //! These tests live in a separate (unpublished) crate because `hegeltest`
 //! needs a recent toolchain and a Hypothesis server; keeping them out of the
-//! main crate lets `cargo test` there stay dependency-light. Run with:
-//! `cd hegel-tests && cargo test`.
+//! main crate lets `cargo test` there stay dependency-light and MSRV-clean.
+//! Run with: `cd hegel-tests && cargo test`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hegel::generators;
 use hegel::TestCase;
-use splaylist::SplayMap;
+use splaylist::{Config, SplayMap, SplaySet};
 
-/// Stateful model: every operation is mirrored against a `BTreeMap`, and the
-/// invariant checks full agreement (length, forward and reverse iteration).
+/// Stateful map model: every operation is mirrored against a `BTreeMap`, and
+/// the invariant checks full agreement (length, forward and reverse iteration,
+/// first/last). The `splay_interval` is fixed per run so the three entry points
+/// below exercise default, aggressive, and disabled adaptation.
 struct MapModel {
     subject: SplayMap<u16, u32>,
     model: BTreeMap<u16, u32>,
@@ -87,17 +90,79 @@ impl MapModel {
     }
 }
 
-#[hegel::test]
-fn splaymap_matches_btreemap(tc: TestCase) {
+fn run_map_model(interval: u64, tc: TestCase) {
     let machine = MapModel {
-        subject: SplayMap::new(),
+        subject: SplayMap::with_config(Config {
+            splay_interval: interval,
+            seed: 0x5eed,
+        }),
         model: BTreeMap::new(),
     };
     hegel::stateful::run(machine, tc);
 }
 
-/// Range queries must agree with `BTreeMap` over arbitrary bounds. Drawn keys
-/// are sorted into `lo <= hi` so the range is always well-formed.
+#[hegel::test]
+fn map_matches_btreemap_default(tc: TestCase) {
+    run_map_model(Config::default().splay_interval, tc);
+}
+
+/// Aggressive adaptation: rebalance the touched path on every mutation.
+#[hegel::test]
+fn map_matches_btreemap_aggressive(tc: TestCase) {
+    run_map_model(1, tc);
+}
+
+/// Adaptation disabled: a plain randomized skip list must still agree.
+#[hegel::test]
+fn map_matches_btreemap_no_adapt(tc: TestCase) {
+    run_map_model(0, tc);
+}
+
+/// Stateful set model against `BTreeSet`.
+struct SetModel {
+    subject: SplaySet<u16>,
+    model: BTreeSet<u16>,
+}
+
+#[hegel::state_machine]
+impl SetModel {
+    #[rule]
+    fn insert(&mut self, tc: TestCase) {
+        let v = tc.draw(generators::integers::<u16>());
+        assert_eq!(self.subject.insert(v), self.model.insert(v));
+    }
+
+    #[rule]
+    fn remove(&mut self, tc: TestCase) {
+        let v = tc.draw(generators::integers::<u16>());
+        assert_eq!(self.subject.remove(&v), self.model.remove(&v));
+    }
+
+    #[rule]
+    fn contains(&mut self, tc: TestCase) {
+        let v = tc.draw(generators::integers::<u16>());
+        assert_eq!(self.subject.contains(&v), self.model.contains(&v));
+    }
+
+    #[invariant]
+    fn agrees_with_model(&mut self, _: TestCase) {
+        assert_eq!(self.subject.len(), self.model.len());
+        assert!(self.subject.iter().eq(self.model.iter()));
+        assert_eq!(self.subject.first(), self.model.iter().next());
+        assert_eq!(self.subject.last(), self.model.iter().next_back());
+    }
+}
+
+#[hegel::test]
+fn set_matches_btreeset(tc: TestCase) {
+    let machine = SetModel {
+        subject: SplaySet::new(),
+        model: BTreeSet::new(),
+    };
+    hegel::stateful::run(machine, tc);
+}
+
+/// Range queries must agree with `BTreeMap` over arbitrary well-formed bounds.
 #[hegel::test]
 fn range_matches_btreemap(tc: TestCase) {
     let pairs: Vec<(u16, u32)> = {
@@ -121,4 +186,26 @@ fn range_matches_btreemap(tc: TestCase) {
     }
     assert!(subject.range(a..b).eq(model.range(a..b)));
     assert!(subject.range(a..=b).eq(model.range(a..=b)));
+}
+
+/// `into_iter` yields every entry in ascending key order, matching `BTreeMap`.
+#[hegel::test]
+fn into_iter_sorted_and_complete(tc: TestCase) {
+    let pairs: Vec<(u16, u32)> = {
+        let n = tc.draw(generators::integers::<u8>()) as usize;
+        (0..n)
+            .map(|_| {
+                (
+                    tc.draw(generators::integers::<u16>()),
+                    tc.draw(generators::integers::<u32>()),
+                )
+            })
+            .collect()
+    };
+    let subject: SplayMap<u16, u32> = pairs.iter().copied().collect();
+    let model: BTreeMap<u16, u32> = pairs.into_iter().collect();
+
+    let got: Vec<(u16, u32)> = subject.into_iter().collect();
+    let want: Vec<(u16, u32)> = model.into_iter().collect();
+    assert_eq!(got, want);
 }
