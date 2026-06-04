@@ -22,6 +22,15 @@
 //!
 //! Run: `cd comparison && cargo bench`. Numbers in the README were taken with
 //! `lto = "thin"`, `codegen-units = 1` (see Cargo.toml).
+//!
+//! Performance investigation log (negative result, recorded so it is not
+//! re-tried): replacing the per-node `forward: Vec<usize>` with a single flat
+//! "links" arena owned by the map was measured here in a controlled A/B. It
+//! *regressed* every operation (insert, lookup, and notably iterate by ~13%):
+//! the shared-arena indirection has worse traversal locality than per-node
+//! arrays, and free-list bookkeeping offset the saved allocation. The lookup
+//! gap to `BTreeMap` is fundamental (B-trees pack keys contiguously; skip
+//! lists pointer-chase) and is not closable by a safe micro-optimization.
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
