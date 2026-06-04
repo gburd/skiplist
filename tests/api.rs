@@ -67,7 +67,7 @@ fn every_iterator_form() {
         m.values().copied().collect::<Vec<_>>(),
         (0..10).map(|i| i * i).collect::<Vec<_>>()
     );
-    assert_eq!(m.values().rev().next().copied(), Some(81));
+    assert_eq!(m.values().next_back().copied(), Some(81));
 
     // ExactSize.
     assert_eq!(m.iter().len(), 10);
@@ -75,7 +75,7 @@ fn every_iterator_form() {
     assert_eq!(m.values().len(), 10);
 
     // iter_mut forward + reverse, values_mut.
-    for (k, v) in m.iter_mut() {
+    for (k, v) in &mut m {
         *v += k;
     }
     assert_eq!(m[&3], 9 + 3);
@@ -85,7 +85,7 @@ fn every_iterator_form() {
         *v = 0;
     }
     assert!(m.values().all(|&v| v == 0));
-    let vm_back = m.values_mut().rev().next();
+    let vm_back = m.values_mut().next_back();
     assert_eq!(vm_back, Some(&mut 0));
 
     // owning iterator with size_hint.
@@ -101,7 +101,7 @@ fn map_into_iter_by_ref() {
     for (k, v) in &m {
         total += k + v;
     }
-    assert_eq!(total, 2 * (0 + 1 + 2 + 3 + 4));
+    assert_eq!(total, 2 * (1 + 2 + 3 + 4));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn set_full_surface() {
     // &set iteration, Debug, Eq, clone.
     let collected: Vec<_> = (&s).into_iter().copied().collect();
     assert_eq!(collected, [1, 2, 3, 4, 5]);
-    assert_eq!(s.iter().rev().next(), Some(&5));
+    assert_eq!(s.iter().next_back(), Some(&5));
     assert_eq!(s.iter().len(), 5);
     let s2 = s.clone();
     assert_eq!(s, s2);

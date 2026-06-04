@@ -89,7 +89,8 @@ fn range_queries() {
 #[should_panic(expected = "range start is greater than range end")]
 fn range_inverted_panics() {
     let m: SplayMap<i32, i32> = (0..10).map(|i| (i, i)).collect();
-    let _ = m.range(8..2).count();
+    let (lo, hi) = (8, 2);
+    let _ = m.range(lo..hi).count();
 }
 
 #[test]

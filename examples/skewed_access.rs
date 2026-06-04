@@ -4,6 +4,8 @@
 //!
 //! Run with: `cargo run --example skewed_access`
 
+#![allow(clippy::cast_possible_truncation)]
+
 use splaylist::SplayMap;
 
 fn main() {
