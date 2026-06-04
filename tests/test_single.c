@@ -69,9 +69,7 @@ SKIPLIST_DECL(
     })
 
 SKIPLIST_DECL_ACCESS(
-    st, st_,
-    key, int,
-    value, char *,
+    st, st_, key, int, value, char *,
     /* qblk -- in scope: 'query' (local query node) and 'key' (the key arg) */
     { query.key = key; },
     /* rblk -- in scope: 'node' (matched node) */

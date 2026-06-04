@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  # Enforce the declared formatting standard.  The tree must be a no-op
+  # for clang-format using the repo .clang-format; any drift fails here.
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          clang-format --version
+          clang-format --dry-run --Werror \
+            include/*.h tests/*.c tests/*.h examples/*.c bench/*.c
+
   # Compile and run unit, concurrent, and (gcc-only) TSAN tests with
   # both gcc and clang.  The Makefile already enables -Werror, so any
   # new warning fails the job.
@@ -47,6 +63,11 @@ jobs:
           CC: ${{ matrix.cc }}
         run: make test_single
 
+      - name: Randomized differential model test (no external deps)
+        env:
+          CC: ${{ matrix.cc }}
+        run: make test_model
+
       - name: Splay-rebalance variant (signature feature)
         env:
           CC: ${{ matrix.cc }}
@@ -73,6 +94,20 @@ jobs:
         env:
           CC: gcc
         run: make test_tsan_splay
+
+  # Fuzz the deserialize attack surface (the only function consuming
+  # untrusted bytes) with libFuzzer under ASan+UBSan.  Bounded so the
+  # job terminates; nightly/longer campaigns can raise FUZZ_TIME.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Run bounded fuzz campaign
+        run: make fuzz FUZZ_TIME=60
 
   # Valgrind cannot coexist with AddressSanitizer; the Makefile builds a
   # separate non-sanitized binary for this job.  Concurrent tests are

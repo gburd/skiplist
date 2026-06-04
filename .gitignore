@@ -22,8 +22,13 @@ tests/test_concurrent_tsan
 tests/test_concurrent_tsan_splay
 tests/test_single
 tests/test_splay
+tests/test_splay_verify
 tests/test_valgrind
 tests/test_property
+tests/test_model
+tests/test_model_splay
+tests/fuzz_deserialize
+tests/fuzz_deserialize_standalone
 tests/.hegel/
 .hegel/
 

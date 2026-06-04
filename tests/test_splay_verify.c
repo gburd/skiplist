@@ -44,21 +44,39 @@ struct sv_node {
     SKIPLIST_ENTRY(sv) ent;
 };
 
-SKIPLIST_DECL(sv, sv_, ent,
-    /* cmp     */ { (void)list; (void)aux;
-                    return (a->key > b->key) - (a->key < b->key); },
+SKIPLIST_DECL(
+    sv, sv_, ent,
+    /* cmp     */
+    {
+        (void)list;
+        (void)aux;
+        return (a->key > b->key) - (a->key < b->key);
+    },
     /* free    */ { (void)node; },
-    /* update  */ { (void)node; (void)value; rc = 0; },
-    /* archive */ { (void)dest; (void)src; rc = 0; },
-    /* sizeof  */ { (void)node; bytes = sizeof(sv_node_t); })
+    /* update  */
+    {
+        (void)node;
+        (void)value;
+        rc = 0;
+    },
+    /* archive */
+    {
+        (void)dest;
+        (void)src;
+        rc = 0;
+    },
+    /* sizeof  */
+    {
+        (void)node;
+        bytes = sizeof(sv_node_t);
+    })
 
 #ifdef SKIPLIST_SPLAY_REBALANCE
 
 /* Run a single Bernoulli(p) workload and return the hot key's final
  * height plus the head's current height. */
 static void
-run_workload(int n, int hot_key, double p, int total_accesses,
-    int *out_hot_h, int *out_head_h)
+run_workload(int n, int hot_key, double p, int total_accesses, int *out_hot_h, int *out_head_h)
 {
     sv_t list;
     sv_skip_init_sv(&list);
@@ -119,12 +137,12 @@ struct sv_case {
 };
 
 static const struct sv_case sv_cases[] = {
-    { "p=1.000 (pure hot)",   1.0 },
-    { "p=0.500 (half-hot)",   0.5 },
-    { "p=0.250 (quarter)",    0.25 },
-    { "p=0.125 (eighth)",     0.125 },
-    { "p=0.062 (sixteenth)",  0.0625 },
-    { "p=0.005 (cold)",       0.005 },
+    { "p=1.000 (pure hot)", 1.0 },
+    { "p=0.500 (half-hot)", 0.5 },
+    { "p=0.250 (quarter)", 0.25 },
+    { "p=0.125 (eighth)", 0.125 },
+    { "p=0.062 (sixteenth)", 0.0625 },
+    { "p=0.005 (cold)", 0.005 },
 };
 #endif /* SKIPLIST_SPLAY_REBALANCE */
 
@@ -149,10 +167,8 @@ test_aksenov_target(const MunitParameter params[], void *data)
     printf("Aksenov 2020 splay-list height verification\n");
     printf("  workload: n=%d keys, total accesses=%d\n", n, total);
     printf("  target:   h = K - 1 - log2(1/p) (+/- %d level)\n", tol);
-    printf("\n  %-22s %5s %5s %8s %8s %8s\n",
-        "case", "K", "h", "expect", "result", "delta");
-    printf("  %-22s %5s %5s %8s %8s %8s\n",
-        "----------------------", "-----", "-----", "------", "------", "-----");
+    printf("\n  %-22s %5s %5s %8s %8s %8s\n", "case", "K", "h", "expect", "result", "delta");
+    printf("  %-22s %5s %5s %8s %8s %8s\n", "----------------------", "-----", "-----", "------", "------", "-----");
 
     int failed = 0;
     for (int i = 0; i < n_cases; i++) {
@@ -168,9 +184,7 @@ test_aksenov_target(const MunitParameter params[], void *data)
         int ok = (delta >= -tol && delta <= tol);
         if (!ok)
             failed++;
-        printf("  %-22s %5d %5d %8d %8s %+8d\n",
-            sv_cases[i].label, head_h, hot_h, expect,
-            ok ? "PASS" : "FAIL", delta);
+        printf("  %-22s %5d %5d %8d %8s %+8d\n", sv_cases[i].label, head_h, hot_h, expect, ok ? "PASS" : "FAIL", delta);
     }
     printf("\n");
 
@@ -201,16 +215,12 @@ test_basic_construct(const MunitParameter params[], void *data)
 }
 
 static MunitTest tests[] = {
-    { (char *)"/splay_verify/basic_construct", test_basic_construct,
-        NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *)"/splay_verify/aksenov_target", test_aksenov_target,
-        NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/splay_verify/basic_construct", test_basic_construct, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/splay_verify/aksenov_target", test_aksenov_target, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
 };
 
-static const MunitSuite suite = {
-    (char *)"", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE
-};
+static const MunitSuite suite = { (char *)"", tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };
 
 int
 main(int argc, char *argv[MUNIT_ARRAY_PARAM(argc + 1)])

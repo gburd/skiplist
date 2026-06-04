@@ -17,13 +17,12 @@
  */
 
 #include <errno.h>
+#include <hegel/generators.h>
+#include <hegel/hegel.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <hegel/generators.h>
-#include <hegel/hegel.h>
 
 #include "sl.h"
 
@@ -39,22 +38,32 @@ struct pt_node {
 
 SKIPLIST_DECL(
     pt, p_, e,
-    /* compare */ {
+    /* compare */
+    {
         (void)list;
         (void)aux;
         return (a->key > b->key) - (a->key < b->key);
     },
     /* free */ { (void)node; },
     /* update */ { node->value = (int)(intptr_t)value; },
-    /* archive */ {
+    /* archive */
+    {
         dest->key = src->key;
         dest->value = src->value;
     },
-    /* sizeof */ { (void)node; bytes = sizeof(int) * 2; })
+    /* sizeof */
+    {
+        (void)node;
+        bytes = sizeof(int) * 2;
+    })
 
 SKIPLIST_DECL_ACCESS(
     pt, p_, key, int, value, int,
-    /* query block */ { memset(&query, 0, sizeof(query)); query.key = key; },
+    /* query block */
+    {
+        memset(&query, 0, sizeof(query));
+        query.key = key;
+    },
     /* return block */ { return node->value; })
 
 SKIPLIST_DECL_VALIDATE(pt, p_, e)
@@ -74,12 +83,14 @@ SKIPLIST_DECL_EBR(pt, p_)
  */
 SKIPLIST_DECL_ARCHIVE(
     pt, p_, e,
-    /* write */ {
+    /* write */
+    {
         memcpy(buf, &node->key, sizeof(int));
         memcpy(buf + sizeof(int), &node->value, sizeof(int));
         bytes = sizeof(int) * 2;
     },
-    /* read */ {
+    /* read */
+    {
         if (bytes != sizeof(int) * 2) {
             /* Reject malformed records instead of over-reading `buf`. */
             node->key = 0;

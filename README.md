@@ -62,22 +62,26 @@ all dependencies on `<stdatomic.h>`.
 
 ## Status
 
-Production-ready.  The current `main` branch is the canonical version.
-The full test matrix passes locally and in CI:
+The `main` branch is the canonical version and is used in production.
+The test matrix below passes locally and in CI.  The randomized model
+test and the deserialize fuzz campaign run in CI on every push; the
+Hegel property suite depends on an external framework and runs locally.
 
-| Suite                              | Tests | Status |
-|------------------------------------|-------|--------|
-| Unit (default)                     |    33 | pass   |
-| Concurrent (default)               |    13 | pass   |
-| TSAN (default)                     |    13 | pass   |
-| Property-based (Hegel/hegel-c)     |     9 | pass   |
-| Unit (splay rebalance enabled)     |    33 | pass   |
-| Concurrent (splay rebalance)       |    13 | pass   |
-| TSAN (splay rebalance)             |    13 | pass   |
-| Splay-verify (Aksenov height target) |   2 | pass   |
-| Single-threaded mode               |     6 | pass   |
-| ASan + LSan + UBSan                |    33 | pass   |
-| Valgrind                           |    33 | pass   |
+| Suite                              | Tests | Runs in CI | Status |
+|------------------------------------|-------|------------|--------|
+| Unit (default)                     |    33 | yes        | pass   |
+| Concurrent (default)               |    13 | yes        | pass   |
+| TSAN (default)                     |    13 | yes (gcc)  | pass   |
+| Randomized differential model test |     2 | yes        | pass   |
+| Fuzz (deserialize, libFuzzer)      |     - | yes        | no crashes |
+| Property-based (Hegel/hegel-c)     |     9 | local      | pass   |
+| Unit (splay rebalance enabled)     |    33 | yes        | pass   |
+| Concurrent (splay rebalance)       |    13 | yes        | pass   |
+| TSAN (splay rebalance)             |    13 | yes (gcc)  | pass   |
+| Splay-verify (Aksenov height target) |   2 | yes        | pass   |
+| Single-threaded mode               |     6 | yes        | pass   |
+| ASan + LSan + UBSan                |    33 | yes        | pass   |
+| Valgrind                           |    33 | yes (gcc)  | pass   |
 
 Verified on Linux x86_64 with gcc 13/15 and clang 18/21.  The
 implementation is C11 with no Linux-specific syscalls; macOS, the BSDs,
@@ -85,7 +89,7 @@ and Windows (MSVC) are supported by the portability shims in `sl.h`.
 
 Coverage on the implementation surface (`include/sl.h` plus the
 three test translation units that instantiate its macros): 97% line,
-99% function, 61% branch.  Branch coverage of lock-free CAS retry and
+99% function, ~60% branch.  Branch coverage of lock-free CAS retry and
 EBR contention paths is hard to exercise deterministically and is
 tracked separately rather than gated.
 
@@ -113,7 +117,8 @@ Historical exploration is preserved as git tags under `archive/*`:
 - **Binary archive** (`SKIPLIST_DECL_ARCHIVE`): user-defined
   serialize/deserialize on a per-node basis.
 - **High-level Key/Value API** (`SKIPLIST_DECL_ACCESS`): `get`, `put`,
-  `del`, `contains`, `set`, `dup`, `pos`, `pos_lt`, `pos_gt`, etc.
+  `del`, `contains`, `set`, `dup`, and `pos` (with a position operator:
+  `SKIP_EQ`, `SKIP_LT`, `SKIP_LTE`, `SKIP_GT`, `SKIP_GTE`).
 - **Duplicate keys** supported (`insert_dup`, `dup`).
 - **Doubly-linked level-zero list** with head and tail sentinels for
   efficient bidirectional iteration.
@@ -870,14 +875,33 @@ The unit and concurrent suites use the vendored
   reuse.  Built by `make test_property`, which needs a local hegel-c
   checkout and the hegel-core server (override `HEGEL_DIR` etc.; see
   the Makefile).
+- `tests/test_model.c` -- a self-contained randomized differential
+  ("property") test with no external dependencies.  A seeded PRNG drives
+  hundreds of thousands of operations and checks each against a dense
+  reference model, plus the integrity validator and an archive
+  round-trip; built in both the default and splay configurations.  A
+  failure prints the exact `SKIPLIST_SEED` to reproduce it.  Run with
+  `make test_model`.
+- `tests/fuzz_deserialize.c` -- a libFuzzer harness over the deserialize
+  path, the only function that consumes untrusted bytes.  It asserts no
+  out-of-bounds read, no leak, and a passing integrity check on any
+  input.  Run with `make fuzz` (clang).
 
-CI runs three independent jobs on every push and pull request:
+CI runs the following jobs on every push and pull request:
 
-- **build** -- gcc and clang matrix; runs the Makefile target sequence
-  including `test_tsan` on the gcc row.
+- **format** -- `clang-format --dry-run --Werror` over the tree; any
+  drift from the repo `.clang-format` fails the build.
+- **build** -- gcc and clang matrix; runs the unit, concurrent,
+  single-threaded, model, and splay suites, plus examples and the
+  benchmark compile, with `test_tsan` and `test_tsan_splay` on the
+  gcc row.
+- **fuzz** -- a bounded libFuzzer campaign over the deserialize path.
 - **valgrind** -- non-sanitized build under `valgrind --leak-check=full`.
 - **meson** -- `{none, address, thread, undefined}` sanitizer matrix.
-- **autotools** -- bootstrap, configure, build, `make distcheck`.
+- **autotools** -- bootstrap, configure, then build and run the unit,
+  concurrent, splay, and single-threaded suites.
+- **coverage** (gcc) -- gcovr over the implementation surface, gated at
+  95% line and function coverage.
 
 Mirror workflow at `.forgejo/workflows/ci.yml` for Codeberg.
 
@@ -889,6 +913,8 @@ include/sl.h               The implementation (single header)
 tests/test.c               Single-threaded unit tests
 tests/test_concurrent.c    Multi-threaded + race-validation tests
 tests/test_property.c      Hegel (hegel-c) property tests
+tests/test_model.c         Self-contained randomized differential test
+tests/fuzz_deserialize.c   libFuzzer harness for the deserialize path
 tests/test_single.c        SKIPLIST_SINGLE_THREADED build exercise
 tests/test_splay_verify.c  Aksenov 2020 height-target verification
 tests/munit.{c,h}          Vendored test harness

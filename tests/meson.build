@@ -89,3 +89,25 @@ test_single = executable('test_single',
   link_args : ['-lm'],
 )
 test('single', test_single, timeout : 120)
+
+# Self-contained randomized differential ("model") test.  No external
+# dependencies: drives the list against a reference model plus the
+# integrity validator and an archive round-trip.  Built in both the
+# default and splay configurations.
+test_model = executable('test_model',
+  'test_model.c',
+  include_directories : [include_directories('.')],
+  dependencies : [skiplist_dep],
+  c_args : test_args,
+  link_args : ['-lm'],
+)
+test('model', test_model, timeout : 300)
+
+test_model_splay = executable('test_model_splay',
+  'test_model.c',
+  include_directories : [include_directories('.')],
+  dependencies : [skiplist_dep],
+  c_args : splay_args,
+  link_args : ['-lm'],
+)
+test('model-splay', test_model_splay, timeout : 300)

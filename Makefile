@@ -11,7 +11,9 @@
 #   make test_splay      -- unit + concurrent tests with -DSKIPLIST_SPLAY_REBALANCE
 #   make test_tsan_splay -- TSAN variant with splay rebalancing enabled
 #   make test_single     -- exercise the SKIPLIST_SINGLE_THREADED build
+#   make test_model      -- self-contained randomized differential test
 #   make test_all        -- all of the above
+#   make fuzz            -- libFuzzer campaign over the deserialize path (clang)
 #   make examples        -- build all examples (ex01..ex10)
 #   make bench           -- build and run the benchmark suite
 #   make coverage        -- gcov coverage over include/sl.h
@@ -146,6 +148,46 @@ tests/test_single: tests/test_single.c tests/munit.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -o $@ tests/test_single.c tests/munit.c -lm
 
 # ----------------------------------------------------------------------
+# Self-contained randomized differential ("model") test.  No external
+# dependencies: drives the list with a seeded PRNG and checks every
+# operation against a dense reference model, plus the integrity validator
+# and an archive serialize/deserialize round-trip.  Runs unconditionally
+# in CI (unlike the hegel-c property suite below).  Deterministic; a
+# failure prints the exact SKIPLIST_SEED to reproduce.
+# ----------------------------------------------------------------------
+test_model: tests/test_model tests/test_model_splay
+	./tests/test_model
+	./tests/test_model_splay
+
+tests/test_model: tests/test_model.c include/sl.h
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -o $@ tests/test_model.c -lm
+
+tests/test_model_splay: tests/test_model.c include/sl.h
+	$(CC) $(CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o $@ tests/test_model.c -lm
+
+# ----------------------------------------------------------------------
+# Fuzzing the deserialize attack surface.  Uses clang's libFuzzer; the
+# `fuzz` target runs a bounded campaign suitable for CI, while
+# `fuzz_standalone` builds a runtime-free replayer for a seed corpus.
+# ----------------------------------------------------------------------
+FUZZ_CC       ?= clang
+FUZZ_TIME     ?= 60
+FUZZ_CFLAGS    = $(WARNFLAGS) -g -O1 -std=c11 -Iinclude/ -fsanitize=fuzzer,address,undefined
+
+fuzz: tests/fuzz_deserialize
+	./tests/fuzz_deserialize -runs=2000000 -max_total_time=$(FUZZ_TIME) -print_final_stats=1
+
+tests/fuzz_deserialize: tests/fuzz_deserialize.c include/sl.h
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ tests/fuzz_deserialize.c -lm
+
+fuzz_standalone: tests/fuzz_deserialize_standalone
+	./tests/fuzz_deserialize_standalone
+
+tests/fuzz_deserialize_standalone: tests/fuzz_deserialize.c include/sl.h
+	$(CC) $(CFLAGS) -DSKIPLIST_FUZZ_STANDALONE -o $@ tests/fuzz_deserialize.c -lm
+
+
+# ----------------------------------------------------------------------
 # Property-based tests (Hegel / hegel-c).  Opt-in: requires a local
 # hegel-c checkout and the hegel-core server binary.  Paths are derived
 # from the hegel-c CMake build cache and may be overridden on the command
@@ -186,7 +228,7 @@ test_property: tests/test_property
 tests/test_property: tests/test_property.c include/sl.h
 	$(CC) $(PROP_CFLAGS) -o $@ tests/test_property.c $(PROP_LDFLAGS)
 
-test_all: test test_concurrent test_tsan test_splay test_tsan_splay test_single
+test_all: test test_concurrent test_tsan test_splay test_tsan_splay test_single test_model
 
 tests/%.o: tests/%.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $<
@@ -259,7 +301,7 @@ BRANCH_THRESHOLD ?= 70
 coverage:
 	rm -rf coverage-report
 	mkdir -p coverage-report
-	rm -f tests/*.gcda tests/*.gcno *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single
+	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent_splay
 	# Coverage uses gcc + gcov; clang's profile format is incompatible with
 	# the system gcov tool used by gcovr.  CC may be overridden for the
@@ -384,12 +426,15 @@ clean:
 	rm -f tests/test_splay_verify
 	rm -f tests/test_single
 	rm -f tests/test_property
-	rm -rf tests/.hegel
+	rm -f tests/test_model tests/test_model_splay
+	rm -f tests/fuzz_deserialize tests/fuzz_deserialize_standalone
+	rm -rf tests/.hegel tests/fuzz-*.log crash-* leak-* timeout-*
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent.o
 	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single
+	rm -f tests/test_cov_model tests/test_cov_model_splay
 	rm -f tests/test_valgrind
-	rm -f tests/*.gcda tests/*.gcno *.gcov
+	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov
 	rm -f examples/*.o $(EXAMPLES)
 	rm -f examples/mls examples/mls.c
 	rm -f bench/bench

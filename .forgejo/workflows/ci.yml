@@ -10,6 +10,22 @@ on:
 # Keep the two files in sync.
 
 jobs:
+  format:
+    runs-on: docker
+    container:
+      image: docker.io/library/debian:bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          apt-get update
+          apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          clang-format --version
+          clang-format --dry-run --Werror \
+            include/*.h tests/*.c tests/*.h examples/*.c bench/*.c
+
   build:
     runs-on: docker
     container:
@@ -34,6 +50,7 @@ jobs:
           make test
           make test_concurrent
           make test_single
+          make test_model
           make test_splay
           make examples
           make bench/bench
@@ -54,3 +71,16 @@ jobs:
         env:
           CC: gcc
         run: make coverage
+
+  fuzz:
+    runs-on: docker
+    container:
+      image: docker.io/library/debian:bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: |
+          apt-get update
+          apt-get install -y clang
+      - name: Run bounded fuzz campaign
+        run: make fuzz FUZZ_TIME=60
