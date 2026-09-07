@@ -1355,16 +1355,29 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
              * Reads only the node's own level-0 successor, which the caller's                                                                                 \
              * EBR pin already covers (locate just traversed it), so this adds no                                                                              \
              * reclamation exposure. */                                                                                                                       \
-            if (u_hits > m_total_hits / (size_t)(1ULL << 12)) {                                                                                       \
-                decl##_node_t *nb = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire));                                     \
-                if (nb != NULL && nb != slist->slh_tail) {                                                                                                     \
-                    size_t nb_hits = _skip_atomic_load(&nb->field.sle_levels[0].hits, memory_order_relaxed);                                                    \
-                    /* Refuse when the successor is within 25% of our own                                                                                      \
+            if (u_hits > m_total_hits / (size_t)(1ULL << 12)) {                                                                                                \
+                /* Compare against the node that would follow us AT THE TARGET                                                                                 \
+                 * LEVEL, which is the B in "a level from A to B".  Using the                                                                                  \
+                 * level-0 successor instead only approximates the interval when                                                                               \
+                 * the interval is a single node, so any hot set with cold keys                                                                                \
+                 * interleaved defeated it: with every second key hot, each hot                                                                                \
+                 * node's level-0 successor is cold, the test passes, and 969 of                                                                               \
+                 * 1000 still piled onto one level.  path[] already recorded this                                                                              \
+                 * successor and the caller's EBR pin covers it. */                                                                                            \
+                size_t gate_h = node_height + 1;                                                                                                               \
+                decl##_node_t *nb = NULL;                                                                                                                      \
+                if (gate_h + 1 <= len)                                                                                                                         \
+                    nb = _SKIP_UNMARK(path[gate_h + 1].succ);                                                                                                  \
+                if (nb == NULL)                                                                                                                                \
+                    nb = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[node_height].next, memory_order_acquire));                                     \
+                if (nb != NULL && nb != slist->slh_tail && nb != node) {                                                                                       \
+                    size_t nb_hits = _skip_atomic_load(&nb->field.sle_levels[0].hits, memory_order_relaxed);                                                   \
+                    /* Refuse when that successor is within 25% of our own                                                                                     \
                      * traffic: the level would skip a peer, not a cold node. */                                                                               \
-                    if (u_hits <= nb_hits + (nb_hits >> 2))                                                                                                     \
+                    if (u_hits <= nb_hits + (nb_hits >> 2))                                                                                                    \
                         continue;                                                                                                                              \
-                }                                                                                                                                             \
-            }                                                                                                                                                \
+                }                                                                                                                                              \
+            }                                                                                                                                                  \
             if (node_height >= SKIPLIST_MAX_HEIGHT - 1)                                                                                                      \
                 continue;                                                                                                                                    \
             if (node_height >= k_threshold)                                                                                                                  \

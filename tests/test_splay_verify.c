@@ -292,8 +292,113 @@ test_contiguous_hot_range(const MunitParameter params[], void *data)
 #endif
 }
 
+/* Interleaved-hot-keys regression.
+ *
+ * The v1.1.5 gate compared a node against its immediate LEVEL-0 successor,
+ * which only approximates "traffic in the interval I would span" when that
+ * interval is a single node.  With every second key hot, each hot node's
+ * level-0 successor is cold, so the test passed and 969 of 1000 hot nodes
+ * still piled onto one level -- measured 2.02x splay off, worse than the
+ * contiguous case that gate was written for.
+ *
+ * The comparison is now against the successor at the TARGET level, which is
+ * the node actually being skipped.  This test pins the interleaved shape so
+ * the distinction cannot be lost again.
+ */
+static MunitResult
+test_interleaved_hot_keys(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+#ifndef SKIPLIST_SPLAY_REBALANCE
+    return MUNIT_SKIP;
+#else
+    enum { N = 100000, HOT = 1000, STRIDE = 2, WARM = 800000, MEASURE = 20000 };
+
+    sv_t list;
+    sv_skip_init_sv(&list);
+    list.slh_prng_state = 0xC0FFEE;
+
+    for (int i = 0; i < N; i++) {
+        sv_node_t *node;
+        sv_skip_alloc_node_sv(&node);
+        node->key = i;
+        sv_skip_insert_sv(&list, node);
+    }
+
+    /* 90% of lookups spread over HOT keys placed every STRIDE apart, so each
+     * hot key's immediate level-0 neighbour is cold.  xorshift32, matching the
+     * standalone benchmark this test was derived from -- an LCG's low bits are
+     * too weakly mixed to spread pressure evenly over the hot set. */
+    uint32_t rs = 11;
+    for (long i = 0; i < WARM; i++) {
+        rs ^= rs << 13;
+        rs ^= rs >> 17;
+        rs ^= rs << 5;
+        uint32_t pickhot = rs % 10;
+        rs ^= rs << 13;
+        rs ^= rs >> 17;
+        rs ^= rs << 5;
+        int k = pickhot ? (int)((rs % (uint32_t)HOT) * STRIDE) : (int)(rs % (uint32_t)N);
+        sv_node_t q;
+        q.key = k;
+        sv_skip_position_sv(&list, SKIP_EQ, &q);
+    }
+
+    {
+        size_t pop[SKIPLIST_MAX_HEIGHT + 1];
+        for (size_t h = 0; h <= SKIPLIST_MAX_HEIGHT; h++)
+            pop[h] = 0;
+
+        /* Walk the list directly.  Reading heights through the lookup API
+         * would be self-defeating: every position_/get_ call bumps hit
+         * counters and every SKIPLIST_SPLAY_INTERVAL-th one triggers a
+         * rebalance, so a sweep over the hot set is itself a uniform-access
+         * workload that re-splays the structure while it is being inspected.
+         * FOREACH touches no counters. */
+        sv_node_t *cur;
+        size_t idx;
+        size_t counted = 0;
+        SKIPLIST_FOREACH_H2T(sv, sv_, ent, &list, cur, idx)
+        {
+            if (cur->key >= HOT * STRIDE || (cur->key % STRIDE) != 0)
+                continue; /* not one of the hot keys */
+            size_t h = cur->ent.sle_height;
+            if (h > SKIPLIST_MAX_HEIGHT)
+                h = SKIPLIST_MAX_HEIGHT;
+            pop[h]++;
+            counted++;
+        }
+        (void)idx;
+        munit_assert_size(counted, ==, (size_t)HOT);
+
+        size_t worst = 0, worst_h = 0;
+        for (size_t h = 0; h <= SKIPLIST_MAX_HEIGHT; h++) {
+            if (pop[h] > worst) {
+                worst = pop[h];
+                worst_h = h;
+            }
+        }
+        printf("\n  interleaved hot keys: %zu of %d hot nodes share height %zu"
+               " (n=%d, %d keys every %d)\n",
+            worst, HOT, worst_h, N, HOT, STRIDE);
+
+        /* A healthy tower puts at most ~half the nodes at any one height
+         * (geometric decay).  Before the gate compared against the
+         * target-level successor, 969 of 1000 landed on a single level. */
+        munit_assert_size(worst * 2, <, (size_t)HOT);
+    }
+
+    sv_skip_free_sv(&list);
+    return MUNIT_OK;
+#endif
+}
+
 static MunitTest tests[] = {
     { (char *)"/splay_verify/contiguous_hot_range", test_contiguous_hot_range,
+        NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/splay_verify/interleaved_hot_keys", test_interleaved_hot_keys,
         NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/splay_verify/basic_construct", test_basic_construct,
         NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
