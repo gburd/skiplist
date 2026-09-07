@@ -44,10 +44,21 @@ INSTALL    ?= install
 # warning-free under both gcc and clang; tighten or relax via WARNFLAGS.
 WARNFLAGS  ?= -Wall -Wextra -Wpedantic -Werror
 
+# LeakSanitizer is a standalone sanitizer only on Linux; Apple clang has
+# no LSan runtime at all (ASan on Darwin cannot detect leaks either), so
+# -fsanitize=leak is a hard link error there.  Drop that one token on
+# Darwin and leave every other platform byte-for-byte unchanged.
+UNAME_S    := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+SAN_LEAK    =
+else
+SAN_LEAK    = leak,
+endif
+
 # Default debug-with-sanitizers build.  -Og keeps debug-info-friendly
 # generation while still defining __OPTIMIZE__ so glibc's
 # _FORTIFY_SOURCE checks are satisfied on hardened distros.
-SAN_FLAGS   = -fsanitize=address,leak,object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined \
+SAN_FLAGS   = -fsanitize=address,$(SAN_LEAK)object-size,pointer-compare,pointer-subtract,null,return,bounds,pointer-overflow,undefined \
               -fsanitize-address-use-after-scope
 CFLAGS     ?= $(WARNFLAGS) -Og -g $(SAN_FLAGS) -std=c11 -Iinclude/ -fPIC
 CFLAGS     += $(EXTRA_CFLAGS)
@@ -77,7 +88,7 @@ EXAMPLES = examples/ex01 examples/ex02 examples/ex03 examples/ex04 \
 
 MAN_PAGES = man/skiplist.7 man/sl.h.3
 
-.PHONY: all clean distclean test test_concurrent test_tsan test_all examples mls coverage \
+.PHONY: all clean distclean test test_concurrent test_tsan test_all examples run_examples mls coverage \
         test_splay test_tsan_splay test_single test_property \
         bench valgrind install uninstall format man
 
@@ -176,7 +187,9 @@ PROP_LDFLAGS = -L$(HEGEL_LIBDIR) -L$(CBOR_LIBDIR) -L$(ZLIB_LIBDIR) -lhegel -lcbo
 
 test_property: tests/test_property
 	@mkdir -p tests/.hegel
-	@printf '#!/bin/sh\nexec "%s" --stdio "$$@"\n' '$(HEGEL_SERVER_BIN)' > tests/.hegel/server
+	@# hegel-core speaks the stdio protocol unconditionally and has no
+	@# --stdio flag; passing one makes the handshake fail with error -2.
+	@printf '#!/bin/sh\nexec "%s" "$$@"\n' '$(HEGEL_SERVER_BIN)' > tests/.hegel/server
 	@chmod +x tests/.hegel/server
 	HEGEL_SERVER_COMMAND=$(CURDIR)/tests/.hegel/server \
 	  LD_LIBRARY_PATH="$(HEGEL_LIBDIR):$(CBOR_LIBDIR):$(ZLIB_LIBDIR):$$LD_LIBRARY_PATH" \
@@ -196,6 +209,19 @@ tests/%.o: tests/%.c include/sl.h
 # ----------------------------------------------------------------------
 
 examples: $(EXAMPLES)
+
+# Run every example under ASan+LSan and fail on the first non-zero exit.
+# Building them proves they compile; running them is what catches an
+# out-of-bounds write inside an example's own archive callbacks.
+run_examples: examples
+	@for e in $(EXAMPLES); do \
+	  printf '  %-20s ' "$$e"; \
+	  if ASAN_OPTIONS=detect_leaks=1 ./$$e >/dev/null 2>/tmp/skiplist-ex.err; then \
+	    echo OK; \
+	  else \
+	    echo FAIL; cat /tmp/skiplist-ex.err; rm -f /tmp/skiplist-ex.err; exit 1; \
+	  fi; \
+	done; rm -f /tmp/skiplist-ex.err
 
 examples/ex01: examples/ex01.o
 	$(CC) $^ -o $@ $(CFLAGS) -lm
@@ -253,13 +279,28 @@ bench/bench: bench/bench.c include/sl.h
 # branch coverage in lock-free code includes many CAS retry and
 # contention paths that are hard to exercise deterministically -- track
 # it but don't gate on the same number.
+#
+# Two caveats on the branch number this target prints:
+#
+#  1. It is the union of seven separate builds (default / splay x
+#     unit / concurrent / single-threaded, plus splay-verify).  Those
+#     builds have mutually-exclusive branch sets -- a branch that only
+#     exists under SKIPLIST_SPLAY_REBALANCE is uncoverable in the default
+#     build and vice versa -- so the merged figure is structurally lower
+#     than any single build.  Measured per build, the same test suite is
+#     70-76%; merged it reads 72%.
+#  2. Assertion-failure arms are excluded via --exclude-branches-by-pattern
+#     below.  Every assert_*() compiles to a branch whose failure arm
+#     cannot execute in a passing run, so counting them just scales the
+#     denominator with test volume and penalises writing more assertions.
+#     They were ~1100 of ~4000 branches before exclusion.
 COV_THRESHOLD ?= 95
-BRANCH_THRESHOLD ?= 70
+BRANCH_THRESHOLD ?= 72
 
 coverage:
 	rm -rf coverage-report
 	mkdir -p coverage-report
-	rm -f tests/*.gcda tests/*.gcno *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single
+	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single tests/test_cov_single_splay tests/test_cov_splay_verify
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent_splay
 	# Coverage uses gcc + gcov; clang's profile format is incompatible with
 	# the system gcov tool used by gcovr.  CC may be overridden for the
@@ -280,6 +321,18 @@ coverage:
 	# 5. Single-threaded: tests/test_single.c
 	$(COV_CC) $(COV_CFLAGS) $(TEST_FLAGS) -o tests/test_cov_single tests/test_single.c tests/munit.c -lm
 	./tests/test_cov_single
+	# 6. Single-threaded, splay variant.  SKIPLIST_SINGLE_THREADED and
+	#    SKIPLIST_SPLAY_REBALANCE together are a distinct macro expansion
+	#    (plain loads plus the rebalance pass) that no other target builds.
+	$(COV_CC) $(COV_CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o tests/test_cov_single_splay tests/test_single.c tests/munit.c -lm
+	./tests/test_cov_single_splay
+	# 7. Aksenov height verification (only meaningful with the splay flag).
+	#    Run for its assertions, but left OUT of the gcovr filters below:
+	#    it instantiates the full macro set while exercising only lookups,
+	#    so including it lowers function coverage without measuring any
+	#    library code the other units do not already cover.
+	$(COV_CC) $(COV_CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o tests/test_cov_splay_verify tests/test_splay_verify.c tests/munit.c -lm -pthread
+	./tests/test_cov_splay_verify
 	# Aggregate.  Heavy macro usage means gcov attributes most
 	# expanded code to the .c file that includes sl.h, not to sl.h
 	# itself.  Therefore we measure the union of include/sl.h plus the
@@ -292,6 +345,9 @@ coverage:
 	        --filter 'tests/test\.c' \
 	        --filter 'tests/test_concurrent\.c' \
 	        --filter 'tests/test_single\.c' \
+	        --exclude-branches-by-pattern '.*(assert_|munit_assert|munit_error|munit_log).*' \
+	        --exclude-unreachable-branches \
+	        --exclude-throw-branches \
 	        --print-summary \
 	        --html-details coverage-report/index.html \
 	        --txt coverage-report/summary.txt \
@@ -387,9 +443,9 @@ clean:
 	rm -rf tests/.hegel
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent.o
-	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single
+	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single tests/test_cov_single_splay tests/test_cov_splay_verify
 	rm -f tests/test_valgrind
-	rm -f tests/*.gcda tests/*.gcno *.gcov
+	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov
 	rm -f examples/*.o $(EXAMPLES)
 	rm -f examples/mls examples/mls.c
 	rm -f bench/bench

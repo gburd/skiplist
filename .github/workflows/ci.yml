@@ -52,10 +52,10 @@ jobs:
           CC: ${{ matrix.cc }}
         run: make test_splay
 
-      - name: Examples
+      - name: Examples (build + run under ASan/LSan)
         env:
           CC: ${{ matrix.cc }}
-        run: make examples
+        run: make run_examples
 
       - name: Benchmark (compile only, smoke test)
         env:
@@ -73,6 +73,47 @@ jobs:
         env:
           CC: gcc
         run: make test_tsan_splay
+
+  # macOS / Apple clang.  The README claims portability to macOS; this
+  # job is what makes that claim testable rather than aspirational.
+  # Apple clang is the system compiler -- no package installs, and no
+  # attempt to fetch gcc (on macOS "gcc" is a clang shim anyway).
+  #
+  # Deliberately NOT run here:
+  #   * make test_tsan / test_tsan_splay -- Apple clang's TSAN runtime is
+  #     unreliable under the virtualised CI images.
+  #   * make valgrind -- valgrind does not support modern macOS.
+  #   * make coverage -- the target pins gcc + gcovr against the system
+  #     gcov; Apple clang's profile format is incompatible.
+  #   * make bench/bench -- bench/bench.c uses pthread_barrier_t, an
+  #     optional POSIX feature Apple libc does not implement.
+  #
+  # The Makefile drops -fsanitize=leak on Darwin (Apple clang has no
+  # standalone LeakSanitizer runtime); ASan and UBSan still run.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compiler version
+        run: |
+          cc --version
+          uname -sm
+
+      - name: Unit tests (ASan + UBSan)
+        run: make test
+
+      - name: Concurrent tests
+        run: make test_concurrent
+
+      - name: Single-threaded build
+        run: make test_single
+
+      - name: Splay-rebalance variant (signature feature)
+        run: make test_splay
+
+      - name: Examples (build + run under ASan)
+        run: make run_examples
 
   # Valgrind cannot coexist with AddressSanitizer; the Makefile builds a
   # separate non-sanitized binary for this job.  Concurrent tests are

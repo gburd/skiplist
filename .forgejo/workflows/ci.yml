@@ -8,6 +8,12 @@ on:
 
 # Mirror of .github/workflows/ci.yml for Forgejo Actions / Codeberg CI.
 # Keep the two files in sync.
+#
+# NOT mirrored: the `macos` job from .github/workflows/ci.yml.  Codeberg's
+# shared Forgejo runners only offer the `docker` label (Linux containers);
+# there is no macOS host to schedule a job on, and a job whose `runs-on`
+# cannot be satisfied sits pending indefinitely rather than failing
+# loudly.  macOS coverage therefore lives only in the GitHub mirror.
 
 jobs:
   build:
@@ -35,7 +41,7 @@ jobs:
           make test_concurrent
           make test_single
           make test_splay
-          make examples
+          make run_examples
           make bench/bench
       - name: TSAN (gcc only)
         if: matrix.cc == 'gcc'
