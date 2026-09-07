@@ -77,7 +77,11 @@ main(void)
     sl_skip_init_viz(list);
 
     /* Open a DOT file for visualization output. */
-    const char *dot_path = "/tmp/claude-1000/ex09.dot";
+    /* Honour TMPDIR so this runs anywhere, including CI sandboxes with no
+       writable /tmp subdirectory. */
+    char dot_path[512];
+    const char *tmpdir = getenv("TMPDIR");
+    snprintf(dot_path, sizeof(dot_path), "%s/ex09.dot", tmpdir && *tmpdir ? tmpdir : "/tmp");
     FILE *dot_fp = fopen(dot_path, "w");
     if (!dot_fp) {
         perror("fopen");
@@ -132,7 +136,7 @@ main(void)
     sl_skip_dot_end_viz(dot_fp, gen);
     fclose(dot_fp);
     printf("\n  DOT file written to: %s\n", dot_path);
-    printf("  Convert to PDF with: dot -Tpdf %s -o /tmp/claude-1000/ex09.pdf\n", dot_path);
+    printf("  Convert to PDF with: dot -Tpdf %s -o %s.pdf\n", dot_path, dot_path);
 
     /* Clean up. */
     sl_skip_free_viz(list);

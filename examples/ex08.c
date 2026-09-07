@@ -50,7 +50,10 @@ SKIPLIST_DECL(
             rc = ENOMEM;
     },
     /* sizeof */
-    { bytes = node->value ? strlen(node->value) + 1 : 0; })
+    /* Must cover the whole serialized record that write_entry_blk below
+       emits: the key, the uint32 length prefix, and the string bytes.
+       This is what sizes the serialize scratch buffer. */
+    { bytes = sizeof(node->key) + sizeof(uint32_t) + (node->value ? strlen(node->value) : 0); })
 
 SKIPLIST_DECL_ACCESS(arc, sl_, key, int, value, char *, { query.key = key; }, { return node->value; })
 
@@ -58,7 +61,8 @@ SKIPLIST_DECL_ACCESS(arc, sl_, key, int, value, char *, { query.key = key; }, { 
  *
  * In the write block:
  *   - 'node' is the current node being serialized
- *   - 'buf' is a uint8_t* buffer (4096 bytes) to write into
+ *   - 'buf' is a uint8_t* scratch buffer whose capacity is 'bufsize',
+ *     derived from the sizeof block above -- do not write past it
  *   - 'bytes' is a uint64_t to set to the number of bytes written
  *
  * In the read block:
@@ -125,7 +129,12 @@ main(void)
 {
     printf("=== Example 08: Serialization ===\n\n");
 
-    const char *filepath = "/tmp/claude-1000/ex08_skiplist.bin";
+    /* Honour TMPDIR so this runs anywhere, including CI sandboxes with no
+       writable /tmp subdirectory.  A hardcoded absolute path here made the
+       example fail outright on machines that did not happen to have it. */
+    char filepath[512];
+    const char *tmpdir = getenv("TMPDIR");
+    snprintf(filepath, sizeof(filepath), "%s/ex08_skiplist.bin", tmpdir && *tmpdir ? tmpdir : "/tmp");
 
     /* Create and populate a skiplist. */
     arc_t *list = (arc_t *)malloc(sizeof(arc_t));
