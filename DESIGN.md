@@ -214,9 +214,24 @@ So the defect is in the *model*, not the implementation: it carries no
 notion of the hot set's width, nor of where promoted nodes sit relative
 to one another.
 
-#### Three fixes attempted and rejected
+#### Five fixes attempted and rejected
 
-All three were implemented and measured; none shipped.
+All five were implemented and measured; none shipped.  The consistent
+failure mode is worth naming up front: **every gate that suppressed the
+contiguous-range pathology also suppressed the feature in the case it
+exists for.**  Two of the five looked like clear wins until the right
+thing was measured.
+
+The benchmark to beat, medians over 7 tower seeds, 200k lookups,
+comparisons per lookup:
+
+| config | scattered hot (10 keys) | contiguous range, 1.6M lookups |
+|---|---:|---:|
+| splay OFF | 30.70 | 25.8 |
+| splay ON, no gate | 28.72 (-6.4%) | 91.8 (+256%) |
+
+The target is to keep the left column below OFF while bringing the right
+column near it.
 
 1. **Fair-coin gate on each promotion** (restore geometric decay by
    making level `h` cost ~`2^h` attempts).  Fails because attempts
@@ -229,22 +244,73 @@ All three were implemented and measured; none shipped.
    problem*: the same 325 nodes then climb every level together.
    Measured 698 at height 6.
 3. **Level-relative gate** (promote only if hotter at the target level
-   than the level-`h` predecessor).  This *did* fix the symptom --
-   population decayed `512/236/120/72/31/13/16` and cmp/op stayed at
-   ~30 instead of climbing to 92, a regression of +23% instead of +256%.
-   But it also **broke the paper's own height verification** (5 of 6
-   cases in `tests/test_splay_verify.c`), because `sle_levels[lvl].hits`
-   is never *accumulated* for `lvl > 0`: locate increments only level 0,
+   than the level-`h` predecessor).  Fixed the symptom -- population
+   decayed `512/236/120/72/31/13/16`, +23% instead of +256% -- but broke
+   the paper's own height verification (5 of 6 cases in
+   `tests/test_splay_verify.c`), because `sle_levels[lvl].hits` is never
+   *accumulated* for `lvl > 0`: locate increments only level 0,
    promotion zeroes the new level, insert sets it to 1.  The comparison
-   was therefore against a counter that is always ~0, which suppressed
-   essentially all promotion.  It fixed the regression by disabling the
-   feature, which is not a fix.
+   was against a counter that is always ~0, so it suppressed essentially
+   all promotion.  It fixed the regression by disabling the feature.
+4. **Span gate** (refuse a level that points at the same successor as
+   the level below, since such a level skips nothing).  Motivated by a
+   strong measurement: by 1.6M lookups **100% of promoted hot-range nodes
+   spanned exactly one key**, so their towers were pure overhead.  The
+   condition is structural rather than statistical, needs no new state,
+   and is free (the successor is already loaded at that point).  It cut
+   the regression to +38 cmp/op with properly decaying population.  But
+   promotion is incremental, and at the bottom rung a lone hot node's
+   level-1 successor *is* its level-0 successor, so the gate refused the
+   first rung and no node could start climbing -- the pure-hot case sat
+   at height 0 against an expected 13.  Exempting `new_h == 1` let it
+   climb, but only to height 2, still failing 2 of 6 paper cases.  The
+   deeper problem is that a lone hot key among cold neighbours and one
+   hot key among 1000 hot neighbours are *locally indistinguishable* from
+   the promoting node plus its successor, and the paper legitimately
+   wants the first one tall.
+5. **Successor-hotness gate** (refuse promotion when the level-0
+   successor is comparably hot, i.e. `u_hits <= s_hits * 1.25`, on the
+   theory that a hot successor means we are inside a wide hot region and
+   the new level would skip a peer rather than a cold node).  This is the
+   one that looked correct: the paper's verification **passed all six
+   cases**, the lone hot key reached height 13, the contiguous regression
+   fell from +256% to +55%, and population decayed cleanly
+   (`339/262/143/93/56/32`).  It was rejected only because the scattered
+   hot case -- the workload splay exists to serve -- went from -6.4% to
+   **+2.3% versus splay off**, sign-stable across all seven seeds.  The
+   cause is subtle: with two cold neighbours both at 0 hits the ratio
+   test is trivially true, so the gate silently forbade promotion across
+   the cold majority of the list.  Requiring the successor to also clear
+   `asc_cond` did not recover the benefit.  Full-list height histograms
+   were near-identical in all three configurations, so the lost benefit
+   was not a visible structural change -- which is precisely why it would
+   have passed a review that only checked the pathology.
 
-A real fix needs per-level hit accounting that actually accumulates,
-or an explicit cap on promoted-node density per level, and then a
-re-derivation of the paper's height target under that constraint.  That
-is a research change, not a patch.  Until then the flag stays opt-in and
-the README documents a contiguous hot range as a contraindication.
+What this rules out: any gate whose only inputs are the promoting node,
+its immediate neighbours, and the existing counters.  Attempts 4 and 5
+show that the pathological and intended configurations are
+indistinguishable from that information alone.
+
+What a real fix therefore needs is one of:
+
+- **Per-level hit accounting that actually accumulates.**  Locate already
+  visits every level; incrementing `sle_levels[lvl].hits` on the way down
+  would make "what fraction of level-`L` traffic passes through this
+  node" measurable, which is the spatial quantity the model lacks.  The
+  demotion path already transfers those counters to the predecessor, so
+  the semantics are half-built.  The cost is one relaxed increment per
+  level per lookup on the hot path, and a shared counter per level is
+  exactly the cache-line contention the existing `slh_head` hit counter
+  already suffers -- so this needs measuring under TSAN and concurrency,
+  not just single-threaded.
+- **An explicit cap on promoted-node density per level**, which needs a
+  per-level population counter and a re-derivation of the paper's height
+  target under that constraint.
+
+Either is a research change with its own correctness argument, not a
+patch.  Until then the flag stays opt-in and the README documents a
+contiguous hot range as a contraindication.
+
 
 ### Why the upside is small even when it works
 
