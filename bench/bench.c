@@ -392,7 +392,7 @@ bench_splay_hotspot(int n)
     api_skip_free_bench(list);
     free(list);
 
-    bench_result_t r = { "Splay hotspot (10 hot keys)", ops, elapsed, (double)ops / ((double)elapsed / 1e9), (double)elapsed / (double)ops };
+    bench_result_t r = { "Hot-key lookups (10 keys)", ops, elapsed, (double)ops / ((double)elapsed / 1e9), (double)elapsed / (double)ops };
     return r;
 }
 
