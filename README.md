@@ -67,27 +67,49 @@ The full test matrix passes locally and in CI:
 
 | Suite                              | Tests | Status |
 |------------------------------------|-------|--------|
-| Unit (default)                     |    33 | pass   |
+| Unit (default)                     |    47 | pass   |
 | Concurrent (default)               |    13 | pass   |
 | TSAN (default)                     |    13 | pass   |
 | Property-based (Hegel/hegel-c)     |     9 | pass   |
-| Unit (splay rebalance enabled)     |    33 | pass   |
+| Unit (splay rebalance enabled)     |    47 | pass   |
 | Concurrent (splay rebalance)       |    13 | pass   |
 | TSAN (splay rebalance)             |    13 | pass   |
 | Splay-verify (Aksenov height target) |   2 | pass   |
-| Single-threaded mode               |     6 | pass   |
-| ASan + LSan + UBSan                |    33 | pass   |
-| Valgrind                           |    33 | pass   |
+| Single-threaded mode               |    17 | pass   |
+| Single-threaded + splay rebalance   |   17 | pass   |
+| ASan + LSan + UBSan                |    47 | pass   |
+| Valgrind                           |    47 | pass   |
+| Examples (run, not just built)     |    10 | pass   |
 
 Verified on Linux x86_64 with gcc 13/15 and clang 18/21.  The
 implementation is C11 with no Linux-specific syscalls; macOS, the BSDs,
 and Windows (MSVC) are supported by the portability shims in `sl.h`.
 
 Coverage on the implementation surface (`include/sl.h` plus the
-three test translation units that instantiate its macros): 97% line,
-99% function, 61% branch.  Branch coverage of lock-free CAS retry and
-EBR contention paths is hard to exercise deterministically and is
-tracked separately rather than gated.
+three test translation units that instantiate its macros): 98% line,
+99% function, 72% branch.
+
+Two notes on that branch figure, because branch coverage of a
+macro-generated lock-free library is easy to misread:
+
+- It is the **union of seven builds** (default and splay-rebalance
+  variants of the unit, concurrent, and single-threaded suites, plus
+  the splay-verify harness).  Those builds have mutually exclusive
+  branch sets -- a branch that only exists under
+  `SKIPLIST_SPLAY_REBALANCE` cannot be covered by the default build and
+  vice versa -- so the merged number is structurally lower than any
+  single build.  Measured per build, the same suites are 70-76%.
+- Assertion-failure arms are **excluded** from the metric.  Every
+  `assert_*()` compiles to a branch whose failure arm cannot execute in
+  a passing run, so counting them scales the denominator with test
+  volume and penalises writing more assertions.  They were roughly 1100
+  of 4000 branches before exclusion.
+
+What remains uncovered is concentrated in CAS-retry loops,
+marked-pointer help-unlink paths that need a peer thread mid-delete,
+and allocation-failure arms -- reachable only with fault injection or
+scheduled interleaving.  Line and function coverage are gated at 95%;
+branch coverage is gated at 72%.
 
 Historical exploration is preserved as git tags under `archive/*`:
 `archive/lock-free-first-attempt`, `archive/splay-list-original`,
@@ -191,10 +213,11 @@ make test_tsan         # 13 concurrent tests under ThreadSanitizer
 make test_property     # 9 Hegel property tests (needs hegel-c; see below)
 make test_splay        # full suite with -DSKIPLIST_SPLAY_REBALANCE
 make test_tsan_splay   # TSAN with splay rebalancing
-make test_single       # SKIPLIST_SINGLE_THREADED build (6 tests)
+make test_single       # SKIPLIST_SINGLE_THREADED build (17 tests)
 make test_all          # all of the above (except test_property)
 make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
+make run_examples      # build AND run all 10 examples under ASan/LSan
 make bench             # build and run the benchmark suite
 make coverage          # gcov + gcovr; gates on >=95% line + function
 make format            # clang-format the tree
@@ -525,7 +548,11 @@ the list invoking `write_blk` for each node; on read it reconstructs
 the list invoking `read_blk` to materialize each node.
 
 `write_blk` receives a scratch buffer sized from your `sizeof` block
-(`bufsize` gives its capacity) and must not write past it.  `read_blk`
+(`bufsize` gives its capacity) and must not write past it.  **Your
+`sizeof` block must account for the entire record `write_blk` emits** --
+the key, any length prefixes, and the payload -- not just the payload.
+An undersized `sizeof` block is a heap buffer overflow, since it is what
+sizes the buffer `write_blk` writes into.  `read_blk`
 receives the deserialized record and its length `bytes`, and **must
 validate `bytes` before reading** -- the length comes from the input
 stream and may be hostile.  Records larger than
@@ -637,8 +664,15 @@ The algorithm is from Aksenov et al. ("The Splay-List", 2020).  A node
 with hit ratio `u/T` (where `T` is the total accesses) settles at
 height `K - 1 - log2(T/u)` where `K` is the head's current height,
 placing it at depth `log2(1/p)` from the top -- exactly matching the
-paper's `O(log(1/p))` search-cost target.  Hot keys ride near the top;
-uniform random keys see no benefit and a few percent overhead.
+paper's `O(log(1/p))` search-cost target.  Hot keys ride near the top.
+
+The measured effect is smaller than the height changes suggest, and it
+is not uniformly positive: a small scattered hot set gains a few
+percent, uniform random access is roughly unchanged, and a large
+*contiguous* hot range gets progressively worse the longer the process
+runs.  See
+[Splay Rebalancing: Measured Impact](#splay-rebalancing-measured-impact)
+for the numbers before enabling it.
 
 The rebalance fires only on read-only access paths (search, contains,
 position_*, update, and the duplicate-found path of insert).  It does
@@ -760,7 +794,9 @@ suite reports throughput (ops/sec) and per-op latency for:
 - Sequential and random delete
 - Mixed read-heavy (95/5) and write-heavy (50/50)
 - Forward iteration
-- Splay hotspot (10 hot keys repeatedly accessed)
+- Hot-key lookups (10 keys repeatedly accessed).  Note `make bench` does
+  not define `SKIPLIST_SPLAY_REBALANCE`, so this measures a plain
+  skiplist; for splay on-vs-off see the table below.
 - Latency distribution: p50, p90, p95, p99, p999, max
 - Concurrent insert / search / mixed (2, 4, 8 threads)
 - Pool allocator vs `malloc`
@@ -781,6 +817,120 @@ Concurrent mixed 95/5 (8 thr.) 1208381 ops/s     828 ns/op
 
 These are illustrative; rerun on your hardware for decisions.
 
+### Splay Rebalancing: Measured Impact
+
+`SKIPLIST_SPLAY_REBALANCE` is off by default.  This section is the
+evidence for that default.
+
+The headline metric here is **comparisons per lookup**, counted inside
+the user `compare` callback.  That is the structural search cost the
+splay heuristic is trying to reduce, and unlike wall-clock time it is
+unaffected by other load on the machine.  CPU time (via
+`CLOCK_PROCESS_CPUTIME_ID`, which excludes intervals when the process
+is descheduled) is reported alongside it.
+
+Two details matter for reproducing this.  First, `slh_prng_state` is
+normally seeded from `time()`, the pid, and the list address, so two
+runs build *different* random towers; the OFF and ON runs below pin it
+to the same value so the pair starts from an identical structure.
+Without that, small OFF-vs-ON differences are just a different random
+skiplist.  Second, wall-clock numbers on a loaded machine are useless
+here -- forward iteration, which splay cannot affect at all, varied by
+more than 5x between runs on the machine used below.
+
+N = 100000 sequential integer keys, medians over 5 pinned tower seeds x 2
+repetitions, 100000 lookups per sample.  The cmp/op columns are the
+load-independent, reproducible result -- re-measured bit-identically at
+two different machine loads.  The ns/op columns are included only for
+rough scale: they were taken on a heavily loaded shared machine (load
+average above 100 on 8 cores).  For calibration, forward iteration --
+which the splay rebalance cannot affect at all -- varied by more than 5x
+between runs on that machine, so do not read small ns/op deltas as
+signal.
+
+**The contiguous-hot-range row is a lower bound, not a fixed cost.**  It
+grows with the length of the workload; see the note under that bullet.
+Every other row is stable with workload length.
+
+| workload                              | cmp/op OFF | cmp/op ON | delta   | ns/op OFF (rough) | ns/op ON (rough) |
+|---------------------------------------|-----------:|----------:|--------:|------------------:|-----------------:|
+| Sequential scan of all keys           |      31.54 |     31.57 |   +0.2% |               230 |              239 |
+| Uniform random keys                   |      31.54 |     31.55 |   +0.0% |              1555 |             1515 |
+| 10 hot keys, scattered, round-robin   |      32.50 |     31.02 |   -5.1% |               193 |              181 |
+| 90% into 100 scattered hot keys       |      31.71 |     31.00 |   -2.5% |               594 |              555 |
+| 90% into contiguous range [0, 1000)   |      25.95 |     36.67 |  +42.1% |               436 |              527 |
+
+Reading the table:
+
+- **Skew helps only a little, and only when the hot keys are
+  scattered.**  A 10-key hot set saves about 5% of comparisons; a
+  100-key one about 2.5%.  Both directions are consistent across every
+  seed, so the sign is real, but the magnitude is single-digit percent.
+- **Uniform random access is a wash structurally** (+0.0% comparisons).
+  The rebalance pass itself does a small amount of work on paths where
+  it finds nothing worth moving; the ns/op columns above are too noisy
+  to put a number on that cost.
+- **A contiguous hot range is a real regression**: 42% more
+  comparisons at the table's workload length, and worse the longer the
+  process runs.  This is the one case where the flag clearly hurts, and
+  it is a common access pattern (a hot key prefix, a recent-ID range).
+  Cause: every key in the hot range qualifies for promotion, so the
+  upper levels fill up with the entire range instead
+  of staying sparse.  Measured level population after the workload,
+  hot-range nodes only: OFF has 525 / 254 / 132 / 66 nodes at levels
+  1-4, ON has 1000 / 999 / 995 / 995.  Levels 1-5 degenerate into a
+  dense chain over the hot range, so a search descending through them
+  compares against far more nodes than it skips.
+
+  The 42% in the table is a lower bound that depends on how long the
+  workload runs, because the dense upper levels keep growing -- the cost
+  does not converge.  Same workload and tower seed, varying only the
+  number of lookups (comparisons per lookup, splay OFF stays flat
+  throughout at 25.8):
+
+  | lookups   | cmp/op ON | vs OFF |
+  |----------:|----------:|-------:|
+  |    25,000 |      27.7 |    +7% |
+  |    50,000 |      29.8 |   +15% |
+  |   100,000 |      34.5 |   +33% |
+  |   200,000 |      58.5 |  +126% |
+  |   400,000 |      74.8 |  +189% |
+  | 1,600,000 |      91.8 |  +256% |
+
+  Sign-stable across all ten seeds tried, with per-seed spread from +50%
+  to +165% at 200,000 lookups.  A long-running process with a contiguous
+  hot range degrades without bound: the upper levels converge on a dense
+  linked list over that range, so descending them costs more than the
+  level-0 scan it was supposed to skip.  Treat a contiguous hot range as
+  a contraindication for this flag, not as a bounded cost.
+- **Splay is doing what the paper says**; the search path just does not
+  collect the reward.  Under the 10-hot-key workload the hot nodes rise
+  to height 12 with the flag on versus 0-3 with it off, exactly as
+  [Verification](#verification) predicts.  But `_skip_locate_` descends
+  from the head's height to level 0 on every lookup with no early exit
+  when the target is matched at an upper level, so lifting a node does
+  not shorten the traversal that finds it -- it only reduces how many
+  nodes get compared on the way down.  That is why a verified-correct
+  height adaptation converts into single-digit percent.
+
+When to enable it: a small, scattered, stable hot set, and only after
+measuring your own workload.  When to leave it off: everything else,
+which is why it is opt-in.
+
+Machine and build for the numbers above: Intel Core Ultra 7 258V,
+8 cores, Linux 6.x x86_64, gcc 15.2.0, built as
+
+```sh
+gcc -Wall -O2 -std=c11 -Iinclude/ -DNDEBUG [-DSKIPLIST_SPLAY_REBALANCE] \
+    bench.c -o bench -lm -pthread
+```
+
+with `SKIPLIST_SPLAY_INTERVAL` at its default of 64.  These are
+medians, not single samples, and they were taken on a machine with
+other work running; the comparison counts are load-independent and
+reproducible, the ns/op figures are not.  Rerun on your hardware
+before deciding.
+
 
 ## Performance Notes
 
@@ -789,8 +939,13 @@ These are illustrative; rerun on your hardware for decisions.
   needed.
 - **Pool allocator** doubles to triples sequential insert throughput
   by amortizing `malloc` and improving cache locality.
-- **Splay rebalancing** is a per-access overhead; only enable it when
-  the access distribution is heavily skewed.
+- **Splay rebalancing** is a per-access overhead that buys back only a
+  few percent even on the workloads it suits (a small, scattered hot
+  set), is neutral on uniform random access, and is a growing regression
+  on a contiguous hot range -- +33% comparisons after 100k lookups,
+  +256% after 1.6M, with no sign of converging.  Leave it off unless your
+  own measurements say otherwise; see
+  [Splay Rebalancing: Measured Impact](#splay-rebalancing-measured-impact).
 - **Splay interval** trades latency variance for amortized cost.
   Lower intervals keep the structure tighter but spread cost over
   every operation; higher intervals concentrate cost in occasional
@@ -809,6 +964,10 @@ These are illustrative; rerun on your hardware for decisions.
 Tested on:
 
 - Linux x86_64 / aarch64 with gcc 13/15 and clang 18/21
+- macOS (Apple clang) in CI: the library, all test suites, and all ten
+  examples.  The benchmark harness alone is not portable there --
+  `bench/bench.c` uses `pthread_barrier_t`, which Apple libc does not
+  implement.
 - Nix / NixOS (the development flake covers x86_64-linux, i686-linux,
   aarch64-linux, riscv64-linux, x86_64-darwin, aarch64-darwin)
 
@@ -852,11 +1011,15 @@ The unit and concurrent suites use the vendored
 (`tests/munit.{c,h}`); the property suite uses
 [hegel-c](https://github.com/gburd/hegel-c).
 
-- `tests/test.c` -- 33 single-threaded tests covering init, insert,
+- `tests/test.c` -- 47 single-threaded tests covering init, insert,
   duplicate insert, search, remove, the access API, navigation, edge
   cases, splay behavior, memory management, the pool allocator, EBR
   basics, validation, head-height growth/shrink, a 100k-key stress
   test, snapshots, archive, and the breadth of the generated API.
+  Also: validator corruption injection (one invariant broken at a time,
+  restored afterwards), archive I/O and malformed-input rejection, DOT
+  edge shapes, skewed access that drives the splay rebalance, and
+  insert's help-unlink path against a hand-marked node.
 - `tests/test_concurrent.c` -- 13 multi-threaded tests covering
   concurrent insert / search / delete, a mixed workload, EBR
   correctness, pool contention, and a race-validation suite
@@ -870,14 +1033,36 @@ The unit and concurrent suites use the vendored
   reuse.  Built by `make test_property`, which needs a local hegel-c
   checkout and the hegel-core server (override `HEGEL_DIR` etc.; see
   the Makefile).
+- `tests/test_single.c` -- 17 tests for the `SKIPLIST_SINGLE_THREADED`
+  expansion, which is physically different generated code: NULL guards,
+  deserialize robustness, validator corruption, pool exhaustion and the
+  malloc fallback, snapshot edges, height growth/shrink, position
+  boundaries, the `prev_validated` stale-hint rescan, skewed access
+  through the splay rebalance, and a regression test for an infinite
+  loop when deleting a key that has duplicates.
+- `tests/test_splay_verify.c` -- 2 tests checking the rebalance actually
+  reproduces the Aksenov 2020 predicted heights.
 
-CI runs three independent jobs on every push and pull request:
+CI runs six independent jobs on every push and pull request:
 
 - **build** -- gcc and clang matrix; runs the Makefile target sequence
-  including `test_tsan` on the gcc row.
+  including `run_examples` everywhere and `test_tsan` /
+  `test_tsan_splay` on the gcc row.
+- **macos** -- `macos-latest` with Apple clang: unit, concurrent,
+  single-threaded, splay, and example suites.  LeakSanitizer has no
+  Darwin runtime, so the Makefile drops `-fsanitize=leak` there; ASan
+  and UBSan still run.  ThreadSanitizer, valgrind, and coverage are
+  Linux-only, and the benchmark is excluded because `bench/bench.c`
+  uses `pthread_barrier_t`, which Apple libc does not provide.
 - **valgrind** -- non-sanitized build under `valgrind --leak-check=full`.
 - **meson** -- `{none, address, thread, undefined}` sanitizer matrix.
-- **autotools** -- bootstrap, configure, build, `make distcheck`.
+- **autotools** -- bootstrap, configure, then `make test`,
+  `test_concurrent`, `test_splay`, `test_single`.
+- **coverage** -- `make coverage`; gates 95% line and function coverage
+  and uploads the HTML report as an artifact.
+
+`make test_property` is not in CI: it needs a local hegel-c checkout and
+the hegel-core server binary.  Run it manually before a release.
 
 Mirror workflow at `.forgejo/workflows/ci.yml` for Codeberg.
 

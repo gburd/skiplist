@@ -156,6 +156,109 @@ than running them in two phases, otherwise the hot key stays pinned
 at its peak height because no later access triggers a demotion.
 
 
+### Known limitation: contiguous hot ranges degrade without bound
+
+The rebalance promotes any node whose hit ratio justifies a higher
+level, evaluated per node in isolation.  When the hot set is a
+*contiguous key range* rather than scattered keys, every node in that
+range qualifies, so the upper levels fill with the whole range instead
+of staying sparse.  Those levels converge on a dense linked list over
+the range, and descending them costs more than the level-0 scan the
+tower was supposed to skip.
+
+This is not a bounded overhead -- it grows with the length of the run.
+Measured with comparisons per lookup (load-independent), N = 100000,
+90% of accesses into keys [0, 1000), tower PRNG pinned, splay OFF flat
+at 25.8 throughout:
+
+| lookups | cmp/op ON | vs OFF |
+|--------:|----------:|-------:|
+| 25,000 | 27.7 | +7% |
+| 100,000 | 34.5 | +33% |
+| 400,000 | 74.8 | +189% |
+| 1,600,000 | 91.8 | +256% |
+
+Sign-stable across ten tower seeds.  A long-lived process with a hot
+key prefix or a recent-ID range is therefore the worst case for this
+feature, and it is a common access pattern.
+
+#### Why it happens, precisely
+
+The target height is `h = K - 1 - log2(1/p)` where `p = u_hits/m_total`.
+That is a function of `p` **alone**, so every node sharing an access
+probability converges on the *same* height.  For a hot set of size `S`
+taking traffic fraction `f`, each member has `p = f/S`, hence one shared
+target:
+
+| hot-set size `S` | `p` | target `h` |
+|---:|---:|---:|
+| 1 | 0.9 | 15.8 |
+| 10 | 0.09 | 12.5 |
+| 100 | 0.009 | 9.2 |
+| 1000 | 0.0009 | 5.9 |
+
+For `S = 1` this is exactly right: one node rises, the tower stays
+sparse.  For `S = 1000` the model puts 1000 nodes on level ~6 --
+measured 997 of 1000 at height 6, matching the predicted 5.9, so the
+implementation is computing the paper's answer correctly.
+
+The global population at that level is not itself alarming (1000 nodes
+where a healthy list holds ~1700).  The damage comes from those nodes
+being **adjacent**: levels 1..6 each become a near-complete copy of the
+base list over the range.  Measured population of hot-range nodes,
+levels 1-4: `525 / 254 / 132 / 66` with splay off versus
+`1000 / 999 / 995 / 995` on.  A skiplist's bound needs level population
+to decay geometrically; here it is flat.
+
+So the defect is in the *model*, not the implementation: it carries no
+notion of the hot set's width, nor of where promoted nodes sit relative
+to one another.
+
+#### Three fixes attempted and rejected
+
+All three were implemented and measured; none shipped.
+
+1. **Fair-coin gate on each promotion** (restore geometric decay by
+   making level `h` cost ~`2^h` attempts).  Fails because attempts
+   repeat forever: `P(promoted)` after `k` rounds is `1 - 0.5^k`, so the
+   collapse is delayed, not prevented.  Measured still 997 nodes at
+   height 6 by 1.6M lookups.
+2. **Level-0 local-maximum gate** (promote only a node strictly hotter
+   than both level-0 neighbours).  The admitted set is a stable ~1/3 of
+   nodes -- measured 325 of 998, matching theory -- but *stability is the
+   problem*: the same 325 nodes then climb every level together.
+   Measured 698 at height 6.
+3. **Level-relative gate** (promote only if hotter at the target level
+   than the level-`h` predecessor).  This *did* fix the symptom --
+   population decayed `512/236/120/72/31/13/16` and cmp/op stayed at
+   ~30 instead of climbing to 92, a regression of +23% instead of +256%.
+   But it also **broke the paper's own height verification** (5 of 6
+   cases in `tests/test_splay_verify.c`), because `sle_levels[lvl].hits`
+   is never *accumulated* for `lvl > 0`: locate increments only level 0,
+   promotion zeroes the new level, insert sets it to 1.  The comparison
+   was therefore against a counter that is always ~0, which suppressed
+   essentially all promotion.  It fixed the regression by disabling the
+   feature, which is not a fix.
+
+A real fix needs per-level hit accounting that actually accumulates,
+or an explicit cap on promoted-node density per level, and then a
+re-derivation of the paper's height target under that constraint.  That
+is a research change, not a patch.  Until then the flag stays opt-in and
+the README documents a contiguous hot range as a contraindication.
+
+### Why the upside is small even when it works
+
+`_skip_locate_` always descends from the head's height to level 0 with
+no early exit when the target is matched at an upper level.  Promoting
+a hot node to height 12 therefore does not shorten the traversal that
+finds it -- it only reduces how many nodes are compared on the way
+down.  That is why a height adaptation which provably matches the
+paper's target (see `tests/test_splay_verify.c`) converts into only
+single-digit percent fewer comparisons.  Adding an early exit on an
+upper-level match would change the linearization argument for the
+lock-free path and has not been attempted.
+
+
 ## Memory reclamation (EBR)
 
 A logically deleted node cannot be freed immediately under
@@ -247,15 +350,17 @@ These two are diagnostics, not load-bearing features.
 
 ## Test architecture
 
-Five test translation units cover the implementation surface:
+Six test translation units cover the implementation surface:
 
 | File | What it exercises |
 |---|---|
-| `tests/test.c` | Single-threaded API breadth: 33 tests covering every macro. |
-| `tests/test_concurrent.c` | Multi-threaded behavior: 7 tests under heavy contention. |
-| `tests/test_single.c` | The `SKIPLIST_SINGLE_THREADED` build path: 6 tests. |
+| `tests/test.c` | Single-threaded API breadth: 47 tests covering every macro, including validator corruption injection and archive/DOT failure paths. |
+| `tests/test_concurrent.c` | Multi-threaded behavior: 13 tests under heavy contention. |
+| `tests/test_single.c` | The `SKIPLIST_SINGLE_THREADED` build path: 17 tests. |
 | `tests/test_splay_verify.c` | Empirical Aksenov 2020 height verification: 2 tests, only meaningful with `-DSKIPLIST_SPLAY_REBALANCE`. |
-| (none -- a separate target) | TSAN, ASan, UBSan, valgrind variants of the above. |
+| `tests/test_property.c` | Hegel (hegel-c) property tests: 9 properties driven against an independent reference model.  Opt-in (`make test_property`); needs a local hegel-c checkout, so it is not in CI. |
+| (no separate source) | TSAN, ASan, UBSan, and valgrind variants of the above, built as distinct targets from the same sources. |
+| `examples/ex01..ex10` | Doubling as smoke tests: `make run_examples` runs every example under ASan/LSan and fails on a non-zero exit.  Building them is not enough -- an out-of-bounds write inside an example's own archive callbacks only shows up when it runs. |
 
 The CI matrix runs every translation unit twice -- once with the
 default flags and once with `SKIPLIST_SPLAY_REBALANCE` defined --
@@ -264,11 +369,70 @@ so any regression in either code path fails fast.
 Coverage is measured against the *union* of `include/sl.h` plus the
 test files (because gcov attributes macro expansions to the file
 that includes the header, not to the header itself).  The current
-gates: 95% line, 95% function (both passing at 97% / 99%).  Branch
-coverage is reported at 59% but not gated -- many branches are
-lock-free CAS retry paths and EBR contention paths that require
-fault injection or scheduled interleaving to exercise
-deterministically.
+gates: 95% line, 95% function (both passing at 98% / 99%), and 72%
+branch.
+
+The branch figure needs two caveats to be meaningful.  It is the union
+of seven builds whose branch sets are mutually exclusive (a branch
+guarded by `SKIPLIST_SPLAY_REBALANCE` is uncoverable in the default
+build and vice versa), so the merged number sits below any individual
+build -- measured per build the same suites are 70-76%.  And
+assertion-failure arms are excluded: `assert_*()` compiles to a branch
+whose failure arm cannot run in a passing suite, so counting them
+merely scales the denominator with test volume.  What genuinely remains
+is CAS-retry machinery, marked-pointer help-unlink paths needing a peer
+thread mid-delete, and allocation-failure arms -- all requiring fault
+injection or scheduled interleaving.
+
+
+## Bugs found by raising branch coverage
+
+Three defects surfaced while writing tests for previously unexercised
+branches.  All three were invisible to the existing suite because
+nothing drove the relevant path.
+
+1. **Infinite loop in `_skip_unlink_fully_` when deleting a key with
+   duplicates.**  The function carries a `pred` hint down between
+   levels as a scan-start optimisation.  It advanced that hint onto any
+   node comparing `<=` the target, which includes an equal-key
+   duplicate that sorts *after* the target at level 0.  Lower levels
+   then began scanning past the node, so it was never unlinked, while
+   the level-0 reachability check at the bottom of the loop kept
+   finding it -- `remove()` spun forever.  Reproducing it needs enough
+   keys for the head to grow past level 0 plus duplicates on the low
+   keys, which is why ad-hoc small cases never hit it.  Fixed by
+   separating the carried hint (`pred`, only ever moved to strictly
+   smaller nodes) from the within-level walk (`scan`, which steps over
+   equal keys).  Regression tests in both `tests/test.c` and
+   `tests/test_single.c`.
+
+2. **`SKIPLIST_SINGLE_THREADED` + `SKIPLIST_SPLAY_REBALANCE` did not
+   compile.**  The single-threaded `_skip_atomic_fetch_add` shim was a
+   fixed-signature helper taking `size_t *`, but `slh_splay_counter` is
+   `uint32_t` -- and it is the only `uint32_t` user, reached only from
+   the splay path.  No build combined the two flags, so the
+   incompatible-pointer error never appeared.  Fixed by making the
+   shims type-generic statement expressions.  The coverage target now
+   builds this combination.
+
+3. **The validator crashed or hung on the corruption it exists to
+   diagnose.**  `_skip_integrity_check_` reported several classes of
+   error and then continued using the corrupt value: a height at or
+   above `SKIPLIST_MAX_HEIGHT` read past the level array (nodes
+   allocate `[0, MAX-1]` and every level loop is inclusive, so the
+   bound had to be `>=`, not `>`); a `NULL` `sle_levels` was reported
+   and then dereferenced; a `NULL` `next[0]` was reported and then
+   passed to the comparator; and a cycle in the level-0 chain was
+   correctly detected but the subsequent node walk was unbounded and
+   spun forever.  Fixed by clamping bad heights, returning early where
+   the list is genuinely unwalkable (the iteration macro advances
+   through `next[0]`, so there is no way to skip a node), and bounding
+   the node walk at the claimed length plus slack.
+
+The general lesson: a diagnostic that is only ever fed valid input is
+untested code.  Feeding the validator deliberately corrupted lists,
+one invariant at a time, is what found defect 3 -- and defects 1 and 2
+came from building and running configurations that no target covered.
 
 
 ## Comparison to other in-memory ordered indexes
