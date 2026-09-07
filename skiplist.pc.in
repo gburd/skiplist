@@ -6,6 +6,6 @@ includedir=@INCLUDEDIR@
 Name: skiplist
 Description: Header-only C splay-list with lock-free concurrency
 URL: https://codeberg.org/gregburd/skiplist
-Version: 1.1.4
+Version: 1.1.5
 Cflags: -I${includedir}
 Libs:

@@ -659,6 +659,12 @@ based on a hit counter on each tower level:
   closer to the head, shortening the search path.
 - Low-traffic nodes get demoted -- their tower shrinks so the
   vertical fanout above them stays sparse.
+- A promotion is refused when the node's immediate level-0 successor is
+  comparably hot.  The paper's height target is a function of a node's
+  own popularity alone, so a contiguous run of equally hot keys would
+  otherwise all climb together and flatten the upper levels into copies
+  of the base list.  A lone hot key has cold neighbours and is
+  unaffected.
 
 The algorithm is from Aksenov et al. ("The Splay-List", 2020).  A node
 with hit ratio `u/T` (where `T` is the total accesses) settles at
@@ -669,8 +675,8 @@ paper's `O(log(1/p))` search-cost target.  Hot keys ride near the top.
 The measured effect is smaller than the height changes suggest, and it
 is not uniformly positive: a small scattered hot set gains a few
 percent, uniform random access is roughly unchanged, and a large
-*contiguous* hot range gets progressively worse the longer the process
-runs.  See
+*contiguous* hot range is still slower with the flag on (3.7x more
+comparisons at steady state, down from 18.1x before v1.1.5).  See
 [Splay Rebalancing: Measured Impact](#splay-rebalancing-measured-impact)
 for the numbers before enabling it.
 
@@ -848,9 +854,9 @@ which the splay rebalance cannot affect at all -- varied by more than 5x
 between runs on that machine, so do not read small ns/op deltas as
 signal.
 
-**The contiguous-hot-range row is a lower bound, not a fixed cost.**  It
-grows with the length of the workload; see the note under that bullet.
-Every other row is stable with workload length.
+**The contiguous-hot-range row understates the settled cost.**  These are
+cumulative averages over the run; the steady-state figure for that
+workload is higher, and is given under the corresponding bullet below.
 
 | workload                              | cmp/op OFF | cmp/op ON | delta   | ns/op OFF (rough) | ns/op ON (rough) |
 |---------------------------------------|-----------:|----------:|--------:|------------------:|-----------------:|
@@ -882,27 +888,31 @@ Reading the table:
   dense chain over the hot range, so a search descending through them
   compares against far more nodes than it skips.
 
-  The 42% in the table is a lower bound that depends on how long the
-  workload runs, because the dense upper levels keep growing -- the cost
-  does not converge.  Same workload and tower seed, varying only the
-  number of lookups (comparisons per lookup, splay OFF stays flat
-  throughout at 25.8):
+  This was substantially improved in v1.1.5.  The promotion path now
+  refuses a level whose immediate level-0 successor is comparably hot, so
+  promotion is confined inside a dense hot region while a lone hot key is
+  still free to rise.  Steady-state search cost on the contiguous
+  workload, comparisons per lookup:
 
-  | lookups   | cmp/op ON | vs OFF |
-  |----------:|----------:|-------:|
-  |    25,000 |      27.7 |    +7% |
-  |    50,000 |      29.8 |   +15% |
-  |   100,000 |      34.5 |   +33% |
-  |   200,000 |      58.5 |  +126% |
-  |   400,000 |      74.8 |  +189% |
-  | 1,600,000 |      91.8 |  +256% |
+  | config | cmp/op | vs OFF |
+  |---|---:|---:|
+  | splay OFF | 25.8 | -- |
+  | splay ON, v1.1.4 | 467.9 | 18.1x |
+  | splay ON, v1.1.5 | 95.1 | 3.7x |
 
-  Sign-stable across all ten seeds tried, with per-seed spread from +50%
-  to +165% at 200,000 lookups.  A long-running process with a contiguous
-  hot range degrades without bound: the upper levels converge on a dense
-  linked list over that range, so descending them costs more than the
-  level-0 scan it was supposed to skip.  Treat a contiguous hot range as
-  a contraindication for this flag, not as a bounded cost.
+  A residual 3.7x remains: the gate consults a single successor rather
+  than the whole spanned interval, so a range with a hot node every other
+  key still promotes half of itself.  Treat a contiguous hot range as a
+  contraindication for this flag.
+
+  Note these figures are **steady-state** -- measured after warming.
+  Earlier releases of this document reported a cumulative average over the
+  whole run and concluded the cost grew without bound.  That was a
+  metric artifact: a running average keeps climbing long after the
+  structure has settled, because early cheap lookups are progressively
+  diluted by later dear ones.  Both configurations do converge, and the
+  settled cost is worse than the cumulative average suggested.  See
+  DESIGN.md for the mechanism and for five approaches that did not work.
 - **Splay is doing what the paper says**; the search path just does not
   collect the reward.  Under the 10-hot-key workload the hot nodes rise
   to height 12 with the flag on versus 0-3 with it off, exactly as
@@ -941,10 +951,10 @@ before deciding.
   by amortizing `malloc` and improving cache locality.
 - **Splay rebalancing** is a per-access overhead that buys back only a
   few percent even on the workloads it suits (a small, scattered hot
-  set), is neutral on uniform random access, and is a growing regression
-  on a contiguous hot range -- +33% comparisons after 100k lookups,
-  +256% after 1.6M, with no sign of converging.  Leave it off unless your
-  own measurements say otherwise; see
+  set), is neutral on uniform random access, and is a regression on a
+  contiguous hot range -- 3.7x more comparisons at steady state as of
+  v1.1.5, down from 18.1x before.  Leave it off unless your own
+  measurements say otherwise; see
   [Splay Rebalancing: Measured Impact](#splay-rebalancing-measured-impact).
 - **Splay interval** trades latency variance for amortized cost.
   Lower intervals keep the structure tighter but spread cost over

@@ -156,39 +156,14 @@ than running them in two phases, otherwise the hot key stays pinned
 at its peak height because no later access triggers a demotion.
 
 
-### Known limitation: contiguous hot ranges degrade without bound
+### Contiguous hot ranges: the failure mode, and the fix
 
-The rebalance promotes any node whose hit ratio justifies a higher
-level, evaluated per node in isolation.  When the hot set is a
-*contiguous key range* rather than scattered keys, every node in that
-range qualifies, so the upper levels fill with the whole range instead
-of staying sparse.  Those levels converge on a dense linked list over
-the range, and descending them costs more than the level-0 scan the
-tower was supposed to skip.
-
-This is not a bounded overhead -- it grows with the length of the run.
-Measured with comparisons per lookup (load-independent), N = 100000,
-90% of accesses into keys [0, 1000), tower PRNG pinned, splay OFF flat
-at 25.8 throughout:
-
-| lookups | cmp/op ON | vs OFF |
-|--------:|----------:|-------:|
-| 25,000 | 27.7 | +7% |
-| 100,000 | 34.5 | +33% |
-| 400,000 | 74.8 | +189% |
-| 1,600,000 | 91.8 | +256% |
-
-Sign-stable across ten tower seeds.  A long-lived process with a hot
-key prefix or a recent-ID range is therefore the worst case for this
-feature, and it is a common access pattern.
-
-#### Why it happens, precisely
-
-The target height is `h = K - 1 - log2(1/p)` where `p = u_hits/m_total`.
-That is a function of `p` **alone**, so every node sharing an access
-probability converges on the *same* height.  For a hot set of size `S`
-taking traffic fraction `f`, each member has `p = f/S`, hence one shared
-target:
+The paper's target height `h = K - 1 - log2(1/p)` depends only on
+`p = u_hits/m_total`, where `u_hits` counts exact matches.  That is a pure
+per-key popularity with no dependence on position, so every node of equal
+popularity earns an equal height however many neighbours share it.  For a
+hot set of size `S` taking traffic fraction `f`, every member has
+`p = f/S` and so targets one shared height:
 
 | hot-set size `S` | `p` | target `h` |
 |---:|---:|---:|
@@ -197,120 +172,101 @@ target:
 | 100 | 0.009 | 9.2 |
 | 1000 | 0.0009 | 5.9 |
 
-For `S = 1` this is exactly right: one node rises, the tower stays
-sparse.  For `S = 1000` the model puts 1000 nodes on level ~6 --
-measured 997 of 1000 at height 6, matching the predicted 5.9, so the
-implementation is computing the paper's answer correctly.
+For `S = 1` this is exactly right: one node rises, the tower stays sparse.
+For `S = 1000` the model puts 1000 nodes on level ~6 -- measured 997 of
+1000 at height 6, matching the predicted 5.9, so the implementation was
+computing the paper's answer correctly.  The *model* is what cannot
+express hot-set width.
 
 The global population at that level is not itself alarming (1000 nodes
 where a healthy list holds ~1700).  The damage comes from those nodes
-being **adjacent**: levels 1..6 each become a near-complete copy of the
-base list over the range.  Measured population of hot-range nodes,
-levels 1-4: `525 / 254 / 132 / 66` with splay off versus
+being **adjacent**: levels 1..6 each became a near-complete copy of the
+base list over the range.  Measured population of hot-range nodes at
+levels 1-4: `525 / 254 / 132 / 66` with splay off against
 `1000 / 999 / 995 / 995` on.  A skiplist's bound needs level population
-to decay geometrically; here it is flat.
+to decay geometrically; there it was flat.  By 1.6M lookups **100% of
+promoted hot-range nodes spanned exactly one key** -- their towers skipped
+nothing at all.
 
-So the defect is in the *model*, not the implementation: it carries no
-notion of the hot set's width, nor of where promoted nodes sit relative
-to one another.
+#### The fix
 
-#### Five fixes attempted and rejected
+A tower level from `A` to `B` earns its keep only if the traffic wanting
+to land strictly between them is small relative to the traffic landing on
+`A`.  That is what "skipping" means, and crucially neither side of it
+depends on any height, so it introduces no feedback loop.  (Per-level
+*traversal* traffic does: it is itself a function of height, so using it
+to set height is self-reinforcing.  Measured, that floats cold nodes up
+two levels and fails the paper's own verification.)
 
-All five were implemented and measured; none shipped.  The consistent
-failure mode is worth naming up front: **every gate that suppressed the
-contiguous-range pathology also suppressed the feature in the case it
-exists for.**  Two of the five looked like clear wins until the right
-thing was measured.
+Summing matches across the interval would be an `O(span)` level-0 walk,
+far too slow for a heuristic on the access path, so the promotion path
+uses the immediate level-0 successor as a proxy: refuse the promotion when
+that successor is within 25% of the node's own traffic.  Inside a
+uniformly hot range the successor is a peer and the promotion is refused;
+beside a lone hot key it is cold and the promotion proceeds.
 
-The benchmark to beat, medians over 7 tower seeds, 200k lookups,
-comparisons per lookup:
+The guard on `u_hits` is what makes this work.  Testing the ratio
+unconditionally is trivially true for two cold neighbours both at zero
+matches, which silently forbids promotion across the cold majority of the
+list -- measured, that turned the scattered-hot case from -6.0% into
++2.3% against splay off while leaving the height histogram visually
+unchanged.  Requiring the node to carry a meaningful share of total
+traffic first (`m_total / 2^12`) confines the gate to the dense-hot-region
+case it is for.
 
-| config | scattered hot (10 keys) | contiguous range, 1.6M lookups |
-|---|---:|---:|
-| splay OFF | 30.70 | 25.8 |
-| splay ON, no gate | 28.72 (-6.4%) | 91.8 (+256%) |
+#### Measured result
 
-The target is to keep the left column below OFF while bringing the right
-column near it.
+Steady-state search cost, comparisons per lookup, N = 100000, tower PRNG
+pinned.  Costs are measured **after** warming, which matters: a cumulative
+average over the whole run keeps climbing long after the structure has
+settled, because early cheap lookups are progressively diluted by later
+dear ones.  Measuring that way is how this regression was initially
+mis-diagnosed as unbounded when it in fact converges.
 
-1. **Fair-coin gate on each promotion** (restore geometric decay by
-   making level `h` cost ~`2^h` attempts).  Fails because attempts
-   repeat forever: `P(promoted)` after `k` rounds is `1 - 0.5^k`, so the
-   collapse is delayed, not prevented.  Measured still 997 nodes at
-   height 6 by 1.6M lookups.
-2. **Level-0 local-maximum gate** (promote only a node strictly hotter
-   than both level-0 neighbours).  The admitted set is a stable ~1/3 of
-   nodes -- measured 325 of 998, matching theory -- but *stability is the
-   problem*: the same 325 nodes then climb every level together.
-   Measured 698 at height 6.
-3. **Level-relative gate** (promote only if hotter at the target level
-   than the level-`h` predecessor).  Fixed the symptom -- population
-   decayed `512/236/120/72/31/13/16`, +23% instead of +256% -- but broke
-   the paper's own height verification (5 of 6 cases in
-   `tests/test_splay_verify.c`), because `sle_levels[lvl].hits` is never
-   *accumulated* for `lvl > 0`: locate increments only level 0,
-   promotion zeroes the new level, insert sets it to 1.  The comparison
-   was against a counter that is always ~0, so it suppressed essentially
-   all promotion.  It fixed the regression by disabling the feature.
-4. **Span gate** (refuse a level that points at the same successor as
-   the level below, since such a level skips nothing).  Motivated by a
-   strong measurement: by 1.6M lookups **100% of promoted hot-range nodes
-   spanned exactly one key**, so their towers were pure overhead.  The
-   condition is structural rather than statistical, needs no new state,
-   and is free (the successor is already loaded at that point).  It cut
-   the regression to +38 cmp/op with properly decaying population.  But
-   promotion is incremental, and at the bottom rung a lone hot node's
-   level-1 successor *is* its level-0 successor, so the gate refused the
-   first rung and no node could start climbing -- the pure-hot case sat
-   at height 0 against an expected 13.  Exempting `new_h == 1` let it
-   climb, but only to height 2, still failing 2 of 6 paper cases.  The
-   deeper problem is that a lone hot key among cold neighbours and one
-   hot key among 1000 hot neighbours are *locally indistinguishable* from
-   the promoting node plus its successor, and the paper legitimately
-   wants the first one tall.
-5. **Successor-hotness gate** (refuse promotion when the level-0
-   successor is comparably hot, i.e. `u_hits <= s_hits * 1.25`, on the
-   theory that a hot successor means we are inside a wide hot region and
-   the new level would skip a peer rather than a cold node).  This is the
-   one that looked correct: the paper's verification **passed all six
-   cases**, the lone hot key reached height 13, the contiguous regression
-   fell from +256% to +55%, and population decayed cleanly
-   (`339/262/143/93/56/32`).  It was rejected only because the scattered
-   hot case -- the workload splay exists to serve -- went from -6.4% to
-   **+2.3% versus splay off**, sign-stable across all seven seeds.  The
-   cause is subtle: with two cold neighbours both at 0 hits the ratio
-   test is trivially true, so the gate silently forbade promotion across
-   the cold majority of the list.  Requiring the successor to also clear
-   `asc_cond` did not recover the benefit.  Full-list height histograms
-   were near-identical in all three configurations, so the lost benefit
-   was not a visible structural change -- which is precisely why it would
-   have passed a review that only checked the pathology.
+| workload | splay OFF | ON, before | ON, after |
+|---|---:|---:|---:|
+| 90% into contiguous [0,1000) | 25.8 | 467.9 (18.1x) | 95.1 (3.7x) |
+| 10 scattered hot keys | 30.0 | 28.2 (-6.0%) | 28.5 (-5.1%) |
 
-What this rules out: any gate whose only inputs are the promoting node,
-its immediate neighbours, and the existing counters.  Attempts 4 and 5
-show that the pathological and intended configurations are
-indistinguishable from that information alone.
+The pathological case improves 4.9x; the intended case keeps its benefit
+(better than splay off at every seed tried).  Both configurations reach a
+fixed steady state -- the regression is bounded, contrary to what earlier
+revisions of this document claimed.
 
-What a real fix therefore needs is one of:
+A residual 3.7x on a contiguous hot range remains.  The proxy is a single
+successor rather than the whole spanned interval, so a range with a hot
+node every other key still promotes half of itself.  Closing that would
+need either interval match-sums (too slow on the access path as written)
+or per-level population accounting.
 
-- **Per-level hit accounting that actually accumulates.**  Locate already
-  visits every level; incrementing `sle_levels[lvl].hits` on the way down
-  would make "what fraction of level-`L` traffic passes through this
-  node" measurable, which is the spatial quantity the model lacks.  The
-  demotion path already transfers those counters to the predecessor, so
-  the semantics are half-built.  The cost is one relaxed increment per
-  level per lookup on the hot path, and a shared counter per level is
-  exactly the cache-line contention the existing `slh_head` hit counter
-  already suffers -- so this needs measuring under TSAN and concurrency,
-  not just single-threaded.
-- **An explicit cap on promoted-node density per level**, which needs a
-  per-level population counter and a re-derivation of the paper's height
-  target under that constraint.
+#### Approaches that did not work
 
-Either is a research change with its own correctness argument, not a
-patch.  Until then the flag stays opt-in and the README documents a
-contiguous hot range as a contraindication.
+Recorded because each looks plausible and costs a day to rediscover.
 
+1. **Fair-coin gate on each promotion.**  Attempts repeat forever, so
+   `P(promoted)` after `k` rounds is `1 - 0.5^k`: the collapse is delayed,
+   not prevented.  Still 997 nodes at height 6 by 1.6M lookups.
+2. **Level-0 local-maximum gate.**  Admits a stable ~1/3 of nodes
+   (measured 325 of 998, matching theory) -- and stability is the problem:
+   the same 325 then climb every level together.  698 at height 6.
+3. **Level-relative gate** (compare per-level hit counters).  Broke 5 of 6
+   Aksenov cases, because `sle_levels[lvl].hits` is never *accumulated*
+   for `lvl > 0`: locate increments only level 0, promotion zeroes the new
+   level, insert sets it to 1.  It was comparing against a counter that is
+   always ~0, so it suppressed nearly all promotion -- fixing the
+   regression by disabling the feature.
+4. **Span gate** (refuse a level pointing at the same successor as the
+   level below).  Well motivated by the "100% span one key" measurement,
+   but promotion is incremental and at the bottom rung a lone hot node's
+   level-1 successor *is* its level-0 successor, so nothing could start
+   climbing -- pure-hot sat at height 0 against an expected 13.
+5. **Populating per-level traversal counters in locate.**  Makes the ratio
+   dimensionally consistent, and the demotion path already transfers those
+   counters, so the accounting was half-built.  But traversal traffic is a
+   function of height, so feeding it back into the height decision is
+   self-reinforcing: cold nodes floated up two levels.  Using traversal
+   traffic *alone* cannot bootstrap either, since a height-0 node has no
+   upper level to have accumulated any.
 
 ### Why the upside is small even when it works
 
