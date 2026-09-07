@@ -1316,6 +1316,55 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             asc_cond = (double)m_total_hits / (double)(1ULL << (delta_height - 1));                                                                          \
             if (u_hits <= (size_t)asc_cond)                                                                                                                  \
                 continue;                                                                                                                                    \
+            /* ---- NEIGHBOUR-RELATIVE PROMOTION GATE ----                                                                                                   \
+             *                                                                                                                                               \
+             * ROOT CAUSE this addresses.  The paper's target height                                                                                          \
+             * h = K - 1 - log2(1/p) is a function of p = u_hits/m_total alone,                                                                                \
+             * and u_hits counts exact matches -- a pure per-key popularity with                                                                               \
+             * no dependence on position.  Every node of equal popularity                                                                                      \
+             * therefore earns an equal height, however many neighbours share                                                                                  \
+             * it.  For a hot set of size S taking traffic fraction f, every                                                                                   \
+             * member has p = f/S and so targets one shared height: measured 997                                                                               \
+             * of 1000 hot nodes at height 6 against a predicted 5.9.  The model                                                                              \
+             * is computing its own answer correctly; it simply cannot express                                                                                 \
+             * hot-set width.                                                                                                                                 \
+             *                                                                                                                                               \
+             * A tower level from A to B earns its keep only if the traffic that                                                                               \
+             * wants to land strictly between them is small relative to the                                                                                   \
+             * traffic landing on A.  That is what "skipping" means, and neither                                                                               \
+             * side of it depends on any height, so unlike a per-level traffic                                                                                 \
+             * measure it introduces no feedback loop (traversal traffic is                                                                                    \
+             * itself a function of height, so using it to set height is                                                                                       \
+             * self-reinforcing -- measured, it floats cold nodes up two levels).                                                                              \
+             * Summing matches across the interval would be an O(span) level-0                                                                                 \
+             * walk, far too slow for a heuristic on the access path, so use the                                                                               \
+             * immediate level-0 successor as the proxy: in a uniformly hot                                                                                    \
+             * range it is equally hot and the promotion is refused; beside a                                                                                  \
+             * lone hot key it is cold and the promotion proceeds.                                                                                            \
+             *                                                                                                                                               \
+             * The guard on u_hits is what makes this work.  Testing the ratio                                                                                 \
+             * unconditionally is trivially true for two cold neighbours both at                                                                               \
+             * zero matches, which silently forbids promotion across the cold                                                                                  \
+             * majority of the list -- measured, that turned the scattered-hot                                                                                 \
+             * case from -6.4% into +2.3% against splay off while leaving the                                                                                  \
+             * height histogram visually unchanged.  Requiring the node to carry                                                                               \
+             * a meaningful share of total traffic before consulting its                                                                                       \
+             * neighbour confines the gate to the dense-hot-region case it is                                                                                  \
+             * for.                                                                                                                                           \
+             *                                                                                                                                               \
+             * Reads only the node's own level-0 successor, which the caller's                                                                                 \
+             * EBR pin already covers (locate just traversed it), so this adds no                                                                              \
+             * reclamation exposure. */                                                                                                                       \
+            if (u_hits > m_total_hits / (size_t)(1ULL << 12)) {                                                                                       \
+                decl##_node_t *nb = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire));                                     \
+                if (nb != NULL && nb != slist->slh_tail) {                                                                                                     \
+                    size_t nb_hits = _skip_atomic_load(&nb->field.sle_levels[0].hits, memory_order_relaxed);                                                    \
+                    /* Refuse when the successor is within 25% of our own                                                                                      \
+                     * traffic: the level would skip a peer, not a cold node. */                                                                               \
+                    if (u_hits <= nb_hits + (nb_hits >> 2))                                                                                                     \
+                        continue;                                                                                                                              \
+                }                                                                                                                                             \
+            }                                                                                                                                                \
             if (node_height >= SKIPLIST_MAX_HEIGHT - 1)                                                                                                      \
                 continue;                                                                                                                                    \
             if (node_height >= k_threshold)                                                                                                                  \

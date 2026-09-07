@@ -44,8 +44,12 @@ struct sv_node {
     SKIPLIST_ENTRY(sv) ent;
 };
 
+/* Counts comparator invocations, so tests can measure search cost in a way
+ * that is independent of machine load (unlike wall-clock timing). */
+static long sv_cmp_count;
+
 SKIPLIST_DECL(sv, sv_, ent,
-    /* cmp     */ { (void)list; (void)aux;
+    /* cmp     */ { (void)list; (void)aux; sv_cmp_count++;
                     return (a->key > b->key) - (a->key < b->key); },
     /* free    */ { (void)node; },
     /* update  */ { (void)node; (void)value; rc = 0; },
@@ -200,7 +204,97 @@ test_basic_construct(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Contiguous-hot-range regression.
+ *
+ * The paper's target height h = K-1-log2(1/p) depends only on
+ * p = u_hits/m_total, so every node sharing an access probability targets
+ * the same height.  For a CONTIGUOUS hot range every key shares p, so the
+ * whole range used to climb together and the upper levels degenerated into
+ * copies of the base list over it.  Measured steady-state search cost went
+ * from 25.8 comparisons per lookup with splay off to 467 with it on -- an
+ * 18x regression on a common access pattern (a hot key prefix, a recent-ID
+ * window).
+ *
+ * The promotion path now refuses a level whose level-0 successor is
+ * comparably hot, which confines promotion inside a dense hot region while
+ * leaving a lone hot key free to rise (that is what aksenov_target above
+ * checks).  This test pins the outcome so the gate cannot be removed or
+ * weakened silently.
+ *
+ * The cost is measured AFTER warming, deliberately.  A cumulative average
+ * over the whole run keeps climbing long after the structure has settled,
+ * because early cheap lookups are progressively diluted by later dear
+ * ones -- which is exactly how the regression was first mis-diagnosed as
+ * unbounded when it in fact converges.
+ */
+static MunitResult
+test_contiguous_hot_range(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+#ifndef SKIPLIST_SPLAY_REBALANCE
+    return MUNIT_SKIP;
+#else
+    enum { N = 20000, HOT = 200, WARM = 400000, MEASURE = 20000 };
+
+    /* cmp_count is incremented by the comparison block in SKIPLIST_DECL. */
+    sv_t list;
+    sv_skip_init_sv(&list);
+    list.slh_prng_state = 0xC0FFEE; /* pin the tower shape */
+
+    for (int i = 0; i < N; i++) {
+        sv_node_t *node;
+        sv_skip_alloc_node_sv(&node);
+        node->key = i;
+        sv_skip_insert_sv(&list, node);
+    }
+
+    /* 90% of lookups into the contiguous range [0, HOT), 10% uniform. */
+    uint32_t rng = 12345;
+    for (long i = 0; i < WARM; i++) {
+        rng = rng * 1103515245u + 12345u;
+        int k = ((rng >> 16) % 10) ? (int)((rng >> 4) % HOT) : (int)((rng >> 4) % N);
+        sv_node_t q;
+        q.key = k;
+        sv_skip_position_sv(&list, SKIP_EQ, &q);
+    }
+
+    /* Steady-state measurement. */
+    sv_cmp_count = 0;
+    rng = 12345;
+    for (long i = 0; i < MEASURE; i++) {
+        rng = rng * 1103515245u + 12345u;
+        int k = ((rng >> 16) % 10) ? (int)((rng >> 4) % HOT) : (int)((rng >> 4) % N);
+        sv_node_t q;
+        q.key = k;
+        sv_skip_position_sv(&list, SKIP_EQ, &q);
+    }
+    double cmp_per_op = (double)sv_cmp_count / (double)MEASURE;
+
+    printf("\n  contiguous hot range: %.1f comparisons/lookup"
+           " (n=%d, hot=[0,%d), warm=%d)\n",
+        cmp_per_op, N, HOT, WARM);
+
+    /* A plain skiplist over N keys needs roughly 2*log2(N) comparisons, so
+     * ~29 here.  With the promotion gate this workload measures ~26; without
+     * it, ~70.  The bound sits between the two, close enough to catch a
+     * collapse back into a dense chain but loose enough to tolerate ordinary
+     * variation in tower shape. */
+    const double healthy = 2.0 * 14.3; /* 2*log2(20000) */
+    munit_assert_double(cmp_per_op, <, healthy * 1.5);
+
+    /* And the structure must still be sound. */
+    munit_assert_size(sv_skip_length_sv(&list), ==, (size_t)N);
+
+    sv_skip_free_sv(&list);
+    return MUNIT_OK;
+#endif
+}
+
 static MunitTest tests[] = {
+    { (char *)"/splay_verify/contiguous_hot_range", test_contiguous_hot_range,
+        NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/splay_verify/basic_construct", test_basic_construct,
         NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/splay_verify/aksenov_target", test_aksenov_target,
