@@ -18,7 +18,7 @@
 # sensible defaults inside the Makefile.
 
 AC_PREREQ([2.69])
-AC_INIT([skiplist], [1.1.5], [greg@burd.me], [skiplist],
+AC_INIT([skiplist], [1.1.6], [greg@burd.me], [skiplist],
         [https://codeberg.org/gregburd/skiplist])
 
 AC_CONFIG_AUX_DIR([build-aux])

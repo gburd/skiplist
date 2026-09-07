@@ -200,12 +200,22 @@ two levels and fails the paper's own verification.)
 
 Summing matches across the interval would be an `O(span)` level-0 walk,
 far too slow for a heuristic on the access path, so the promotion path
-uses the immediate level-0 successor as a proxy: refuse the promotion when
-that successor is within 25% of the node's own traffic.  Inside a
-uniformly hot range the successor is a peer and the promotion is refused;
-beside a lone hot key it is cold and the promotion proceeds.
+compares against the single node that will follow it **at the target
+level** -- the `B` in "a level from `A` to `B`".  That successor is already
+recorded in the locate path (`path[h+1].succ`) and is covered by the
+caller's EBR pin, so the check costs nothing extra.  The promotion is
+refused when that successor is within 25% of the node's own traffic:
+inside a hot region it is a peer, and beside a lone hot key it is cold.
 
-The guard on `u_hits` is what makes this work.  Testing the ratio
+Getting the *level* right matters more than it appears.  v1.1.5 compared
+against the immediate **level-0** successor, which only approximates the
+spanned interval when that interval is a single node.  Any hot set with
+cold keys interleaved defeated it -- with every second key hot, each hot
+node's level-0 neighbour is cold, so the test passed and 972 of 1000 hot
+nodes still converged on one level, measuring 2.02x splay off.  That was
+*worse* than the contiguous case the gate had been written for.
+
+The guard on `u_hits` is the other load-bearing part.  Testing the ratio
 unconditionally is trivially true for two cold neighbours both at zero
 matches, which silently forbids promotion across the cold majority of the
 list -- measured, that turned the scattered-hot case from -6.0% into
@@ -216,28 +226,42 @@ case it is for.
 
 #### Measured result
 
-Steady-state search cost, comparisons per lookup, N = 100000, tower PRNG
-pinned.  Costs are measured **after** warming, which matters: a cumulative
-average over the whole run keeps climbing long after the structure has
-settled, because early cheap lookups are progressively diluted by later
-dear ones.  Measuring that way is how this regression was initially
-mis-diagnosed as unbounded when it in fact converges.
+Steady-state search cost, comparisons per lookup, N = 100000, medians over
+three pinned tower seeds.  Costs are measured **after** warming, which
+matters: a cumulative average over the whole run keeps climbing long after
+the structure has settled, because early cheap lookups are progressively
+diluted by later dear ones.  Measuring that way is how this regression was
+initially mis-diagnosed as unbounded when it in fact converges.
 
-| workload | splay OFF | ON, before | ON, after |
-|---|---:|---:|---:|
-| 90% into contiguous [0,1000) | 25.8 | 467.9 (18.1x) | 95.1 (3.7x) |
-| 10 scattered hot keys | 30.0 | 28.2 (-6.0%) | 28.5 (-5.1%) |
+| workload | OFF | v1.1.4 | v1.1.5 | v1.1.6 |
+|---|---:|---:|---:|---:|
+| uniform random | 31.4 | 31.4 | 31.4 | 31.4 |
+| 10 scattered hot keys | 31.0 | 28.8 | 28.8 | 28.5 |
+| contiguous 100 | 23.0 | -- | 26.3 | 24.6 |
+| contiguous 1000 | 26.6 | 467.9* | 40.5 | 38.7 |
+| contiguous 10000 | 29.7 | -- | 36.9 | 36.9 |
+| 1000 hot keys, every 2nd | 26.9 | -- | 54.3 | 34.3 |
+| 1000 hot keys, every 4th | 28.5 | -- | 42.6 | 32.4 |
+| two hot blocks of 500 | 27.8 | -- | 55.8 | 44.0 |
 
-The pathological case improves 4.9x; the intended case keeps its benefit
-(better than splay off at every seed tried).  Both configurations reach a
-fixed steady state -- the regression is bounded, contrary to what earlier
-revisions of this document claimed.
+\* measured at a longer warm-up; the v1.1.5 and v1.1.6 columns share a
+common 800k-lookup warm-up so they are comparable to each other.
 
-A residual 3.7x on a contiguous hot range remains.  The proxy is a single
-successor rather than the whole spanned interval, so a range with a hot
-node every other key still promotes half of itself.  Closing that would
-need either interval match-sums (too slow on the access path as written)
-or per-level population accounting.
+The intended case keeps its benefit, uniform access is untouched, and
+every skewed shape improves.  Worst remaining case is two separated hot
+blocks at 1.59x.
+
+#### What is still not fixed
+
+The gate consults one successor, not the whole spanned interval, so a hot
+region dense enough that the target-level successor is *also* hot still
+promotes part of itself.  That is why two hot blocks (1.59x) and a
+contiguous 1000-key range (1.45x) remain above parity.  Closing the gap
+needs either interval match-sums -- too slow on the access path as
+written -- or per-level population accounting.
+
+The upside also stays small even when the heuristic works, for a reason
+unrelated to any of this: see the next section.
 
 #### Approaches that did not work
 
