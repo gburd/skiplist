@@ -701,6 +701,160 @@ test_st_validate_corruption(const MunitParameter p[], void *d)
     return MUNIT_OK;
 }
 
+/* The single-threaded validator expansion has two gaps the existing
+ * corruption test leaves open.
+ *
+ * First, three dispatch-table guards: /single/validate_corruption nulls
+ * free_entry and compare_entries but never update_entry, archive_entry or
+ * sizeof_entry, so those early returns never run in this build.
+ *
+ * Second, the `flags & 2` early-exit arms.  The existing test passes
+ * flags=0/1/3 but only ever asserts "> 0", which cannot distinguish
+ * stop-at-first from tally-everything.  Asserting == 1 under flags=3 is
+ * the actual contract and is what drives the early-return arms.
+ *
+ * Fixture stays at 64 nodes: the check is an O(n*levels) walk called many
+ * times here. */
+static MunitResult
+test_st_validate_early_exit_arms(const MunitParameter p[], void *d)
+{
+    (void)p;
+    (void)d;
+
+    st_t *l = malloc(sizeof(*l));
+    st_skip_init_st(l);
+    for (int i = 1; i <= 64; i++)
+        st_skip_put_st(l, i, mk(i));
+
+    fflush(stderr);
+    int saved = dup(fileno(stderr));
+    if (freopen("/dev/null", "w", stderr) == NULL) {
+        /* Non-fatal; the assertions below still hold. */
+    }
+
+    assert_int(_skip_integrity_check_st(l, 1), ==, 0);
+    assert_int(_skip_integrity_check_st(l, 3), ==, 0);
+
+    /* ---- dispatch-table guards this build never exercised ---- */
+    int (*save_update)(st_node_t *, void *) = l->slh_fns.update_entry;
+    l->slh_fns.update_entry = NULL;
+    assert_int(_skip_integrity_check_st(l, 1), >, 0);
+    l->slh_fns.update_entry = save_update;
+
+    int (*save_archive)(st_node_t *, const st_node_t *) = l->slh_fns.archive_entry;
+    l->slh_fns.archive_entry = NULL;
+    assert_int(_skip_integrity_check_st(l, 1), >, 0);
+    l->slh_fns.archive_entry = save_archive;
+
+    size_t (*save_sizeof)(st_node_t *) = l->slh_fns.sizeof_entry;
+    l->slh_fns.sizeof_entry = NULL;
+    assert_int(_skip_integrity_check_st(l, 1), >, 0);
+    l->slh_fns.sizeof_entry = save_sizeof;
+
+    assert_int(_skip_integrity_check_st(l, 1), ==, 0);
+
+    /* ---- early-exit arms: exactly one error reported ---- */
+#define ST_ASSERT_EARLY_ONE()                                   \
+    do {                                                        \
+        assert_int(_skip_integrity_check_st(l, 1), >, 0);         \
+        assert_int(_skip_integrity_check_st(l, 3), ==, 1);        \
+    } while (0)
+
+    size_t save_hh = l->slh_head->entries.sle_height;
+    size_t save_th = l->slh_tail->entries.sle_height;
+
+    l->slh_head->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    ST_ASSERT_EARLY_ONE();
+    l->slh_head->entries.sle_height = save_hh;
+
+    l->slh_tail->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    ST_ASSERT_EARLY_ONE();
+    l->slh_tail->entries.sle_height = save_th;
+
+    l->slh_tail->entries.sle_height = save_th ? save_th - 1 : 1;
+    ST_ASSERT_EARLY_ONE();
+    l->slh_tail->entries.sle_height = save_th;
+
+    size_t save_len = l->slh_length;
+    l->slh_length = save_len + 9;
+    ST_ASSERT_EARLY_ONE();
+    l->slh_length = save_len;
+
+    /* per-node arms */
+    st_node_t *n1 = st_skip_head_st(l);
+    assert_not_null(n1);
+    st_node_t *n2 = st_skip_next_node_st(l, n1);
+    assert_not_null(n2);
+    st_node_t *n3 = st_skip_next_node_st(l, n2);
+    assert_not_null(n3);
+
+    size_t save_n2h = n2->entries.sle_height;
+    n2->entries.sle_height = save_hh + 1;
+    ST_ASSERT_EARLY_ONE();
+    n2->entries.sle_height = save_n2h;
+
+    n2->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    assert_int(_skip_integrity_check_st(l, 1), >, 0);
+    assert_int(_skip_integrity_check_st(l, 3), >, 0);
+    n2->entries.sle_height = save_n2h;
+
+    st_node_t *save_prev = n2->entries.sle_prev;
+    n2->entries.sle_prev = NULL;
+    assert_int(_skip_integrity_check_st(l, 1), >, 0);
+    assert_int(_skip_integrity_check_st(l, 3), >, 0);
+    n2->entries.sle_prev = save_prev;
+
+    int save_key = n2->key;
+    n2->key = n3->key + 100;
+    ST_ASSERT_EARLY_ONE();
+    n2->key = n1->key - 100;
+    ST_ASSERT_EARLY_ONE();
+    n2->key = save_key;
+
+    /* upper-level arms, both report modes.  Level 0 is left alone: a fault
+     * there makes the list unwalkable and returns unconditionally. */
+    {
+        size_t head_h = l->slh_head->entries.sle_height;
+        for (size_t lvl = 1; lvl <= head_h; lvl++) {
+            st_node_t *save = l->slh_head->entries.sle_levels[lvl].next;
+
+            l->slh_head->entries.sle_levels[lvl].next = NULL;
+            assert_int(_skip_integrity_check_st(l, 1), >, 0);
+            assert_int(_skip_integrity_check_st(l, 3), >, 0);
+
+            l->slh_head->entries.sle_levels[lvl].next = _SKIP_MARK(save);
+            assert_int(_skip_integrity_check_st(l, 0), >, 0);
+            assert_int(_skip_integrity_check_st(l, 2), >, 0);
+
+            l->slh_head->entries.sle_levels[lvl].next = save;
+            assert_int(_skip_integrity_check_st(l, 1), ==, 0);
+            assert_int(_skip_integrity_check_st(l, 3), ==, 0);
+        }
+    }
+
+    /* marked pointer on a live node, first per-node loop */
+    {
+        st_node_t *save_next = n2->entries.sle_levels[0].next;
+        n2->entries.sle_levels[0].next = _SKIP_MARK(save_next);
+        assert_int(_skip_integrity_check_st(l, 0), >, 0);
+        assert_int(_skip_integrity_check_st(l, 2), >, 0);
+        n2->entries.sle_levels[0].next = save_next;
+    }
+
+#undef ST_ASSERT_EARLY_ONE
+
+    for (int flags = 0; flags <= 3; flags++)
+        assert_int(_skip_integrity_check_st(l, flags), ==, 0);
+
+    fflush(stderr);
+    dup2(saved, fileno(stderr));
+    close(saved);
+
+    st_skip_free_st(l);
+    free(l);
+    return MUNIT_OK;
+}
+
 /* Pool exhaustion and the malloc fallback, plus repeated claim/release. */
 static MunitResult
 test_st_pool_exhaustion(const MunitParameter p[], void *d)
@@ -1170,6 +1324,7 @@ static MunitTest tests[] = {
     { (char *)"/single/null_guards", test_st_null_guards, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/deserialize_robustness", test_st_deserialize_robustness, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/validate_corruption", test_st_validate_corruption, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/single/validate_early_exit_arms", test_st_validate_early_exit_arms, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/pool_exhaustion", test_st_pool_exhaustion, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/snapshot_edges", test_st_snapshot_edges, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/height_churn", test_st_height_churn, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },

@@ -2786,6 +2786,1163 @@ test_insert_help_unlink(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* The validator takes `flags & 2` to mean "return on the first error"
+ * instead of tallying every one.  The existing corruption tests all pass
+ * flags=1 or flags=0, so the whole family of early-return arms -- one per
+ * error site, roughly forty of them -- never executes.
+ *
+ * Every corruption below is therefore checked twice: once report-all
+ * (flags=1) and once early-exit (flags=3), asserting that early-exit
+ * reports exactly one error while report-all reports at least one.  That
+ * is the real contract of the flag, so this is a behaviour test that
+ * happens to reach the arms rather than a coverage stunt.
+ *
+ * Fixture stays at 64 nodes: _skip_integrity_check_ is an O(n*levels)
+ * walk and it is called many times here. */
+static MunitResult
+test_validate_early_exit_arms(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = make_validation_fixture(64);
+    silence_stderr();
+
+    /* Clean under both report modes. */
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+    assert_int(_skip_integrity_check_test(list, 3), ==, 0);
+
+    /* Early exit must stop at the FIRST error, so a list carrying several
+     * independent faults still reports exactly one. */
+#define ASSERT_EARLY_EXIT_ONE()                                     \
+    do {                                                            \
+        assert_int(_skip_integrity_check_test(list, 1), >, 0);       \
+        assert_int(_skip_integrity_check_test(list, 3), ==, 1);      \
+    } while (0)
+
+    /* ---- height faults ---- */
+    size_t save_hh = list->slh_head->entries.sle_height;
+    size_t save_th = list->slh_tail->entries.sle_height;
+
+    /* head height at the level-array bound. */
+    list->slh_head->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    ASSERT_EARLY_EXIT_ONE();
+    list->slh_head->entries.sle_height = save_hh;
+
+    /* tail height at the bound: a separate error site from head. */
+    list->slh_tail->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    ASSERT_EARLY_EXIT_ONE();
+    list->slh_tail->entries.sle_height = save_th;
+
+    /* head and tail disagreeing. */
+    list->slh_tail->entries.sle_height = save_th ? save_th - 1 : 1;
+    ASSERT_EARLY_EXIT_ONE();
+    list->slh_tail->entries.sle_height = save_th;
+
+    /* ---- length counter faults ---- */
+    size_t save_len = list->slh_length;
+    list->slh_length = save_len + 9;
+    ASSERT_EARLY_EXIT_ONE();
+    list->slh_length = save_len;
+
+    /* ---- per-node faults ---- */
+    test_node_t *n1 = api_skip_head_test(list);
+    assert_not_null(n1);
+    test_node_t *n2 = api_skip_next_node_test(list, n1);
+    assert_not_null(n2);
+    test_node_t *n3 = api_skip_next_node_test(list, n2);
+    assert_not_null(n3);
+
+    /* node height above the head's. */
+    size_t save_n2h = n2->entries.sle_height;
+    n2->entries.sle_height = save_hh + 1;
+    ASSERT_EARLY_EXIT_ONE();
+    n2->entries.sle_height = save_n2h;
+
+    /* node height at the level-array bound. */
+    n2->entries.sle_height = (size_t)SKIPLIST_MAX_HEIGHT;
+    assert_int(_skip_integrity_check_test(list, 1), >, 0);
+    assert_int(_skip_integrity_check_test(list, 3), >, 0);
+    n2->entries.sle_height = save_n2h;
+
+    /* NULL prev pointer. */
+    test_node_t *save_prev = n2->entries.sle_prev;
+    n2->entries.sle_prev = NULL;
+    assert_int(_skip_integrity_check_test(list, 1), >, 0);
+    assert_int(_skip_integrity_check_test(list, 3), >, 0);
+    n2->entries.sle_prev = save_prev;
+
+    /* Sort order broken in both directions. */
+    int save_key = n2->key;
+    n2->key = n3->key + 100;
+    ASSERT_EARLY_EXIT_ONE();
+    n2->key = n1->key - 100;
+    ASSERT_EARLY_EXIT_ONE();
+    n2->key = save_key;
+
+    /* ---- upper-level faults, which the second per-node loop checks ----
+     * Level 0 is left alone: a fault there makes the list unwalkable and
+     * the validator returns unconditionally rather than via early_exit. */
+    {
+        size_t head_h = list->slh_head->entries.sle_height;
+        for (size_t lvl = 1; lvl <= head_h; lvl++) {
+            test_node_t *save = list->slh_head->entries.sle_levels[lvl].next;
+
+            /* NULL upper-level next. */
+            list->slh_head->entries.sle_levels[lvl].next = NULL;
+            assert_int(_skip_integrity_check_test(list, 1), >, 0);
+            assert_int(_skip_integrity_check_test(list, 3), >, 0);
+
+            /* Marked upper-level next in a quiescent list.  flags&1 set
+             * means "tolerate concurrent marks", so only the modes that
+             * clear it report this one. */
+            list->slh_head->entries.sle_levels[lvl].next = _SKIP_MARK(save);
+            assert_int(_skip_integrity_check_test(list, 0), >, 0);
+            assert_int(_skip_integrity_check_test(list, 2), >, 0);
+
+            list->slh_head->entries.sle_levels[lvl].next = save;
+            assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+            assert_int(_skip_integrity_check_test(list, 3), ==, 0);
+        }
+    }
+
+    /* A marked pointer on a live node, seen by the first per-node loop. */
+    {
+        test_node_t *save_next = n2->entries.sle_levels[0].next;
+        n2->entries.sle_levels[0].next = _SKIP_MARK(save_next);
+        assert_int(_skip_integrity_check_test(list, 0), >, 0);
+        assert_int(_skip_integrity_check_test(list, 2), >, 0);
+        n2->entries.sle_levels[0].next = save_next;
+    }
+
+#undef ASSERT_EARLY_EXIT_ONE
+
+    /* Fully restored. */
+    for (int flags = 0; flags <= 3; flags++)
+        assert_int(_skip_integrity_check_test(list, flags), ==, 0);
+
+    restore_stderr();
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Marked-pointer states seen by the READ paths.
+ *
+ * tests/test_insert_help_unlink covers what insert does when it meets a
+ * logically-deleted successor.  The read side is separate machinery and
+ * none of it runs today: _skip_lookup_ has a marked-successor skip and a
+ * marked-head restart, _skip_locate_ has its own, and the whole stale-hint
+ * fallback in prev_validated -- forward rescan from head, marked-pointer
+ * unmark mid-scan, best-effort hint repair -- is unexercised because in a
+ * quiescent list the sle_prev hint is always correct.
+ *
+ * Marking a node's forward pointers by hand is the same trick
+ * test_insert_help_unlink uses, and it is deterministic: it reproduces
+ * exactly the window a peer thread mid-delete would leave, with no
+ * scheduling dependence and so no flakiness.
+ *
+ * Marked nodes are restored before teardown so free() sees a clean list. */
+static MunitResult
+test_read_paths_marked_pointers(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    /* Sparse keys leave room to search strictly between them. */
+    for (int i = 0; i < 120; i++) {
+        test_node_t *node;
+        api_skip_alloc_node_test(&node);
+        node->key = i * 10;
+        node->value = make_test_value(i);
+        api_skip_insert_test(list, node);
+    }
+
+    /* ---- 1. lookup/locate stepping over a marked node ----
+     * Mark every forward pointer of a victim, then search for keys on both
+     * sides plus the victim's own key.  The read paths must step over it
+     * without helping to unlink, and must not report a marked node as a
+     * match. */
+    test_node_t *victim = api_skip_head_test(list);
+    assert_not_null(victim);
+    for (int skip = 0; skip < 30; skip++) {
+        victim = api_skip_next_node_test(list, victim);
+        assert_not_null(victim);
+    }
+    int vkey = victim->key;
+
+    size_t vh = _skip_atomic_load(&victim->entries.sle_height, memory_order_acquire);
+    test_node_t *saved_next[SKIPLIST_MAX_HEIGHT];
+    for (size_t lvl = 0; lvl <= vh && lvl < SKIPLIST_MAX_HEIGHT; lvl++) {
+        test_node_t *nx = _skip_atomic_load(&victim->entries.sle_levels[lvl].next, memory_order_acquire);
+        saved_next[lvl] = nx;
+        if (nx != NULL && !_SKIP_IS_MARKED(nx))
+            _skip_atomic_store(&victim->entries.sle_levels[lvl].next, _SKIP_MARK(nx), memory_order_release);
+    }
+
+    /* A logically-deleted node is not a valid match. */
+    assert_null(api_skip_position_eq_test(list, victim));
+    assert_false(api_skip_contains_test(list, vkey));
+
+    /* Neighbours on both sides stay reachable across the marked node. */
+    assert_true(api_skip_contains_test(list, vkey - 10));
+    assert_true(api_skip_contains_test(list, vkey + 10));
+    assert_true(api_skip_contains_test(list, 0));
+    assert_true(api_skip_contains_test(list, 1190));
+
+    /* Absent keys either side of the marked node: the miss path. */
+    assert_false(api_skip_contains_test(list, vkey - 5));
+    assert_false(api_skip_contains_test(list, vkey + 5));
+
+    /* Ordered queries have to walk past it too.  These go through
+     * _skip_locate_, which is a MUTATOR of structure: it help-unlinks any
+     * marked node it meets.  So by the end of this block the victim has
+     * been physically removed from the level-0 chain while slh_length
+     * still counts it -- the ordinary mid-delete state, since a real
+     * remove() decrements the counter after unlinking.  The victim is
+     * therefore leaked-by-design here and freed explicitly below. */
+    assert_not_null(api_skip_pos_test(list, SKIP_GT, vkey));
+    assert_not_null(api_skip_pos_test(list, SKIP_LT, vkey));
+    assert_not_null(api_skip_pos_test(list, SKIP_GTE, vkey - 5));
+    assert_not_null(api_skip_pos_test(list, SKIP_LTE, vkey + 5));
+
+    /* update against a marked node must not find it. */
+    assert_int(api_skip_update_test(list, victim, NULL), ==, ENOENT);
+
+    /* Confirm the help-unlink actually happened: the victim is gone from
+     * the chain, so the walked count is one short of the counter.  Reading
+     * structure via FOREACH_H2T, never position_/get_, which bump hit
+     * counters and would trigger a rebalance mid-measurement. */
+    {
+        test_node_t *cur;
+        size_t idx, walked = 0;
+        int saw_victim = 0;
+        SKIPLIST_FOREACH_H2T(test, api_, entries, list, cur, idx)
+        {
+            walked++;
+            if (cur == victim)
+                saw_victim = 1;
+        }
+        (void)idx;
+        assert_false(saw_victim);
+        assert_size(walked, ==, 119);
+        assert_size(api_skip_length_test(list), ==, 120);
+    }
+
+    /* The victim is now physically out of the chain at every level, and it
+     * must not simply be freed: help-unlink repairs forward pointers only,
+     * while sle_prev is advisory and deliberately left stale, so the
+     * victim's old successor still carries a back pointer to it.  That is
+     * legitimate -- under EBR a real remove() defers reclamation precisely
+     * because such references persist -- but the validator would then be
+     * comparing against freed memory.  Verified with a probe: exactly one
+     * live node retains sle_prev -> victim.
+     *
+     * Restoring the victim's own forward pointers does not make it
+     * reachable either, because its PREDECESSOR was CAS'd to bypass it.
+     * So repair both sides: unmark the victim, point the predecessor back
+     * at it, and fix the successor's back pointer.  That returns the list
+     * to the state before the marking, which the validator then confirms
+     * and the final free_ walk reclaims. */
+    for (size_t lvl = 0; lvl <= vh && lvl < SKIPLIST_MAX_HEIGHT; lvl++)
+        _skip_atomic_store(&victim->entries.sle_levels[lvl].next, saved_next[lvl], memory_order_release);
+    {
+        /* Find the live level-0 predecessor by walking, not by trusting a
+         * hint, then splice the victim back in. */
+        test_node_t *scan = list->slh_head;
+        for (;;) {
+            test_node_t *nx = _SKIP_UNMARK(_skip_atomic_load(&scan->entries.sle_levels[0].next, memory_order_acquire));
+            assert_not_null(nx);
+            if (nx == list->slh_tail || nx->key > vkey)
+                break;
+            scan = nx;
+        }
+        _skip_atomic_store(&victim->entries.sle_levels[0].next, _skip_atomic_load(&scan->entries.sle_levels[0].next, memory_order_acquire),
+            memory_order_release);
+        _skip_atomic_store(&scan->entries.sle_levels[0].next, victim, memory_order_release);
+        _skip_atomic_store(&victim->entries.sle_prev, scan, memory_order_release);
+
+        test_node_t *vnext = _SKIP_UNMARK(_skip_atomic_load(&victim->entries.sle_levels[0].next, memory_order_acquire));
+        if (vnext != NULL && vnext != list->slh_tail)
+            _skip_atomic_store(&vnext->entries.sle_prev, victim, memory_order_release);
+
+        /* Upper levels stay bypassed: a node present at level 0 but absent
+         * from its upper levels is a shorter tower, not a broken list, so
+         * report its height as 0 to keep the validator's height invariant. */
+        _skip_atomic_store(&victim->entries.sle_height, 0, memory_order_release);
+        for (size_t lvl = 1; lvl < SKIPLIST_MAX_HEIGHT; lvl++)
+            _skip_atomic_store(&victim->entries.sle_levels[lvl].next, list->slh_tail, memory_order_release);
+    }
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+    /* ---- 2. prev_validated with a deliberately stale hint ----
+     * Corrupting only sle_prev is safe: it is advisory, and the function
+     * exists to detect exactly this and rescan forward from the head. */
+    test_node_t *probe = api_skip_head_test(list);
+    assert_not_null(probe);
+    for (int skip = 0; skip < 40; skip++) {
+        probe = api_skip_next_node_test(list, probe);
+        assert_not_null(probe);
+    }
+    test_node_t *true_prev = api_skip_prev_validated_test(list, probe);
+    assert_not_null(true_prev);
+
+    /* (a) hint points at an unrelated live node. */
+    test_node_t *wrong = api_skip_head_test(list);
+    assert_not_null(wrong);
+    _skip_atomic_store(&probe->entries.sle_prev, wrong, memory_order_release);
+    assert_ptr_equal(api_skip_prev_validated_test(list, probe), true_prev);
+
+    /* (b) hint is NULL. */
+    _skip_atomic_store(&probe->entries.sle_prev, NULL, memory_order_release);
+    assert_ptr_equal(api_skip_prev_validated_test(list, probe), true_prev);
+
+    /* (c) hint points at the tail. */
+    _skip_atomic_store(&probe->entries.sle_prev, list->slh_tail, memory_order_release);
+    assert_ptr_equal(api_skip_prev_validated_test(list, probe), true_prev);
+
+    /* (d) hint points at head while the node is NOT head's successor, so
+     *     the head fast path must be rejected and the rescan run. */
+    _skip_atomic_store(&probe->entries.sle_prev, list->slh_head, memory_order_release);
+    assert_ptr_equal(api_skip_prev_validated_test(list, probe), true_prev);
+
+    /* (e) the genuine head successor DOES take the head fast path, and
+     *     reports NULL because head is not a user-visible node. */
+    test_node_t *first = api_skip_head_test(list);
+    assert_not_null(first);
+    assert_null(api_skip_prev_validated_test(list, first));
+
+    /* (f) a marked pointer encountered during the forward rescan is
+     *     unmarked rather than compared raw. */
+    test_node_t *mid = api_skip_head_test(list);
+    assert_not_null(mid);
+    for (int skip = 0; skip < 5; skip++) {
+        mid = api_skip_next_node_test(list, mid);
+        assert_not_null(mid);
+    }
+    test_node_t *mid_next = _skip_atomic_load(&mid->entries.sle_levels[0].next, memory_order_acquire);
+    _skip_atomic_store(&mid->entries.sle_levels[0].next, _SKIP_MARK(mid_next), memory_order_release);
+    _skip_atomic_store(&probe->entries.sle_prev, NULL, memory_order_release);
+    assert_ptr_equal(api_skip_prev_validated_test(list, probe), true_prev);
+    _skip_atomic_store(&mid->entries.sle_levels[0].next, mid_next, memory_order_release);
+
+    /* (g) a node genuinely absent from the level-0 chain: the rescan runs
+     *     off the end and reports no predecessor. */
+    test_node_t *orphan;
+    api_skip_alloc_node_test(&orphan);
+    orphan->key = 999999;
+    orphan->value = make_test_value(999999);
+    _skip_atomic_store(&orphan->entries.sle_prev, list->slh_head, memory_order_release);
+    assert_null(api_skip_prev_validated_test(list, orphan));
+    api_skip_free_node_test(list, orphan);
+
+    /* Hint restored.  Length is unchanged: the victim was never freed, only
+     * unlinked and then relinked, so the list still holds all 120 nodes. */
+    _skip_atomic_store(&probe->entries.sle_prev, true_prev, memory_order_release);
+    assert_size(api_skip_length_test(list), ==, 120);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Boundary and edge arms that ordinary use never reaches.
+ *
+ * These are individually small but share a shape: each is a defensive
+ * bound or an "absent optional field" case that the happy path steps
+ * over.  Grouped into one test because they need no special fixture.
+ */
+static MunitResult
+test_boundary_and_edge_arms(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    /* ---- pool slot-index bounds ----
+     * _skip_pool_index_of_ rejects a pointer below the slab, above it, and
+     * one that lands inside the slab but off a slot boundary.  All three
+     * must be refused rather than yielding a bogus slot index. */
+    _skip_pool_test_t pool;
+    memset(&pool, 0, sizeof(pool));
+    assert_int(api_skip_pool_init_test(&pool, 8), ==, 0);
+
+    test_node_t *pn = NULL;
+    assert_int(api_skip_pool_alloc_node_test(&pool, &pn), ==, 0);
+    assert_not_null(pn);
+    assert_true(api_skip_pool_is_from_test(&pool, pn));
+
+    /* Below the slab. */
+    assert_false(api_skip_pool_is_from_test(&pool, (test_node_t *)(pool.slots - 64)));
+    /* At and past the end of the slab. */
+    assert_false(api_skip_pool_is_from_test(&pool, (test_node_t *)(pool.slots + pool.capacity * pool.slot_size)));
+    /* Inside the slab but misaligned to the slot stride. */
+    assert_false(api_skip_pool_is_from_test(&pool, (test_node_t *)(pool.slots + 1)));
+
+    /* pool_free of a rejected pointer is a silent no-op, and must not
+     * corrupt the slot state: the live node still frees normally after. */
+    api_skip_pool_free_test(&pool, (test_node_t *)(pool.slots + 1));
+    api_skip_pool_free_test(&pool, pn);
+
+    /* The slot is reusable, proving the bogus free did not clobber it. */
+    test_node_t *pn2 = NULL;
+    assert_int(api_skip_pool_alloc_node_test(&pool, &pn2), ==, 0);
+    assert_not_null(pn2);
+    api_skip_pool_free_test(&pool, pn2);
+    api_skip_pool_destroy_test(&pool);
+
+    /* ---- EBR thread-id bounds ----
+     * unregister clamps out-of-range ids instead of indexing off the
+     * thread table. */
+    _skip_ebr_test_t *ebr = malloc(sizeof(_skip_ebr_test_t));
+    assert_not_null(ebr);
+    api_skip_ebr_init_test(ebr);
+    api_skip_ebr_unregister_test(ebr, -1);
+    api_skip_ebr_unregister_test(ebr, SKIPLIST_EBR_MAX_THREADS);
+    api_skip_ebr_unregister_test(ebr, SKIPLIST_EBR_MAX_THREADS + 1000);
+
+    /* A real registration still works after the rejected ones. */
+    int tid = api_skip_ebr_register_test(ebr);
+    assert_int(tid, >=, 0);
+    api_skip_ebr_unregister_test(ebr, tid);
+    free(ebr);
+
+    /* ---- nodes whose optional value is NULL ----
+     * free_entry/update_entry/sizeof_entry/archive_entry each branch on
+     * node->value, and every other test populates it, so the NULL arm is
+     * never taken.  A NULL value is legal: the field is the user's. */
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    for (int i = 1; i <= 6; i++) {
+        test_node_t *n;
+        api_skip_alloc_node_test(&n);
+        n->key = i;
+        n->value = NULL; /* deliberately absent */
+        assert_int(api_skip_insert_test(list, n), ==, 0);
+    }
+    assert_size(api_skip_length_test(list), ==, 6);
+
+    /* sizeof_entry over a NULL-valued node, via the dispatch trampoline
+     * (there is no public wrapper).  The NULL arm skips the strlen. */
+    assert_size(list->slh_fns.sizeof_entry(api_skip_head_test(list)), >, 0);
+
+    /* update onto a NULL-valued node, and then back to NULL. */
+    test_node_t q;
+    memset(&q, 0, sizeof(q));
+    q.key = 3;
+    assert_int(api_skip_update_test(list, &q, make_test_value(300)), ==, 0);
+    assert_string_equal(api_skip_get_test(list, 3), "value_300");
+    assert_int(api_skip_update_test(list, &q, NULL), ==, 0);
+    assert_null(api_skip_get_test(list, 3));
+
+    /* Archive round-trip with NULL values: the writer takes the slen==0
+     * arm and the reader the "no string" arm. */
+    FILE *tmp = tmpfile();
+    assert_not_null(tmp);
+    assert_int(api_skip_serialize_test(list, tmp), ==, 0);
+    rewind(tmp);
+
+    test_t *loaded = malloc(sizeof(test_t));
+    api_skip_init_test(loaded);
+    assert_int(api_skip_deserialize_test(loaded, tmp), ==, 0);
+    assert_size(api_skip_length_test(loaded), ==, 6);
+    assert_int(_skip_integrity_check_test(loaded, 1), ==, 0);
+    /* Values came back absent, not as empty strings. */
+    assert_null(api_skip_get_test(loaded, 1));
+    fclose(tmp);
+
+    api_skip_free_test(loaded);
+    free(loaded);
+
+    /* free_ over a list of NULL-valued nodes exercises the free_entry
+     * NULL arm for every node. */
+    api_skip_free_test(list);
+    free(list);
+
+    /* ---- to_array_ on an empty list ----
+     * The zero-length case returns an array whose only content is the
+     * stored length, which the loop below never enters. */
+    test_t *empty = malloc(sizeof(test_t));
+    api_skip_init_test(empty);
+    test_node_t **earr = api_skip_to_array_test(empty);
+    assert_not_null(earr);
+    assert_size((size_t)(uintptr_t)earr[-1], ==, 0);
+    free(earr - 1);
+    api_skip_free_test(empty);
+    free(empty);
+
+    return MUNIT_OK;
+}
+
+/* The hit-counter overflow rescale.
+ *
+ * _skip_adjust_hit_counts_ runs after every remove but returns immediately
+ * unless the head's total-hits counter has reached SIZE_MAX/2.  Reaching
+ * that by actual accesses is impossible -- it would take 2^63 lookups --
+ * so the rescale loop, including its CAS retry, is dead code to the suite
+ * even though it runs on the hot path.
+ *
+ * Setting the counter directly is legitimate: it is exactly the state the
+ * function is written to handle, and a saturating counter is a real
+ * long-running-process concern rather than a hypothetical.
+ *
+ * Asserts the counters were actually halved, so this fails if the rescale
+ * silently stops happening. */
+static MunitResult
+test_hit_counter_rescale(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    for (int i = 1; i <= 40; i++)
+        assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+    /* Give the nodes some hits to rescale, via lookups. */
+    for (int rep = 0; rep < 4; rep++)
+        for (int i = 1; i <= 40; i++)
+            assert_true(api_skip_contains_test(list, i));
+
+    size_t head_h = _skip_atomic_load(&list->slh_head->entries.sle_height, memory_order_relaxed);
+
+    /* Record pre-rescale counters by walking, never through get_/position_:
+     * those bump hit counters and would perturb what is being measured. */
+    size_t before[SKIPLIST_MAX_HEIGHT + 1];
+    for (size_t lvl = 0; lvl <= head_h; lvl++)
+        before[lvl] = _skip_atomic_load(&list->slh_head->entries.sle_levels[lvl].hits, memory_order_relaxed);
+
+    /* Drive the counter to the rescale threshold.
+     *
+     * The trigger the library tests is the head's counter at the head's
+     * CURRENT height, and that height is not fixed: tower heights come from
+     * the PRNG, munit reseeds per run, and the remove below can itself
+     * shrink the head.  Writing the trigger at one remembered index is
+     * therefore racy against the library's own reshaping -- measured, it
+     * missed roughly one run in ten.  Write it at every level so the
+     * trigger is seen whatever the head height turns out to be. */
+    const size_t trigger = SIZE_MAX / 2 + 1;
+    for (size_t lvl = 0; lvl < SKIPLIST_MAX_HEIGHT; lvl++)
+        _skip_atomic_store(&list->slh_head->entries.sle_levels[lvl].hits, trigger, memory_order_relaxed);
+
+    /* Any remove now calls the rescale. */
+    assert_int(api_skip_del_test(list, 40), ==, 0);
+
+    /* Level 0 of the head always exists and is always covered by the
+     * rescale loop, so it is the stable place to observe the halving.
+     * Asserting the specific halved value (not merely "< threshold") is
+     * what makes this falsifiable: if the rescale stops running, the
+     * counter keeps the value written above and this fails.  A small delta
+     * absorbs the counter updates del_ itself performs. */
+    size_t after0 = _skip_atomic_load(&list->slh_head->entries.sle_levels[0].hits, memory_order_relaxed);
+    assert_size(after0, <, trigger);
+    assert_size(after0, >=, (trigger / 2) - 8);
+    assert_size(after0, <=, (trigger / 2) + 8);
+
+    /* Lower levels were halved too, where they had anything to halve. */
+    for (size_t lvl = 0; lvl < head_h; lvl++) {
+        size_t now = _skip_atomic_load(&list->slh_head->entries.sle_levels[lvl].hits, memory_order_relaxed);
+        assert_size(now, <, trigger);
+        (void)before[lvl];
+    }
+
+    /* Rescaling preserves list integrity and does not lose data. */
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+    assert_size(api_skip_length_test(list), ==, 39);
+    for (int i = 1; i <= 39; i++)
+        assert_true(api_skip_contains_test(list, i));
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Every public entry point defends its arguments.  Those guard arms are
+ * the largest single block of never-executed branches in the generated
+ * code, because the rest of the suite only ever calls the API correctly.
+ * A NULL list or node is a caller bug the library absorbs by returning a
+ * neutral value instead of faulting, so this is a contract test as much
+ * as a coverage one.
+ *
+ * Restricted to arguments the header explicitly tests for.  Passing NULL
+ * where the code dereferences unconditionally would assert a behaviour
+ * the library never promised. */
+static MunitResult
+test_null_argument_guards(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_node_t qn;
+    memset(&qn, 0, sizeof(qn));
+    qn.key = 1;
+
+    /* ---- core, NULL list ---- */
+    assert_null(api_skip_tail_test(NULL));
+    assert_null(api_skip_next_node_test(NULL, &qn));
+    assert_null(api_skip_prev_node_test(NULL, &qn));
+    assert_null(api_skip_prev_validated_test(NULL, &qn));
+    assert_int(api_skip_update_test(NULL, &qn, NULL), ==, EINVAL);
+
+    /* release/free on NULL are no-ops, like free(NULL). */
+    api_skip_release_test(NULL);
+    api_skip_free_test(NULL);
+
+    /* ---- core, NULL node against a live list ---- */
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+
+    assert_null(api_skip_next_node_test(list, NULL));
+    assert_null(api_skip_prev_node_test(list, NULL));
+    assert_null(api_skip_prev_validated_test(list, NULL));
+
+    /* A NULL query reaches locate() with n == NULL, which reports an
+     * empty path, so update must surface ENOENT rather than crash. */
+    assert_int(api_skip_update_test(list, NULL, NULL), ==, ENOENT);
+
+    /* head has no predecessor: a distinct guard from the NULL check. */
+    assert_null(api_skip_prev_validated_test(list, api_skip_head_test(list)));
+
+    /* ---- snapshots ---- */
+    api_skip_snapshots_init_test(NULL);
+    assert_uint64(api_skip_snapshot_test(NULL), ==, 0);
+    api_skip_release_snapshots_test(NULL);
+
+    /* ---- archive, NULL list and NULL stream ---- */
+    FILE *devnull = fopen("/dev/null", "wb");
+    assert_not_null(devnull);
+    assert_int(api_skip_serialize_test(NULL, devnull), !=, 0);
+    assert_int(api_skip_serialize_test(list, NULL), !=, 0);
+    assert_int(api_skip_deserialize_test(NULL, devnull), !=, 0);
+    assert_int(api_skip_deserialize_test(list, NULL), !=, 0);
+    fclose(devnull);
+
+    /* ---- DOT, NULL list and NULL stringify callback ----
+     * Both return the subgraph counter unchanged. */
+    FILE *sink = fopen("/dev/null", "wb");
+    assert_not_null(sink);
+    assert_size(api_skip_dot_test(sink, NULL, 5, (char *)"nolist", sprintf_test_node), ==, 5);
+    assert_size(api_skip_dot_test(sink, list, 5, (char *)"nofn", NULL), ==, 5);
+    fclose(sink);
+
+    /* ---- pool ---- */
+    _skip_pool_test_t pool;
+    memset(&pool, 0, sizeof(pool));
+    assert_int(api_skip_pool_init_test(NULL, 8), ==, EINVAL);
+    /* capacity 0 is the other half of the same guard. */
+    assert_int(api_skip_pool_init_test(&pool, 0), ==, EINVAL);
+    api_skip_pool_destroy_test(NULL);
+
+    /* A pointer that never came from the pool must be rejected rather
+     * than turned into a bogus slot index. */
+    assert_int(api_skip_pool_init_test(&pool, 8), ==, 0);
+    test_node_t stack_node;
+    memset(&stack_node, 0, sizeof(stack_node));
+    assert_false(api_skip_pool_is_from_test(&pool, &stack_node));
+    api_skip_pool_destroy_test(&pool);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* ------------------------------------------------------------------
+ * Allocation-failure injection.
+ *
+ * Compiled only when SKIPLIST_TEST_FAULTS is defined, because it needs
+ * link-time allocator interposition (-Wl,--wrap=...) and a build without
+ * AddressSanitizer (ASan replaces the allocator and takes precedence over
+ * --wrap).  See the test_faults target in the Makefile.
+ *
+ * These tests live in THIS translation unit rather than a separate one on
+ * purpose.  gcov attributes macro expansions to the .c file that
+ * instantiates them, so ENOMEM arms exercised from a file with its own
+ * SKIPLIST_DECL are credited to that file, not to tests/test.c.  Putting
+ * them here means they cover the same `test` instantiation the rest of the
+ * suite measures.
+ * ------------------------------------------------------------------ */
+#ifdef SKIPLIST_TEST_FAULTS
+
+extern void *__real_calloc(size_t n, size_t sz);
+extern void *__real_malloc(size_t sz);
+extern void *__real_aligned_alloc(size_t a, size_t sz);
+
+/* Inactive by default so munit's own allocations are never perturbed;
+   when armed, the fi_countdown-th allocation returns NULL. */
+static int fi_active = 0;
+static long fi_countdown = 0;
+static long fi_seen = 0;
+
+static void
+fi_arm(long nth)
+{
+    fi_active = 1;
+    fi_countdown = nth;
+    fi_seen = 0;
+}
+
+static void
+fi_disarm(void)
+{
+    fi_active = 0;
+    fi_countdown = 0;
+}
+
+static int
+fi_should_fail(void)
+{
+    if (!fi_active)
+        return 0;
+    fi_seen++;
+    return fi_seen == fi_countdown;
+}
+
+void *
+__wrap_calloc(size_t n, size_t sz)
+{
+    if (fi_should_fail())
+        return NULL;
+    return __real_calloc(n, sz);
+}
+
+void *
+__wrap_malloc(size_t sz)
+{
+    if (fi_should_fail())
+        return NULL;
+    return __real_malloc(sz);
+}
+
+void *
+__wrap_aligned_alloc(size_t a, size_t sz)
+{
+    if (fi_should_fail())
+        return NULL;
+    return __real_aligned_alloc(a, sz);
+}
+
+/* The injector must be exact: arming N fails the Nth allocation and no
+   other.  If this is wrong, every test below is vacuous. */
+static MunitResult
+test_fault_injector_self_check(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    fi_arm(1);
+    void *a = malloc(8);
+    void *b = malloc(8);
+    fi_disarm();
+    assert_null(a);
+    assert_not_null(b);
+    free(b);
+
+    fi_arm(3);
+    void *c1 = malloc(8);
+    void *c2 = malloc(8);
+    void *c3 = malloc(8);
+    void *c4 = malloc(8);
+    fi_disarm();
+    assert_not_null(c1);
+    assert_not_null(c2);
+    assert_null(c3);
+    assert_not_null(c4);
+    free(c1);
+    free(c2);
+    free(c4);
+
+    /* Disarmed means never fail, however many allocations happen. */
+    for (int i = 0; i < 32; i++) {
+        void *x = malloc(8);
+        assert_not_null(x);
+        free(x);
+    }
+    return MUNIT_OK;
+}
+
+/* init_ allocates the head and tail sentinels; either failing must be
+   reported rather than leaving a half-built list. */
+static MunitResult
+test_fault_init_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t l1;
+    fi_arm(1);
+    int rc1 = api_skip_init_test(&l1);
+    fi_disarm();
+    assert_int(rc1, ==, ENOMEM);
+
+    test_t l2;
+    fi_arm(2);
+    int rc2 = api_skip_init_test(&l2);
+    fi_disarm();
+    assert_int(rc2, ==, ENOMEM);
+
+    return MUNIT_OK;
+}
+
+/* alloc_node_, and the put/dup wrappers that propagate its failure. */
+static MunitResult
+test_fault_node_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    assert_int(api_skip_init_test(list), ==, 0);
+
+    test_node_t *n = NULL;
+    fi_arm(1);
+    int rc = api_skip_alloc_node_test(&n);
+    fi_disarm();
+    assert_int(rc, ==, ENOMEM);
+    /* The out-param is always written, so callers never see garbage. */
+    assert_null(n);
+
+    fi_arm(1);
+    int rcp = api_skip_put_test(list, 1, NULL);
+    fi_disarm();
+    assert_int(rcp, ==, ENOMEM);
+    assert_size(api_skip_length_test(list), ==, 0);
+
+    fi_arm(1);
+    int rcd = api_skip_dup_test(list, 2, NULL);
+    fi_disarm();
+    assert_int(rcd, ==, ENOMEM);
+    assert_size(api_skip_length_test(list), ==, 0);
+
+    /* Still healthy and usable afterwards. */
+    assert_int(api_skip_put_test(list, 3, make_test_value(3)), ==, 0);
+    assert_size(api_skip_length_test(list), ==, 1);
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* to_array_ allocates the array; a failure returns NULL rather than a
+   partially built array. */
+static MunitResult
+test_fault_to_array_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    assert_int(api_skip_init_test(list), ==, 0);
+    for (int i = 1; i <= 8; i++)
+        assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+    fi_arm(1);
+    test_node_t **arr = api_skip_to_array_test(list);
+    fi_disarm();
+    assert_null(arr);
+
+    arr = api_skip_to_array_test(list);
+    assert_not_null(arr);
+    free(arr - 1);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* The pool allocates a slab (aligned_alloc) and a slot-state array
+   (calloc).  Rather than assume which comes first -- an implementation
+   detail -- sweep the first two and require at least one ENOMEM.  The
+   fi_seen check also fails loudly if --wrap is not in effect. */
+static MunitResult
+test_fault_pool_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    int saw_enomem = 0;
+    for (long nth = 1; nth <= 2; nth++) {
+        _skip_pool_test_t pool;
+        memset(&pool, 0, sizeof(pool));
+        fi_arm(nth);
+        int rc = api_skip_pool_init_test(&pool, 16);
+        long fired = fi_seen;
+        fi_disarm();
+
+        assert_int(fired, >, 0);
+
+        if (rc == ENOMEM) {
+            saw_enomem = 1;
+        } else {
+            assert_int(rc, ==, 0);
+            api_skip_pool_destroy_test(&pool);
+        }
+    }
+    assert_true(saw_enomem);
+
+    /* A clean init still works afterwards. */
+    _skip_pool_test_t p3;
+    memset(&p3, 0, sizeof(p3));
+    assert_int(api_skip_pool_init_test(&p3, 16), ==, 0);
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    assert_int(api_skip_init_test(list), ==, 0);
+
+    test_node_t *pn = NULL;
+    assert_int(api_skip_pool_alloc_node_test(&p3, &pn), ==, 0);
+    assert_not_null(pn);
+    api_skip_pool_free_node_test(&p3, list, pn);
+    api_skip_pool_destroy_test(&p3);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* restore_snapshot_ allocates three scratch arrays; failing any of them
+   must abandon the restore (returning NULL) and leave the list intact. */
+static MunitResult
+test_fault_snapshot_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    for (long nth = 1; nth <= 3; nth++) {
+        test_t *list = malloc(sizeof(test_t));
+        assert_not_null(list);
+        assert_int(api_skip_init_test(list), ==, 0);
+        api_skip_snapshots_init_test(list);
+        for (int i = 1; i <= 12; i++)
+            assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+        uint64_t era = api_skip_snapshot_test(list);
+        assert_uint64(era, >, 0);
+
+        for (int i = 1; i <= 6; i++)
+            api_skip_del_test(list, i);
+
+        fi_arm(nth);
+        test_t *rl = api_skip_restore_snapshot_test(list, era);
+        fi_disarm();
+
+        /* All three scratch allocations are on the restore path for this
+           shape, so each must abandon the restore.  Asserting NULL is what
+           makes this fail if the injector stops working. */
+        assert_null(rl);
+        assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+        api_skip_release_snapshots_test(list);
+        api_skip_free_test(list);
+        free(list);
+    }
+    return MUNIT_OK;
+}
+
+/* preserve_node_ deep-copies a node before a snapshot-visible mutation;
+   the copy and its value allocation can both fail. */
+static MunitResult
+test_fault_preserve_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    for (long nth = 1; nth <= 2; nth++) {
+        test_t *list = malloc(sizeof(test_t));
+        assert_not_null(list);
+        assert_int(api_skip_init_test(list), ==, 0);
+        api_skip_snapshots_init_test(list);
+        for (int i = 1; i <= 8; i++)
+            assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+        assert_uint64(api_skip_snapshot_test(list), >, 0);
+
+        /* Build the replacement value BEFORE arming.  make_test_value
+         * itself allocates, so calling it inside the armed window would
+         * consume the injection and then write through a NULL buffer --
+         * a bug in the test, not the library. */
+        char *replacement = make_test_value(400);
+        assert_not_null(replacement);
+
+        /* Overwriting a snapshot-visible node forces a preserve. */
+        fi_arm(nth);
+        int rc = api_skip_set_test(list, 4, replacement);
+        fi_disarm();
+
+        /* On failure set_ does not take ownership, so the caller still
+         * owns the replacement value. */
+        if (rc != 0)
+            free(replacement);
+
+        /* Whatever the outcome, the list stays consistent. */
+        assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+        api_skip_release_snapshots_test(list);
+        api_skip_free_test(list);
+        free(list);
+    }
+    return MUNIT_OK;
+}
+
+/* The archive writer checks every fwrite.  /dev/full accepts the open and
+   fails all writes with ENOSPC: a real kernel error, not a mock. */
+static MunitResult
+test_fault_serialize_io(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    assert_int(api_skip_init_test(list), ==, 0);
+    for (int i = 1; i <= 16; i++)
+        assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+    FILE *full = fopen("/dev/full", "wb");
+    if (full == NULL) {
+        /* No /dev/full (non-Linux): nothing to assert. */
+        api_skip_free_test(list);
+        free(list);
+        return MUNIT_SKIP;
+    }
+
+    /* Unbuffered so each fwrite reaches the device and fails there rather
+       than sitting in stdio's buffer until fclose. */
+    setvbuf(full, NULL, _IONBF, 0);
+    assert_int(api_skip_serialize_test(list, full), !=, 0);
+    fclose(full);
+
+    /* An empty list still writes a header, so it fails too. */
+    test_t *empty = malloc(sizeof(test_t));
+    assert_not_null(empty);
+    assert_int(api_skip_init_test(empty), ==, 0);
+    FILE *f2 = fopen("/dev/full", "wb");
+    if (f2 != NULL) {
+        setvbuf(f2, NULL, _IONBF, 0);
+        assert_int(api_skip_serialize_test(empty, f2), !=, 0);
+        fclose(f2);
+    }
+    api_skip_free_test(empty);
+    free(empty);
+
+    /* The list is unharmed by the failed writes. */
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+    assert_size(api_skip_length_test(list), ==, 16);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
+/* Deserialize allocates a record buffer and a node per entry.  Failing
+   either must abort the load rather than insert a half-built node. */
+static MunitResult
+test_fault_deserialize_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    FILE *tmp = tmpfile();
+    assert_not_null(tmp);
+    {
+        test_t *src = malloc(sizeof(test_t));
+        assert_not_null(src);
+        assert_int(api_skip_init_test(src), ==, 0);
+        for (int i = 1; i <= 10; i++)
+            assert_int(api_skip_put_test(src, i, make_test_value(i)), ==, 0);
+        assert_int(api_skip_serialize_test(src, tmp), ==, 0);
+        api_skip_free_test(src);
+        free(src);
+    }
+
+    for (long nth = 1; nth <= 4; nth++) {
+        rewind(tmp);
+        test_t *dst = malloc(sizeof(test_t));
+        assert_not_null(dst);
+        assert_int(api_skip_init_test(dst), ==, 0);
+
+        fi_arm(nth);
+        int rc = api_skip_deserialize_test(dst, tmp);
+        fi_disarm();
+
+        /* The first two allocations are on record 1's critical path, so
+           the load must fail and cannot have taken all ten records.
+           Later nth values may fall after the last allocation, in which
+           case completing is correct; only consistency is asserted. */
+        if (nth <= 2) {
+            assert_int(rc, !=, 0);
+            assert_size(api_skip_length_test(dst), <, 10);
+        }
+        assert_int(_skip_integrity_check_test(dst, 1), ==, 0);
+
+        api_skip_free_test(dst);
+        free(dst);
+    }
+
+    /* Control: with the injector off the same archive loads completely. */
+    rewind(tmp);
+    {
+        test_t *ok = malloc(sizeof(test_t));
+        assert_not_null(ok);
+        assert_int(api_skip_init_test(ok), ==, 0);
+        assert_int(api_skip_deserialize_test(ok, tmp), ==, 0);
+        assert_size(api_skip_length_test(ok), ==, 10);
+        assert_int(_skip_integrity_check_test(ok, 1), ==, 0);
+        api_skip_free_test(ok);
+        free(ok);
+    }
+
+    fclose(tmp);
+    return MUNIT_OK;
+}
+
+/* EBR retire allocates a retire-list entry; failure must not lose the
+   node or corrupt the list. */
+static MunitResult
+test_fault_ebr_retire_alloc(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    test_t *list = malloc(sizeof(test_t));
+    assert_not_null(list);
+    assert_int(api_skip_init_test(list), ==, 0);
+
+    _skip_ebr_test_t *ebr = malloc(sizeof(_skip_ebr_test_t));
+    assert_not_null(ebr);
+    api_skip_ebr_init_test(ebr);
+    api_skip_ebr_attach_test(list, ebr);
+
+    int tid = api_skip_ebr_register_test(ebr);
+    assert_int(tid, >=, 0);
+
+    for (int i = 1; i <= 8; i++)
+        assert_int(api_skip_put_test(list, i, make_test_value(i)), ==, 0);
+
+    api_skip_ebr_pin_test(ebr, tid);
+    fi_arm(1);
+    api_skip_del_test(list, 4);
+    fi_disarm();
+    api_skip_ebr_unpin_test(ebr, tid);
+
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+    api_skip_ebr_drain_test(ebr);
+    api_skip_ebr_unregister_test(ebr, tid);
+    api_skip_free_test(list);
+    free(list);
+    free(ebr);
+    return MUNIT_OK;
+}
+
+#endif /* SKIPLIST_TEST_FAULTS */
+
 /* Test suite definition */
 static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_basic", test_insert_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -2833,6 +3990,23 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/dot_edge_shapes", test_dot_edge_shapes, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/splay_skewed_access", test_splay_skewed_access, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/insert_help_unlink", test_insert_help_unlink, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/null_argument_guards", test_null_argument_guards, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/validate_early_exit_arms", test_validate_early_exit_arms, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/read_paths_marked_pointers", test_read_paths_marked_pointers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/boundary_and_edge_arms", test_boundary_and_edge_arms, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/hit_counter_rescale", test_hit_counter_rescale, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+#ifdef SKIPLIST_TEST_FAULTS
+    { (char *)"/faults/injector_self_check", test_fault_injector_self_check, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/init_alloc", test_fault_init_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/node_alloc", test_fault_node_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/to_array_alloc", test_fault_to_array_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/pool_alloc", test_fault_pool_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/snapshot_alloc", test_fault_snapshot_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/preserve_alloc", test_fault_preserve_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/serialize_io", test_fault_serialize_io, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/deserialize_alloc", test_fault_deserialize_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/faults/ebr_retire_alloc", test_fault_ebr_retire_alloc, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+#endif
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL } };
 
 static const MunitSuite test_suite = { (char *)"", test_suite_tests, NULL, 1, MUNIT_SUITE_OPTION_NONE };

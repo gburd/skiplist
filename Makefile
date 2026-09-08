@@ -89,7 +89,7 @@ EXAMPLES = examples/ex01 examples/ex02 examples/ex03 examples/ex04 \
 MAN_PAGES = man/skiplist.7 man/sl.h.3
 
 .PHONY: all clean distclean test test_concurrent test_tsan test_all examples run_examples mls coverage \
-        test_splay test_tsan_splay test_single test_property \
+        test_splay test_tsan_splay test_single test_property test_faults \
         bench valgrind install uninstall format man
 
 # Header-only library: no .a / .so / .o to produce.  "all" builds
@@ -157,6 +157,44 @@ tests/test_single: tests/test_single.c tests/munit.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -o $@ tests/test_single.c tests/munit.c -lm
 
 # ----------------------------------------------------------------------
+# Fault injection: allocation- and I/O-failure arms.
+#
+# Every ENOMEM arm in sl.h is unreachable from a normal run, so this
+# target rebuilds tests/test.c with SKIPLIST_TEST_FAULTS defined and
+# interposes the allocator via the linker (--wrap), failing a chosen
+# allocation.  Three constraints shape it:
+#
+#  1. No AddressSanitizer.  ASan installs its own malloc/calloc, which
+#     takes precedence over --wrap, so the injector would never fire.
+#     This binary therefore builds with warnings and -Og but no sanitizer.
+#  2. --wrap is a global link option, so it gets its own binary rather
+#     than perturbing every allocation in the normal test build.
+#  3. It reuses tests/test.c rather than a separate source file.  gcov
+#     attributes macro expansions to the .c file that instantiates them,
+#     so a separate file with its own SKIPLIST_DECL would have its ENOMEM
+#     coverage credited to that file -- measured, contributing exactly
+#     zero to the gated number.  Sharing the translation unit is what
+#     makes these arms count.
+#
+# aligned_alloc is wrapped for the pool's slab; glibc routes it separately
+# from malloc, so leaving it unwrapped would miss the pool ENOMEM arm.
+#
+# -fno-builtin is load-bearing, not decoration.  gcc recognises malloc,
+# calloc and aligned_alloc as builtins and emits calls that bypass the
+# linker's --wrap entirely: measured, a wrapper clang hits on every call
+# was hit ZERO times under gcc until -fno-builtin was added.  Without it
+# this suite silently degrades into asserting the success path.
+# ----------------------------------------------------------------------
+FAULT_CFLAGS = $(WARNFLAGS) -Og -g -std=c11 -Iinclude/ -fPIC -fno-builtin -DSKIPLIST_TEST_FAULTS
+FAULT_WRAP   = -Wl,--wrap=calloc,--wrap=malloc,--wrap=aligned_alloc
+
+test_faults: tests/test_faults
+	./tests/test_faults
+
+tests/test_faults: tests/test.c tests/munit.c include/sl.h
+	$(CC) $(FAULT_CFLAGS) $(TEST_FLAGS) -o $@ tests/test.c tests/munit.c -lm -pthread $(FAULT_WRAP)
+
+# ----------------------------------------------------------------------
 # Property-based tests (Hegel / hegel-c).  Opt-in: requires a local
 # hegel-c checkout and the hegel-core server binary.  Paths are derived
 # from the hegel-c CMake build cache and may be overridden on the command
@@ -199,7 +237,7 @@ test_property: tests/test_property
 tests/test_property: tests/test_property.c include/sl.h
 	$(CC) $(PROP_CFLAGS) -o $@ tests/test_property.c $(PROP_LDFLAGS)
 
-test_all: test test_concurrent test_tsan test_splay test_tsan_splay test_single
+test_all: test test_concurrent test_tsan test_splay test_tsan_splay test_single test_faults
 
 tests/%.o: tests/%.c include/sl.h
 	$(CC) $(CFLAGS) $(TEST_FLAGS) -c -o $@ $<
@@ -301,7 +339,7 @@ coverage:
 	rm -rf coverage-report
 	mkdir -p coverage-report
 	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single tests/test_cov_single_splay tests/test_cov_splay_verify
-	rm -f tests/test_cov_concurrent tests/test_cov_concurrent_splay
+	rm -f tests/test_cov_concurrent tests/test_cov_concurrent_splay tests/test_cov_faults tests/test_cov_faults_splay
 	# Coverage uses gcc + gcov; clang's profile format is incompatible with
 	# the system gcov tool used by gcovr.  CC may be overridden for the
 	# regular build, but coverage pins gcc for portability.
@@ -333,6 +371,16 @@ coverage:
 	#    library code the other units do not already cover.
 	$(COV_CC) $(COV_CFLAGS) $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o tests/test_cov_splay_verify tests/test_splay_verify.c tests/munit.c -lm -pthread
 	./tests/test_cov_splay_verify
+	# 8. Fault injection: allocation- and I/O-failure arms.  Rebuilds
+	#    tests/test.c with SKIPLIST_TEST_FAULTS and allocator interposition,
+	#    so the ENOMEM/EIO arms are credited to the same translation unit
+	#    the filters below measure.  Needs -fno-builtin (gcc otherwise emits
+	#    builtin allocator calls that bypass --wrap) and no sanitizer (ASan
+	#    replaces the allocator and takes precedence over the wrappers).
+	$(COV_CC) $(COV_CFLAGS) -fno-builtin -DSKIPLIST_TEST_FAULTS $(TEST_FLAGS) -o tests/test_cov_faults tests/test.c tests/munit.c -lm -pthread $(FAULT_WRAP)
+	./tests/test_cov_faults
+	$(COV_CC) $(COV_CFLAGS) -fno-builtin -DSKIPLIST_TEST_FAULTS $(TEST_FLAGS) -DSKIPLIST_SPLAY_REBALANCE -o tests/test_cov_faults_splay tests/test.c tests/munit.c -lm -pthread $(FAULT_WRAP)
+	./tests/test_cov_faults_splay
 	# Aggregate.  Heavy macro usage means gcov attributes most
 	# expanded code to the .c file that includes sl.h, not to sl.h
 	# itself.  Therefore we measure the union of include/sl.h plus the
@@ -439,11 +487,13 @@ clean:
 	rm -f tests/test_splay tests/test_concurrent_splay tests/test_concurrent_tsan_splay
 	rm -f tests/test_splay_verify
 	rm -f tests/test_single
+	rm -f tests/test_faults
 	rm -f tests/test_property
 	rm -rf tests/.hegel
 	rm -f tests/test_cov tests/test_cov.o tests/munit_cov.o
 	rm -f tests/test_cov_concurrent tests/test_cov_concurrent.o
 	rm -f tests/test_cov_concurrent_splay tests/test_cov_splay tests/test_cov_single tests/test_cov_single_splay tests/test_cov_splay_verify
+	rm -f tests/test_cov_faults tests/test_cov_faults_splay
 	rm -f tests/test_valgrind
 	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov
 	rm -f examples/*.o $(EXAMPLES)
