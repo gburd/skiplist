@@ -577,6 +577,19 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             _fix_skip_rebalance_##decl(slist, len, path);                                                   \
         }                                                                                                   \
     } while (0)
+/* True on the one access in every SKIPLIST_SPLAY_INTERVAL that will actually
+   rebalance.  Read-only lookups use it to decide between the cheap early-exit
+   descent and the full-path descent that promotion requires.
+
+   The test must match SKIPLIST_SPLAY_IMPL's exactly: that macro tests the
+   PRE-increment counter value (fetch_add returns the old value), so this
+   predicate must too.  Testing (cnt + 1) here instead selects a different
+   access than IMPL will act on, and the rebalance then never fires at all.
+
+   Defined outside the generated code because a #ifdef cannot appear in a
+   macro body. */
+#define _SKIP_SPLAY_WANTS_FULL_PATH(slist) \
+    (((uint32_t)_skip_atomic_load(&(slist)->slh_splay_counter, memory_order_relaxed) & (SKIPLIST_SPLAY_INTERVAL - 1)) == 0)
 #else
 #define SKIPLIST_SPLAY_IMPL(decl, slist, len, path) \
     do {                                            \
@@ -584,6 +597,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         (void)(len);                                \
         (void)(path);                               \
     } while (0)
+#define _SKIP_SPLAY_WANTS_FULL_PATH(slist) (0)
 #endif
 
 /**
@@ -1605,6 +1619,127 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         return len;                                                                                                                                          \
     }                                                                                                                                                        \
                                                                                                                                                              \
+    /**                                                                                                                                                        \
+     * -- _skip_lookup_                                                                                                                                        \
+     *                                                                                                                                                         \
+     * Read-only exact-match lookup with early exit.                                                                                                           \
+     *                                                                                                                                                         \
+     * _skip_locate_ never tests for equality during its descent: it only                                                                                      \
+     * compares for `< target` to decide whether to advance, and checks                                                                                        \
+     * equality once, after reaching level 0.  So a node promoted to height h                                                                                  \
+     * is stepped onto at level h and then re-walked at all h levels below,                                                                                    \
+     * purely to arrive at the same node again.                                                                                                                \
+     *                                                                                                                                                         \
+     * That is precisely the work the splay rebalance exists to avoid.  With                                                                                   \
+     * the flag enabled and a scattered hot set, exiting the descent the                                                                                       \
+     * instant the key is seen measures 7.9 comparisons per lookup against                                                                                     \
+     * 26.3 without -- a 70% saving.  With splay disabled the same change                                                                                      \
+     * saves only 4-8%, because cold-shaped towers do not put the answer high                                                                                  \
+     * up.  The redundant descent was therefore cancelling out essentially the                                                                                 \
+     * entire benefit of the heuristic.                                                                                                                        \
+     *                                                                                                                                                         \
+     * Only path[0] (the match) and path[1] (the level-0 predecessor) are                                                                                      \
+     * populated, because those are the only entries the read-only callers                                                                                     \
+     * consult.  Insert and remove need the full per-level path and keep using                                                                                 \
+     * _skip_locate_.                                                                                                                                          \
+     *                                                                                                                                                         \
+     * Returns the matching node, or NULL.  The caller is responsible for hit                                                                                  \
+     * accounting and rebalancing (see _skip_lookup_with_splay_).                                                                                              \
+     */                                                                                                                                                        \
+    static decl##_node_t *_skip_lookup_##decl(decl##_t *slist, decl##_node_t *n, _skiplist_path_##decl##_t path[])                                             \
+    {                                                                                                                                                          \
+        decl##_node_t *pred, *curr, *succ;                                                                                                                     \
+        int cmp;                                                                                                                                               \
+                                                                                                                                                               \
+        if (slist == NULL || n == NULL)                                                                                                                        \
+            return NULL;                                                                                                                                       \
+                                                                                                                                                               \
+    _skip_lookup_retry_##decl:                                                                                                                                 \
+        pred = slist->slh_head;                                                                                                                                \
+        path[0].node = NULL;                                                                                                                                   \
+        path[1].node = pred;                                                                                                                                   \
+                                                                                                                                                               \
+        for (size_t _lvl = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire); _lvl > 0; _lvl--) {                                    \
+            size_t i = _lvl - 1;                                                                                                                               \
+                                                                                                                                                               \
+            curr = _skip_atomic_load(&pred->field.sle_levels[i].next, memory_order_acquire);                                                                   \
+            if (_SKIP_IS_MARKED(curr))                                                                                                                         \
+                goto _skip_lookup_retry_##decl;                                                                                                                \
+                                                                                                                                                               \
+            for (;;) {                                                                                                                                         \
+                if (curr == slist->slh_tail)                                                                                                                   \
+                    break;                                                                                                                                     \
+                succ = _skip_atomic_load(&curr->field.sle_levels[i].next, memory_order_acquire);                                                               \
+                                                                                                                                                               \
+                /* Skip logically-deleted nodes without helping to unlink:                                                                                     \
+                   this is a read-only path, so leave structural repair to                                                                                     \
+                   the mutators.  A marked node is not a valid match. */                                                                                       \
+                if (_SKIP_IS_MARKED(succ)) {                                                                                                                   \
+                    curr = _SKIP_UNMARK(succ);                                                                                                                 \
+                    continue;                                                                                                                                  \
+                }                                                                                                                                              \
+                                                                                                                                                               \
+                cmp = _skip_compare_nodes_##decl(slist, curr, n, slist->slh_aux);                                                                              \
+                if (cmp == 0) {                                                                                                                                \
+                    /* Found it, possibly far above level 0.  This is the                                                                                      \
+                       early exit the whole function exists for. */                                                                                            \
+                    path[0].node = curr;                                                                                                                       \
+                    path[1].node = pred;                                                                                                                       \
+                    return curr;                                                                                                                               \
+                }                                                                                                                                              \
+                if (cmp < 0) {                                                                                                                                 \
+                    pred = curr;                                                                                                                               \
+                    curr = succ;                                                                                                                               \
+                    continue;                                                                                                                                  \
+                }                                                                                                                                              \
+                break;                                                                                                                                         \
+            }                                                                                                                                                  \
+            path[1].node = pred;                                                                                                                               \
+        }                                                                                                                                                      \
+                                                                                                                                                               \
+        return NULL;                                                                                                                                           \
+    }                                                                                                                                                          \
+                                                                                                                                                               \
+    /**                                                                                                                                                        \
+     * -- _skip_lookup_with_splay_                                                                                                                             \
+     *                                                                                                                                                         \
+     * _skip_lookup_ plus the hit accounting and rebalance that the read-only                                                                                  \
+     * callers used to get from _skip_locate_with_splay_.                                                                                                      \
+     *                                                                                                                                                         \
+     * The rebalance is handed a two-entry path.  It walks path[0..len] and                                                                                    \
+     * only path[0] can be promoted (it is the only node whose hit counter the                                                                                 \
+     * access just incremented), so a truncated path costs demotion                                                                                            \
+     * opportunities for predecessors, not promotion accuracy.  Those                                                                                          \
+     * predecessors are revisited by later lookups that miss.                                                                                                  \
+     */                                                                                                                                                        \
+    static decl##_node_t *_skip_lookup_with_splay_##decl(decl##_t *slist, decl##_node_t *q, _skiplist_path_##decl##_t path[])                                  \
+    {                                                                                                                                                          \
+        /* Early exit and promotion want opposite things from one descent: the                                                                                 \
+           former stops as soon as the key is seen, the latter needs the                                                                                       \
+           predecessor at every level in order to splice.  They need not happen                                                                                \
+           on the same access.  The rebalance fires only once every                                                                                            \
+           SKIPLIST_SPLAY_INTERVAL accesses, so take the full-path descent on                                                                                  \
+           exactly those and the cheap early-exit descent on all the rest.                                                                                     \
+           A truncated path cannot support promotion at all: the rebalance                                                                                     \
+           needs path[new_h + 1] to splice, and bails out entirely when the                                                                                    \
+           path holds fewer than two levels. */                                                                                                                \
+        if (_SKIP_SPLAY_WANTS_FULL_PATH(slist)) {                                                                                                              \
+            _skip_locate_with_splay_##decl(slist, q, path);                                                                                                    \
+            return path[0].node;                                                                                                                               \
+        }                                                                                                                                                      \
+        {                                                                                                                                                      \
+            decl##_node_t *found = _skip_lookup_##decl(slist, q, path);                                                                                        \
+            if (found != NULL) {                                                                                                                               \
+                size_t hh = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_relaxed);                                                       \
+                _skip_atomic_fetch_add(&found->field.sle_levels[0].hits, 1, memory_order_relaxed);                                                             \
+                _skip_atomic_fetch_add(&slist->slh_head->field.sle_levels[hh].hits, 1, memory_order_relaxed);                                                  \
+                /* Keep the interval elapsing at the same rate. */                                                                                             \
+                _skip_atomic_fetch_add(&slist->slh_splay_counter, 1, memory_order_relaxed);                                                                    \
+            }                                                                                                                                                  \
+            return found;                                                                                                                                      \
+        }                                                                                                                                                      \
+    }                                                                                                                                                          \
+                                                                                                                                                               \
     /**                                                                                                                                                      \
      * -- _skip_insert_                                                                                                                                      \
      *                                                                                                                                                       \
@@ -1840,8 +1975,10 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
         /* Find a `path` to `query` in the list and a match (`path[0]`) if it exists. */                                                                     \
-        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
-        node = path[0].node;                                                                                                                                 \
+        node = _skip_lookup_with_splay_##decl(slist, query, path);                                                                                             \
+        /* Early-exit lookup: returns the instant the key is seen instead of                                                                                   \
+           descending to level 0 first, which is what lets a promoted hot key                                                                                  \
+           actually pay off.  Exact match only, so path[1..] is not needed. */                                                                                 \
                                                                                                                                                              \
         return node;                                                                                                                                         \
     }                                                                                                                                                        \
@@ -2030,8 +2167,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                              \
         _SKIP_PATH_CLEAR(path);                                                                                                                              \
                                                                                                                                                              \
-        _skip_locate_with_splay_##decl(slist, query, path);                                                                                                             \
-        node = path[0].node;                                                                                                                                 \
+        /* Exact match only: use the early-exit lookup. */                                                                                                     \
+        node = _skip_lookup_with_splay_##decl(slist, query, path);                                                                                             \
                                                                                                                                                              \
         if (node == NULL)                                                                                                                                    \
             return ENOENT;                                                                                                                                   \
