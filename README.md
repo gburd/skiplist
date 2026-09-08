@@ -67,19 +67,20 @@ The full test matrix passes locally and in CI:
 
 | Suite                              | Tests | Status |
 |------------------------------------|-------|--------|
-| Unit (default)                     |    47 | pass   |
+| Unit (default)                     |    52 | pass   |
 | Concurrent (default)               |    13 | pass   |
 | TSAN (default)                     |    13 | pass   |
 | Property-based (Hegel/hegel-c)     |     9 | pass   |
-| Unit (splay rebalance enabled)     |    47 | pass   |
+| Unit (splay rebalance enabled)     |    52 | pass   |
 | Concurrent (splay rebalance)       |    13 | pass   |
 | TSAN (splay rebalance)             |    13 | pass   |
-| Splay-verify (Aksenov height target) |   2 | pass   |
-| Single-threaded mode               |    17 | pass   |
-| Single-threaded + splay rebalance   |   17 | pass   |
-| ASan + LSan + UBSan                |    47 | pass   |
-| Valgrind                           |    47 | pass   |
+| Splay-verify (Aksenov + regressions) |   4 | pass   |
+| Single-threaded mode               |    18 | pass   |
+| Single-threaded + splay rebalance   |   18 | pass   |
+| ASan + LSan + UBSan                |    52 | pass   |
+| Valgrind                           |    52 | pass   |
 | Examples (run, not just built)     |    10 | pass   |
+| Fault injection (allocator/IO arms) |    62 | pass   |
 
 Verified on Linux x86_64 with gcc 13/15 and clang 18/21.  The
 implementation is C11 with no Linux-specific syscalls; macOS, the BSDs,
@@ -87,23 +88,34 @@ and Windows (MSVC) are supported by the portability shims in `sl.h`.
 
 Coverage on the implementation surface (`include/sl.h` plus the
 three test translation units that instantiate its macros): 98% line,
-99% function, 72% branch.
+99% function, 76% branch.
 
 Two notes on that branch figure, because branch coverage of a
 macro-generated lock-free library is easy to misread:
 
-- It is the **union of seven builds** (default and splay-rebalance
-  variants of the unit, concurrent, and single-threaded suites, plus
-  the splay-verify harness).  Those builds have mutually exclusive
-  branch sets -- a branch that only exists under
-  `SKIPLIST_SPLAY_REBALANCE` cannot be covered by the default build and
-  vice versa -- so the merged number is structurally lower than any
-  single build.  Measured per build, the same suites are 70-76%.
 - Assertion-failure arms are **excluded** from the metric.  Every
   `assert_*()` compiles to a branch whose failure arm cannot execute in
   a passing run, so counting them scales the denominator with test
   volume and penalises writing more assertions.  They were roughly 1100
   of 4000 branches before exclusion.
+- A large share of what remains is **dead by construction, not
+  untested**.  Under `SKIPLIST_SINGLE_THREADED`,
+  `_skip_atomic_cas_strong` expands to
+  `(*(exp) == *(p) ? ... : ...)`, and every caller loads `*p` into
+  `*exp` immediately beforehand, so the comparison is a tautology and
+  the failure arm is unreachable.  Marked-pointer arms are likewise
+  unreachable there, since only a concurrent remover ever publishes a
+  marked pointer.  gcov counts both.  A meaningful ceiling for that
+  build is therefore well under 100%, and the shortfall is emitted dead
+  code rather than missing tests.
+
+An earlier revision of this section claimed the merged figure was
+structurally capped about 20 points below any individual build.  That was
+wrong, and the measurement that produced it was flawed: isolating only
+`.gcda` and not `.gcno` leaves a stray note file that inflates the
+denominator with a translation unit the build never ran.  Measured
+properly, merging *raises* the covered count and costs 1.0-1.4 points,
+not 20.  Per-configuration gating consequently cannot reach 95% either.
 
 What remains uncovered is concentrated in CAS-retry loops,
 marked-pointer help-unlink paths that need a peer thread mid-delete,
@@ -213,7 +225,8 @@ make test_tsan         # 13 concurrent tests under ThreadSanitizer
 make test_property     # 9 Hegel property tests (needs hegel-c; see below)
 make test_splay        # full suite with -DSKIPLIST_SPLAY_REBALANCE
 make test_tsan_splay   # TSAN with splay rebalancing
-make test_single       # SKIPLIST_SINGLE_THREADED build (17 tests)
+make test_single       # SKIPLIST_SINGLE_THREADED build (18 tests)
+make test_faults       # 62 allocator/IO fault-injection tests (no ASan)
 make test_all          # all of the above (except test_property)
 make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
@@ -888,42 +901,39 @@ Reading the table:
   dense chain over the hot range, so a search descending through them
   compares against far more nodes than it skips.
 
-  This was substantially improved in v1.1.5 and again in v1.1.6.  The
-  promotion path now refuses a level whose successor **at the target
-  level** is comparably hot, so promotion is confined inside a dense hot
-  region while a lone hot key is still free to rise.  Steady-state search
-  cost, comparisons per lookup, N = 100000, medians over three pinned
-  tower seeds:
+  Substantially improved across v1.1.5, v1.1.6 and v1.1.7.  v1.1.7 is the
+  big one: the search now exits its descent the instant the key is found,
+  instead of walking down to level 0 to re-confirm a node it already
+  passed.  That redundant re-walk was discarding almost the whole benefit
+  of the heuristic.  Steady-state comparisons per lookup, N = 100000,
+  medians of five pinned tower seeds:
 
-  | workload | OFF | v1.1.5 | v1.1.6 |
+  | workload | OFF | v1.1.6 | v1.1.7 |
   |---|---:|---:|---:|
-  | uniform random | 31.4 | 31.4 | 31.4 |
-  | 10 scattered hot keys | 31.0 | 28.8 | 28.5 |
-  | contiguous 1000 | 26.6 | 40.5 | 38.7 |
-  | 1000 hot keys, every 2nd | 26.9 | 54.3 | 34.3 |
-  | 1000 hot keys, every 4th | 28.5 | 42.6 | 32.4 |
-  | two hot blocks of 500 | 27.8 | 55.8 | 44.0 |
+  | uniform random | 31.4 | 31.4 | **28.4** |
+  | 10 scattered hot keys | 30.0 | 28.5 | **8.2** |
+  | contiguous 100 | 23.1 | 24.3 | **20.5** |
+  | 1000 hot keys, every 4th | 27.7 | 31.0 | **24.7** |
+  | contiguous 10000 | 29.7 | 35.4 | 31.6 |
+  | 1000 hot keys, every 2nd | 26.4 | 33.0 | 28.0 |
+  | two hot blocks of 500 | 27.8 | 36.7 | 33.2 |
+  | contiguous 1000 | 25.8 | 38.7 | 34.8 |
 
-  v1.1.5 compared against the immediate level-0 successor, which only
-  approximates the interval a new level would span when that interval is a
-  single node.  Interleaving cold keys defeated it: with every second key
-  hot, each hot node's neighbour is cold, so 972 of 1000 still converged
-  on one level.  Comparing against the target-level successor instead
-  fixes that shape and improves every other skewed one.
+  Five of eight shapes now beat splay-off, against one of eight before, and
+  the scattered hot set the feature exists for went from a 5% gain to a
+  3.66x gain.
 
-  Skewed access is still slower than splay off -- worst case 1.59x for two
-  separated hot blocks.  The gate consults one successor rather than the
-  whole spanned interval, so a sufficiently dense hot region still
-  promotes part of itself.  Treat a large hot region as a
-  contraindication for this flag.
+  The three remaining slow shapes are a different problem: their
+  *structural* cost is itself above splay-off, so no search change helps
+  them.  A large contiguous or multi-block hot region is still a
+  contraindication for this flag.  See DESIGN.md for the mechanism, for the
+  three approaches to it that failed, and for the one that looks tractable.
 
-  Note these figures are **steady-state** -- measured after warming.
-  Releases before v1.1.5 reported a cumulative average over the whole run
-  and concluded the cost grew without bound.  That was a metric artifact:
-  a running average keeps climbing long after the structure has settled,
-  because early cheap lookups are progressively diluted by later dear
-  ones.  Both configurations do converge.  See DESIGN.md for the mechanism
-  and for five approaches that did not work.
+  These figures are **steady-state** -- measured after warming, on an
+  otherwise idle machine.  Releases before v1.1.5 reported a cumulative
+  average over the whole run and concluded the cost grew without bound; that
+  was a metric artifact, since a running average keeps climbing after the
+  structure has settled.
 - **Splay is doing what the paper says**; the search path just does not
   collect the reward.  Under the 10-hot-key workload the hot nodes rise
   to height 12 with the flag on versus 0-3 with it off, exactly as
@@ -1031,7 +1041,7 @@ The unit and concurrent suites use the vendored
 (`tests/munit.{c,h}`); the property suite uses
 [hegel-c](https://github.com/gburd/hegel-c).
 
-- `tests/test.c` -- 47 single-threaded tests covering init, insert,
+- `tests/test.c` -- 52 single-threaded tests covering init, insert,
   duplicate insert, search, remove, the access API, navigation, edge
   cases, splay behavior, memory management, the pool allocator, EBR
   basics, validation, head-height growth/shrink, a 100k-key stress

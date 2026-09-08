@@ -292,18 +292,88 @@ Recorded because each looks plausible and costs a day to rediscover.
    traffic *alone* cannot bootstrap either, since a height-0 node has no
    upper level to have accumulated any.
 
-### Why the upside is small even when it works
+### The search was discarding the benefit (fixed in v1.1.7)
 
-`_skip_locate_` always descends from the head's height to level 0 with
-no early exit when the target is matched at an upper level.  Promoting
-a hot node to height 12 therefore does not shorten the traversal that
-finds it -- it only reduces how many nodes are compared on the way
-down.  That is why a height adaptation which provably matches the
-paper's target (see `tests/test_splay_verify.c`) converts into only
-single-digit percent fewer comparisons.  Adding an early exit on an
-upper-level match would change the linearization argument for the
-lock-free path and has not been attempted.
+There were two independent problems, and conflating them is why the feature
+looked hopeless for so long.
 
+**Problem A: the search did not exploit the tower.**  `_skip_locate_` never
+tested equality during its descent -- it compared only for `< target` to
+decide whether to advance, and checked equality once, after reaching level
+0.  A node promoted to height `h` was therefore stepped onto at level `h`
+and then re-walked at all `h` levels below, purely to arrive at the same
+node again.  That redundant re-walk is exactly the work the rebalance exists
+to eliminate.
+
+Quantified on a quiet 32-vCPU c7i.8xlarge (load below 0.4, versus a
+development box at load 130 where wall-clock is meaningless), with a
+scattered hot set and the flag enabled: the structure supported a descent of
+7.9 comparisons per lookup while the implementation was spending 26.3 -- an
+overhead of 19.4 comparisons, almost the entire theoretical gain.  With
+splay disabled the same early exit saves only 4-8%, because cold-shaped
+towers do not put the answer high up.  That is why it went unnoticed: the
+defect is invisible unless the feature is working.
+
+`_skip_lookup_` is the fix -- an exact-match read path that returns the
+instant the key is seen.  Early exit and promotion want opposite things from
+one descent (the rebalance needs `path[new_h + 1]` to splice, and bails out
+entirely below two levels), so they are separated in time rather than
+reconciled: the rebalance fires once every `SKIPLIST_SPLAY_INTERVAL`
+accesses, so the full-path descent runs on exactly those and the cheap one
+on the other 63.
+
+Steady-state comparisons per lookup, N = 100000, medians of five pinned
+tower seeds:
+
+| workload | OFF | v1.1.6 | v1.1.7 | verdict |
+|---|---:|---:|---:|---|
+| uniform random | 31.4 | 31.4 | 28.4 | faster 1.10x |
+| 10 scattered hot keys | 30.0 | 28.5 | 8.2 | **faster 3.66x** |
+| contiguous 100 | 23.1 | 24.3 | 20.5 | faster 1.13x |
+| 1000 hot keys, every 4th | 27.7 | 31.0 | 24.7 | faster 1.12x |
+| contiguous 10000 | 29.7 | 35.4 | 31.6 | slower 1.06x |
+| 1000 hot keys, every 2nd | 26.4 | 33.0 | 28.0 | slower 1.06x |
+| two hot blocks of 500 | 27.8 | 36.7 | 33.2 | slower 1.20x |
+| contiguous 1000 | 25.8 | 38.7 | 34.8 | slower 1.35x |
+
+Five of eight shapes now beat splay-off, against one of eight before.
+
+**Problem B: the tower shape is still wrong for wide hot regions.**  The
+three remaining slow shapes are not a search problem at all -- their
+*structural* ceiling is itself above splay-off (contiguous 1000: 28.9 versus
+25.8; two blocks: 41.6 versus 27.8), so no search change can rescue them.
+This is the residual of the promotion gate described above, which consults a
+single successor and so still over-promotes a region dense enough that the
+target-level successor is itself hot.
+
+What the measurements now establish about B: the pathology is **local**
+density.  `k` adjacent nodes at level `L` is fatal; `k` scattered nodes at
+level `L` is ideal.  Any signal that cannot distinguish those two fails, and
+three now have:
+
+- **Global per-level population budgets.**  Implemented and reverted.  A
+  budget generous enough not to throttle ordinary randomised insertion never
+  binds on the pathology: 1000 hot nodes at level 6 is a small fraction of
+  the ~50000 that level legitimately holds.
+- **Frequency-rank height assignment** (as an offline model of the
+  optimum).  Produced 500-5000 comparisons per lookup, i.e. it *recreated*
+  the pathology, because ranking by frequency ignores position and turns
+  level 1 into a dense contiguous block.  It disproved the model, not the
+  library.
+- **Single-successor comparison** (shipped, v1.1.5 and v1.1.6).  Catches the
+  common cases; misses sufficiently dense regions.
+
+A correct signal is the traffic in the *interval* a new level would span
+versus the traffic at its endpoint: both local, neither dependent on height,
+so no feedback loop.  The obstacle is cost -- an interval sum is an
+`O(span)` walk on the access path.  The tractable route is to maintain that
+sum incrementally per level-`L` link, which is half-built already since the
+demotion path transfers exactly such counters to the predecessor on a level
+drop.  It needs one increment per level per lookup on the hot path, and a
+shared counter is precisely the cache-line contention `slh_head` already
+suffers, so it has to be measured under TSAN and real concurrency rather
+than single-threaded comparison counts.  That is a research change with its
+own correctness argument, not a patch.
 
 ## Memory reclamation (EBR)
 

@@ -320,20 +320,28 @@ bench/bench: bench/bench.c include/sl.h
 #
 # Two caveats on the branch number this target prints:
 #
-#  1. It is the union of seven separate builds (default / splay x
-#     unit / concurrent / single-threaded, plus splay-verify).  Those
-#     builds have mutually-exclusive branch sets -- a branch that only
-#     exists under SKIPLIST_SPLAY_REBALANCE is uncoverable in the default
-#     build and vice versa -- so the merged figure is structurally lower
-#     than any single build.  Measured per build, the same test suite is
-#     70-76%; merged it reads 72%.
-#  2. Assertion-failure arms are excluded via --exclude-branches-by-pattern
+#  1. Assertion-failure arms are excluded via --exclude-branches-by-pattern
 #     below.  Every assert_*() compiles to a branch whose failure arm
 #     cannot execute in a passing run, so counting them just scales the
 #     denominator with test volume and penalises writing more assertions.
 #     They were ~1100 of ~4000 branches before exclusion.
+#  2. Much of the remainder is dead by construction rather than untested.
+#     Under SKIPLIST_SINGLE_THREADED, _skip_atomic_cas_strong compares
+#     *exp against *p when the caller has just loaded one from the other,
+#     so the failure arm is unreachable; marked-pointer arms are likewise
+#     unreachable without a concurrent remover.  gcov counts both.
+#
+#     NOTE: an earlier version of this comment claimed the merged figure was
+#     structurally capped ~20 points below any individual build.  That was
+#     wrong.  It came from isolating .gcda without .gcno, leaving a stray
+#     note file that inflated the denominator with a TU that never ran.
+#     Measured properly, merging RAISES the covered count (743 and 791 ->
+#     822 on tests/test.c) and costs 1.0-1.4 points.  Per-configuration
+#     gating therefore cannot reach 95% either; only covering real branches
+#     can, and the ENOMEM arms need the test_faults target to be reachable
+#     at all.
 COV_THRESHOLD ?= 95
-BRANCH_THRESHOLD ?= 72
+BRANCH_THRESHOLD ?= 76
 
 coverage:
 	rm -rf coverage-report
