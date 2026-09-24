@@ -121,7 +121,8 @@ What remains uncovered is concentrated in CAS-retry loops,
 marked-pointer help-unlink paths that need a peer thread mid-delete,
 and allocation-failure arms -- reachable only with fault injection or
 scheduled interleaving.  Line and function coverage are gated at 95%;
-branch coverage is gated at 72%.
+branch coverage is gated at 76%.  `make coverage` exits non-zero if any of
+the three is below its threshold or if gcovr is not installed.
 
 Historical exploration is preserved as git tags under `archive/*`:
 `archive/lock-free-first-attempt`, `archive/splay-list-original`,
@@ -232,7 +233,7 @@ make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
 make run_examples      # build AND run all 10 examples under ASan/LSan
 make bench             # build and run the benchmark suite
-make coverage          # gcov + gcovr; gates on >=95% line + function
+make coverage          # gcov + gcovr; gates 95% line/function, 76% branch
 make format            # clang-format the tree
 make install           # install header + pkg-config to /usr/local
 make install PREFIX=/opt/skiplist
@@ -1088,8 +1089,8 @@ CI runs six independent jobs on every push and pull request:
 - **meson** -- `{none, address, thread, undefined}` sanitizer matrix.
 - **autotools** -- bootstrap, configure, then `make test`,
   `test_concurrent`, `test_splay`, `test_single`.
-- **coverage** -- `make coverage`; gates 95% line and function coverage
-  and uploads the HTML report as an artifact.
+- **coverage** -- `make coverage`; gates 95% line and function and 76%
+  branch coverage, and uploads the HTML report as an artifact.
 
 `make test_property` is not in CI: it needs a local hegel-c checkout and
 the hegel-core server binary.  Run it manually before a release.

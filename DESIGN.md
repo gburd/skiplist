@@ -485,8 +485,9 @@ so any regression in either code path fails fast.
 Coverage is measured against the *union* of `include/sl.h` plus the
 test files (because gcov attributes macro expansions to the file
 that includes the header, not to the header itself).  The current
-gates: 95% line, 95% function (both passing at 98% / 99%), and 72%
-branch.
+gates: 95% line, 95% function (both passing at 98% / 99%), and 76%
+branch (`BRANCH_THRESHOLD`; measured 76.9-77.1%).  All three are hard
+failures, as is a missing gcovr.
 
 The branch figure needs two caveats to be meaningful.  It is the union
 of seven builds whose branch sets are mutually exclusive (a branch

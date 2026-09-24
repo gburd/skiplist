@@ -310,13 +310,15 @@ bench/bench: bench/bench.c include/sl.h
 
 # Coverage target.  Builds and runs every test variant -- single-threaded
 # baseline, splay variant, and single-threaded mode -- under gcov
-# instrumentation, then aggregates the result via gcovr (or falls back to
-# a plain gcov roll-up) and reports line and branch coverage on
-# include/sl.h.  Fails if either falls below 95%.
+# instrumentation, then aggregates the result via gcovr and reports line,
+# function and branch coverage on include/sl.h.  Fails if line or
+# function coverage is below COV_THRESHOLD, if branch coverage is below
+# BRANCH_THRESHOLD, or if gcovr/python3 is missing or gcovr errors: a
+# gate that cannot measure must not pass.
 # Coverage thresholds.  Line and function coverage are practical to hit;
 # branch coverage in lock-free code includes many CAS retry and
-# contention paths that are hard to exercise deterministically -- track
-# it but don't gate on the same number.
+# contention paths that are hard to exercise deterministically -- so it
+# is gated on its own, lower number.
 #
 # Two caveats on the branch number this target prints:
 #
@@ -344,6 +346,9 @@ COV_THRESHOLD ?= 95
 BRANCH_THRESHOLD ?= 76
 
 coverage:
+	@for t in gcovr python3; do \
+	  command -v $$t >/dev/null 2>&1 || { echo "FAIL: coverage needs $$t in PATH (pip install gcovr)" >&2; exit 1; }; \
+	done
 	rm -rf coverage-report
 	mkdir -p coverage-report
 	rm -f tests/*.gcda tests/*.gcno tests/*.gcov *.gcov tests/test_cov tests/test_cov_splay tests/test_cov_single tests/test_cov_single_splay tests/test_cov_splay_verify
@@ -396,8 +401,7 @@ coverage:
 	# macros: that pair captures the implementation surface.
 	@echo
 	@echo "=== Coverage (include/sl.h + macro-instantiating test units) ==="
-	@if command -v gcovr >/dev/null 2>&1; then \
-	  gcovr --filter 'include/sl\.h' \
+	@gcovr --filter 'include/sl\.h' \
 	        --filter 'tests/test\.c' \
 	        --filter 'tests/test_concurrent\.c' \
 	        --filter 'tests/test_single\.c' \
@@ -407,7 +411,7 @@ coverage:
 	        --print-summary \
 	        --html-details coverage-report/index.html \
 	        --txt coverage-report/summary.txt \
-	        --json-summary coverage-report/summary.json; \
+	        --json-summary coverage-report/summary.json || exit 1; \
 	  cat coverage-report/summary.txt; \
 	  line_pct=$$(python3 -c "import json; d=json.load(open('coverage-report/summary.json')); print(int(d['line_percent']))"); \
 	  branch_pct=$$(python3 -c "import json; d=json.load(open('coverage-report/summary.json')); print(int(d['branch_percent']))"); \
@@ -417,20 +421,12 @@ coverage:
 	  echo "Function coverage: $$func_pct%"; \
 	  echo "Branch coverage:   $$branch_pct%"; \
 	  echo; \
-	  if [ "$$line_pct" -lt $(COV_THRESHOLD) ] || [ "$$func_pct" -lt $(COV_THRESHOLD) ]; then \
-	    echo "FAIL: line and/or function coverage below threshold ($(COV_THRESHOLD)%)"; exit 1; \
-	  else \
-	    echo "PASS: line and function coverage >= $(COV_THRESHOLD)%"; \
-	    if [ "$$branch_pct" -lt $(BRANCH_THRESHOLD) ]; then \
-	      echo "NOTE: branch coverage $$branch_pct% is below the relaxed branch target ($(BRANCH_THRESHOLD)%);"; \
-	      echo "      lock-free CAS retry paths and EBR-induced contention paths are"; \
-	      echo "      hard to exercise deterministically and are tracked separately."; \
-	    fi; \
-	  fi; \
-	else \
-	  echo "gcovr not installed; falling back to plain gcov"; \
-	  gcov -r -b -o tests tests/test.c 2>/dev/null | tail -20; \
-	fi
+	  ok=1; \
+	  [ "$$line_pct" -ge $(COV_THRESHOLD) ] 2>/dev/null || { echo "FAIL: line coverage $$line_pct% below $(COV_THRESHOLD)%"; ok=0; }; \
+	  [ "$$func_pct" -ge $(COV_THRESHOLD) ] 2>/dev/null || { echo "FAIL: function coverage $$func_pct% below $(COV_THRESHOLD)%"; ok=0; }; \
+	  [ "$$branch_pct" -ge $(BRANCH_THRESHOLD) ] 2>/dev/null || { echo "FAIL: branch coverage $$branch_pct% below $(BRANCH_THRESHOLD)%"; ok=0; }; \
+	  [ $$ok -eq 1 ] || exit 1; \
+	  echo "PASS: line/function >= $(COV_THRESHOLD)%, branch >= $(BRANCH_THRESHOLD)%"
 
 # Valgrind cannot be combined with AddressSanitizer.  Build a separate
 # unsanitized binary just for this target.
