@@ -573,7 +573,13 @@ An undersized `sizeof` block is a heap buffer overflow, since it is what
 sizes the buffer `write_blk` writes into.  `read_blk`
 receives the deserialized record and its length `bytes`, and **must
 validate `bytes` before reading** -- the length comes from the input
-stream and may be hostile.  Records larger than
+stream and may be hostile.  To reject a record, `read_blk` sets `rc`
+(0 on entry) to an errno such as `EINVAL` or `ENOMEM`; the node is
+released through the free block and deserialize returns `rc`.
+`examples/ex08.c` shows the complete checks.  **Deserialize is not
+transactional:** when it fails part-way, the records read before the
+bad one are still in the list, so discard the list on any nonzero
+return.  Records larger than
 `SKIPLIST_ARCHIVE_MAX_RECORD` (default 256 MiB, overridable) are
 rejected on both read and write so a malformed archive cannot drive an
 unbounded allocation.
@@ -586,7 +592,10 @@ fclose(fp);
 fp = fopen("snapshot.bin", "rb");
 my_t restored;
 api_skip_init_my(&restored);
-api_skip_deserialize_my(&restored, fp);
+if (api_skip_deserialize_my(&restored, fp) != 0) {
+    /* partial load: throw it away */
+    api_skip_free_my(&restored);
+}
 fclose(fp);
 ```
 

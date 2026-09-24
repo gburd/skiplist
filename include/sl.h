@@ -3144,9 +3144,18 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *                         (decl##_node_t *node, uint8_t *buf, uint64_t *bytes).
  *                         Write node data into buf and set bytes to the number
  *                         of bytes written.
- * @param read_entry_blk   Code block to deserialize a node.  Receives
- *                         (decl##_node_t *node, uint8_t *buf, uint64_t bytes).
- *                         Read node data from buf.
+ * @param read_entry_blk   Code block to deserialize a node.  In scope:
+ *                         decl##_node_t *node (freshly allocated, zeroed),
+ *                         uint8_t *buf, uint64_t bytes, and int rc.  Read
+ *                         node data from buf.  `buf` and `bytes` come from
+ *                         the input stream and may be hostile: check `bytes`
+ *                         before every read.  `rc` is 0 on entry; set it to
+ *                         a nonzero errno (EINVAL for a malformed record,
+ *                         ENOMEM for a failed allocation) to reject the
+ *                         record.  The node is then released with
+ *                         skip_free_node_ (which runs the free block, so
+ *                         leave the node in a state it can free) and
+ *                         deserialize returns rc.
  *
  * Binary format:
  *   [4 bytes] magic "SKPL"
@@ -3164,8 +3173,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *           bytes = sizeof(node->key) + sizeof(node->value);
  *       },
  *       {
- *           memcpy(&node->key, buf, sizeof(node->key));
- *           memcpy(&node->value, buf + sizeof(node->key), sizeof(node->value));
+ *           if (bytes != sizeof(node->key) + sizeof(node->value)) {
+ *               rc = EINVAL;
+ *           } else {
+ *               memcpy(&node->key, buf, sizeof(node->key));
+ *               memcpy(&node->value, buf + sizeof(node->key), sizeof(node->value));
+ *           }
  *       })
  *
  * Generated functions:
@@ -3173,7 +3186,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *         -- Serialize the skiplist to fp.  Returns 0 on success, errno on failure.
  *   int prefix##skip_deserialize_##decl(decl##_t *slist, FILE *fp)
  *         -- Deserialize from fp into slist (must be initialized and empty).
- *            Returns 0 on success, errno on failure.
+ *            Returns 0 on success, errno on failure.  NOT transactional:
+ *            on failure the records read before the bad one remain in
+ *            slist, so discard (skip_free_) the list rather than use it.
  */
 /* Byte-order helpers for portable archive serialization (little-endian on wire). */
 static inline void
@@ -3366,8 +3381,16 @@ _skip_read_le64(const uint8_t *src)
                 return rc;                                                                          \
             }                                                                                       \
                                                                                                     \
+            /* rc is 0 here.  read_entry_blk rejects a record by setting rc to  \
+               a nonzero errno; the node (and anything the block attached to    \
+               it) is then released and the load stops.  Records already        \
+               inserted stay in slist: the load is not transactional. */        \
             read_entry_blk;                                                                         \
             free(buf);                                                                              \
+            if (rc) {                                                                               \
+                prefix##skip_free_node_##decl(slist, node);                                         \
+                return rc;                                                                          \
+            }                                                                                       \
                                                                                                     \
             rc = prefix##skip_insert_##decl(slist, node);                                           \
             if (rc) {                                                                               \
