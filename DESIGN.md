@@ -432,6 +432,18 @@ The pool is used explicitly: `skip_pool_alloc_node_` claims a node
 returns it, so callers choose per-allocation whether to draw from
 the pool or fall back to `skip_alloc_node_`.
 
+Nodes the list itself releases (remove, EBR reclaim and drain,
+`skip_free_`, snapshot discard) all go through `skip_free_node_`,
+which calls the list's `slh_pool_release` hook when
+`skip_pool_attach_` has set it and `free()` otherwise.  The hook
+classifies each pointer by address (`skip_pool_is_from_`), not by a
+per-node owner tag: snapshot preservation memcpy's a whole node into
+a malloc'd copy, so a tag would be copied onto heap memory and send
+it to the pool.  Release is one release-ordered store on the slot's
+own state word, so EBR may reclaim on any thread.  Attach is
+required; the library cannot tell which pool an unattached node came
+from.
+
 
 ## Snapshots (MVCC)
 

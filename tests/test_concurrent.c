@@ -828,8 +828,9 @@ test_pool_contention(const MunitParameter params[], void *data)
      * Phase 2: Pool alloc -> list insert -> search under contention.
      *
      * Nodes allocated from the pool are inserted into the skiplist.
-     * We do NOT remove them via the list (EBR reclaim calls free(),
-     * which is incompatible with pool memory).  At teardown we walk
+     * We do NOT remove them via the list: no pool is attached here
+     * (skip_pool_attach_), so EBR reclaim would free() pool memory.
+     * At teardown we walk
      * the list manually, freeing only heap-fallback nodes.  Pool
      * nodes are released when the pool slab is destroyed.
      * ---------------------------------------------------------------*/

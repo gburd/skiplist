@@ -490,6 +490,7 @@ _skip_pool_my_t pool;
 api_skip_pool_init_my(&pool, 4096);
 my_t list;
 api_skip_init_my(&list);
+api_skip_pool_attach_my(&list, &pool);  /* REQUIRED before inserting pool nodes */
 
 my_node_t *node;
 if (api_skip_pool_alloc_node_my(&pool, &node) == 0) {  /* else ENOMEM */
@@ -499,9 +500,17 @@ if (api_skip_pool_alloc_node_my(&pool, &node) == 0) {  /* else ENOMEM */
 /* free a node back to the pool (runs your free block first): */
 /* api_skip_pool_free_node_my(&pool, &list, node); */
 
-api_skip_free_my(&list);
-api_skip_pool_destroy_my(&pool);
+api_skip_free_my(&list);         /* list (and skip_ebr_drain_) first ... */
+api_skip_pool_destroy_my(&pool);  /* ... then the pool */
 ```
+
+Pool nodes that go into a list require `skip_pool_attach_` on that list,
+or the list will `free()` them: remove, EBR reclaim/drain, `skip_free_` and
+snapshot discard all release nodes through the list, and without the attach
+that is a `free()` of a pointer inside the slab.  With it, pool nodes go
+back to the pool and heap nodes (including the fallback and snapshot copies)
+still go to `free()`, from any thread.  Destroy the pool last; an attached
+pool refuses to be destroyed while any slot is still in use.
 
 ### Snapshots (MVCC)
 

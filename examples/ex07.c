@@ -17,10 +17,16 @@
  *   skip_pool_alloc_node_TYPE -- alloc, returns ENOMEM on exhaustion
  *   skip_pool_free_node_TYPE  -- free user resources + return to pool
  *   skip_pool_destroy_TYPE    -- release the entire slab
+ *   skip_pool_attach_TYPE     -- make a list return released nodes to the pool
  *
- * This example demonstrates pool allocation as a standalone allocator,
- * separate from skiplist insertion, to avoid the complexity of mixed
- * heap/pool node ownership during teardown.
+ * IMPORTANT: pool nodes that go into a list REQUIRE skip_pool_attach_ on
+ * that list, or the list will free() them (remove, EBR reclaim, skip_free_)
+ * -- a free() of a pointer inside the slab.  Tear down in this order: remove
+ * or skip_free_ the list (and skip_ebr_drain_ with EBR), THEN destroy the
+ * pool.  An attached pool refuses to be destroyed while slots are in use.
+ *
+ * Steps 1-6 use the pool as a standalone allocator; step 7 puts pool nodes
+ * in a list.
  */
 #include "sl.h"
 
@@ -140,6 +146,30 @@ main(void)
     printf("\n--- Destroying pool ---\n");
     sl_skip_pool_destroy_pool(&mypool);
     printf("  Pool destroyed. All %d nodes freed at once.\n", count);
+
+    /* Step 7: Pool nodes in a list.  Attach first, so every node the list
+     * releases goes back to the pool instead of free(). */
+    printf("\n--- Pool nodes in a list ---\n");
+    if (sl_skip_pool_init_pool(&mypool, 4))
+        return 1;
+    pool_t list;
+    if (sl_skip_init_pool(&list))
+        return 1;
+    sl_skip_pool_attach_pool(&list, &mypool);
+    for (int i = 1; i <= 4; i++) {
+        pool_node_t *node;
+        if (sl_skip_pool_alloc_node_pool(&mypool, &node) == 0) {
+            node->key = i;
+            node->value = i * 100;
+            sl_skip_insert_pool(&list, node);
+        }
+    }
+    pool_node_t query = { .key = 2 };
+    sl_skip_remove_node_pool(&list, &query); /* slot returns to the pool */
+    printf("  Inserted 4, removed key=2: list length %zu.\n", sl_skip_length_pool(&list));
+    sl_skip_free_pool(&list);           /* remaining slots return to the pool */
+    sl_skip_pool_destroy_pool(&mypool); /* list first, then the pool */
+    printf("  List freed, then pool destroyed.\n");
 
     printf("\nDone.\n");
     return 0;
