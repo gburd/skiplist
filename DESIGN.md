@@ -338,6 +338,18 @@ tower seeds:
 
 Five of eight shapes now beat splay-off, against one of eight before.
 
+**Duplicates (fixed in v1.1.8).**  As first shipped, the early exit returned
+whichever equal node it met first during the descent, i.e. the tallest
+duplicate, while `del` went through `_skip_locate_` and removed the first in
+list order -- so `get` and `del` targeted different nodes, breaking the
+documented "first duplicate" contract.  An equal node seen above level 0 can
+have earlier duplicates below it, so the lookup now records it and keeps
+descending from its predecessor, but only once the list has ever held a
+duplicate (`slh_has_dups`, set by `insert_dup`).  Dup-free lists keep the
+unconditional early exit, so the table above is unchanged to two decimals.
+With every key duplicated, splay on, scattered hot set: 18.7 comparisons per
+lookup against 32.0 on v1.1.6 and 30.8 with splay off.
+
 **Problem B: the tower shape is still wrong for wide hot regions.**  The
 three remaining slow shapes are not a search problem at all -- their
 *structural* ceiling is itself above splay-off (contiguous 1000: 28.9 versus

@@ -699,6 +699,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         void (*slh_ebr_retire)(void *, struct decl *, struct decl##_node *); /* EBR retire callback */                                                       \
         _SKIP_ATOMIC(uint32_t) slh_prng_state;                                                                                                               \
         _SKIP_ATOMIC(uint32_t) slh_splay_counter;                                                                                                            \
+        _SKIP_ATOMIC(int) slh_has_dups; /* set once insert_dup links an equal key; see _skip_lookup_ */                                                      \
         decl##_node_t *slh_head;                                                                                                                             \
         decl##_node_t *slh_tail;                                                                                                                             \
         struct {                                                                                                                                             \
@@ -921,6 +922,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         slist->slh_tail->field.sle_prev = slist->slh_head;                                                                                                   \
         slist->slh_prng_state = ((uint32_t)time(NULL) ^ ((uint32_t)_skip_getpid() << 16) ^ (uint32_t)(uintptr_t)slist);                                      \
         slist->slh_splay_counter = 0;                                                                                                                        \
+        slist->slh_has_dups = 0;                                                                                                                             \
     fail:;                                                                                                                                                   \
         return rc;                                                                                                                                           \
     }                                                                                                                                                        \
@@ -1097,6 +1099,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         }                                                                                                                                                    \
         /* Reset to empty-list state so the list is reusable. */                                                                                             \
         slist->slh_length = 0;                                                                                                                               \
+        slist->slh_has_dups = 0;                                                                                                                             \
         slist->slh_head->field.sle_height = 1;                                                                                                               \
         for (size_t _i = 0; _i < SKIPLIST_MAX_HEIGHT; _i++) {                                                                                                \
             slist->slh_head->field.sle_levels[_i].next = slist->slh_tail;                                                                                    \
@@ -1643,12 +1646,24 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      * consult.  Insert and remove need the full per-level path and keep using                                                                                 \
      * _skip_locate_.                                                                                                                                          \
      *                                                                                                                                                         \
+     * Duplicates.  get/set/del promise the FIRST duplicate in list order,                                                                                     \
+     * which is what _skip_locate_ lands on.  An equal node seen above level 0                                                                                 \
+     * may have earlier duplicates below it, so once the list has ever held a                                                                                  \
+     * duplicate (slh_has_dups, set by insert_dup) an equal node only records                                                                                  \
+     * `match` and the descent continues from its predecessor, ending on the                                                                                   \
+     * first equal node at level 0.  Reaching `match` again by pointer costs no                                                                                \
+     * comparison.  v1.1.7 returned the instant any equal node was seen, so                                                                                    \
+     * get() and del() targeted different duplicates.  Lists that never held a                                                                                 \
+     * duplicate keep the unconditional early exit; measured, steady state,                                                                                    \
+     * N=100000, scattered hot set, splay on: 9.4 cmp/lookup without                                                                                           \
+     * duplicates, 18.7 with every key duplicated, against 32.0 on v1.1.6.                                                                                     \
+     *                                                                                                                                                         \
      * Returns the matching node, or NULL.  The caller is responsible for hit                                                                                  \
      * accounting and rebalancing (see _skip_lookup_with_splay_).                                                                                              \
      */                                                                                                                                                        \
     static decl##_node_t *_skip_lookup_##decl(decl##_t *slist, decl##_node_t *n, _skiplist_path_##decl##_t path[])                                             \
     {                                                                                                                                                          \
-        decl##_node_t *pred, *curr, *succ;                                                                                                                     \
+        decl##_node_t *pred, *curr, *succ, *match;                                                                                                             \
         int cmp;                                                                                                                                               \
                                                                                                                                                                \
         if (slist == NULL || n == NULL)                                                                                                                        \
@@ -1656,6 +1671,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                                                                                                                                                                \
     _skip_lookup_retry_##decl:                                                                                                                                 \
         pred = slist->slh_head;                                                                                                                                \
+        match = NULL;                                                                                                                                          \
+        curr = NULL; /* only silences gcc -Og -Wmaybe-uninitialized */                                                                                        \
+        cmp = 1;                                                                                                                                               \
         path[0].node = NULL;                                                                                                                                   \
         path[1].node = pred;                                                                                                                                   \
                                                                                                                                                                \
@@ -1667,8 +1685,10 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                 goto _skip_lookup_retry_##decl;                                                                                                                \
                                                                                                                                                                \
             for (;;) {                                                                                                                                         \
-                if (curr == slist->slh_tail)                                                                                                                   \
+                if (curr == slist->slh_tail) {                                                                                                                 \
+                    cmp = 1;                                                                                                                                   \
                     break;                                                                                                                                     \
+                }                                                                                                                                              \
                 succ = _skip_atomic_load(&curr->field.sle_levels[i].next, memory_order_acquire);                                                               \
                                                                                                                                                                \
                 /* Skip logically-deleted nodes without helping to unlink:                                                                                     \
@@ -1679,13 +1699,23 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                     continue;                                                                                                                                  \
                 }                                                                                                                                              \
                                                                                                                                                                \
-                cmp = _skip_compare_nodes_##decl(slist, curr, n, slist->slh_aux);                                                                              \
+                /* A match seen at a higher level is known equal: reaching it                                                                                  \
+                   again by pointer costs no comparison. */                                                                                                    \
+                cmp = (curr == match) ? 0 : _skip_compare_nodes_##decl(slist, curr, n, slist->slh_aux);                                                        \
                 if (cmp == 0) {                                                                                                                                \
-                    /* Found it, possibly far above level 0.  This is the                                                                                      \
-                       early exit the whole function exists for. */                                                                                            \
-                    path[0].node = curr;                                                                                                                       \
-                    path[1].node = pred;                                                                                                                       \
-                    return curr;                                                                                                                               \
+                    /* Equal, but with duplicates an earlier equal node may                                                                                    \
+                       sit below this level between pred and curr.  Remember                                                                                   \
+                       it and keep descending from pred so the result is the                                                                                   \
+                       FIRST duplicate, as get/set/del promise. */                                                                                             \
+                    match = curr;                                                                                                                              \
+                    if (!_skip_atomic_load(&slist->slh_has_dups, memory_order_relaxed)) {                                                                      \
+                        /* No equal key was ever linked, so this one is the                                                                                    \
+                           first: keep the full early exit. */                                                                                                 \
+                        path[0].node = curr;                                                                                                                   \
+                        path[1].node = pred;                                                                                                                   \
+                        return curr;                                                                                                                           \
+                    }                                                                                                                                          \
+                    break;                                                                                                                                     \
                 }                                                                                                                                              \
                 if (cmp < 0) {                                                                                                                                 \
                     pred = curr;                                                                                                                               \
@@ -1697,7 +1727,10 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             path[1].node = pred;                                                                                                                               \
         }                                                                                                                                                      \
                                                                                                                                                                \
-        return NULL;                                                                                                                                           \
+        if (cmp != 0)                                                                                                                                          \
+            return NULL;                                                                                                                                       \
+        path[0].node = match; /* cmp == 0 only ever leaves match == curr */                                                                                    \
+        return match;                                                                                                                                          \
     }                                                                                                                                                          \
                                                                                                                                                                \
     /**                                                                                                                                                        \
@@ -1723,6 +1756,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
            A truncated path cannot support promotion at all: the rebalance                                                                                     \
            needs path[new_h + 1] to splice, and bails out entirely when the                                                                                    \
            path holds fewer than two levels. */                                                                                                                \
+        if (slist == NULL)                                                                                                                                     \
+            return NULL;                                                                                                                                       \
         if (_SKIP_SPLAY_WANTS_FULL_PATH(slist)) {                                                                                                              \
             _skip_locate_with_splay_##decl(slist, q, path);                                                                                                    \
             return path[0].node;                                                                                                                               \
@@ -1780,6 +1815,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (path[0].node != NULL && flags == 0) {                                                                                                            \
             return EEXIST;                                                                                                                                   \
         }                                                                                                                                                    \
+        /* About to link an equal key: from now on _skip_lookup_ must descend                                                                              \
+           to the first duplicate.  Stored before the level-0 CAS, and two                                                                                   \
+           racing inserts of one key contend on that same CAS word, so the                                                                                   \
+           loser retries, finds the winner here, and sets it. */                                                                                             \
+        if (path[0].node != NULL)                                                                                                                            \
+            _skip_atomic_store(&slist->slh_has_dups, 1, memory_order_relaxed);                                                                               \
                                                                                                                                                              \
         /* Phase 2: Determine the new node's height via coin toss.                                                                                           \
            Use `len` (levels locate actually traversed) rather than a                                                                                        \
@@ -1978,7 +2019,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         node = _skip_lookup_with_splay_##decl(slist, query, path);                                                                                             \
         /* Early-exit lookup: returns the instant the key is seen instead of                                                                                   \
            descending to level 0 first, which is what lets a promoted hot key                                                                                  \
-           actually pay off.  Exact match only, so path[1..] is not needed. */                                                                                 \
+           actually pay off.  Once the list has held a duplicate it descends                                                                                   \
+           on to the first one instead (see _skip_lookup_). */                                                                                                 \
                                                                                                                                                              \
         return node;                                                                                                                                         \
     }                                                                                                                                                        \

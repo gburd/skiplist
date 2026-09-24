@@ -2283,6 +2283,102 @@ test_delete_with_duplicates(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* get/contains/set/del must all target the FIRST duplicate in list order.
+ *
+ * v1.1.7's early-exit lookup returned whichever equal node it met first
+ * during the descent, i.e. the one with the tallest tower, while del still
+ * went through _skip_locate_ and removed the first in list order.  So
+ * get() and del() disagreed about which node they meant (measured: get
+ * returned the 52nd of 80 duplicates, del removed the 1st).  80 copies of
+ * one key make it overwhelmingly likely that some later duplicate is taller
+ * than the first, and the pinned PRNG makes it deterministic.  The lookups
+ * are repeated past SKIPLIST_SPLAY_INTERVAL so both descents in a splay
+ * build (the cheap one and the full-path one that rebalances) are
+ * exercised, and some duplicates get promoted along the way.
+ *
+ * Structure is inspected via api_skip_head_test and FOREACH, which touch
+ * no hit counters. */
+static MunitResult
+test_first_duplicate_semantics(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    enum { DUPS = 80 };
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    list->slh_prng_state = 11;
+
+    /* Unique neighbours on both sides so the duplicates are not at the ends. */
+    assert_int(api_skip_put_test(list, 0, make_test_value(0)), ==, 0);
+    assert_int(api_skip_put_test(list, 2, make_test_value(2)), ==, 0);
+    for (int i = 0; i < DUPS; i++)
+        assert_int(api_skip_dup_test(list, 1, make_test_value(100 + i)), ==, 0);
+
+    /* Duplicates are linked in front of their equals, so the list order of
+     * key 1 is value_179, value_178, ..., value_100. */
+    size_t tallest = 0, tallest_pos = 0, pos = 0, idx;
+    test_node_t *cur;
+    SKIPLIST_FOREACH_H2T(test, api_, entries, list, cur, idx)
+    {
+        (void)idx;
+        if (cur->key != 1)
+            continue;
+        if (cur->entries.sle_height > tallest) {
+            tallest = cur->entries.sle_height;
+            tallest_pos = pos;
+        }
+        pos++;
+    }
+    /* Precondition: the fixture must make a later duplicate taller than the
+     * first, otherwise it cannot tell first-duplicate from tallest. */
+    assert_size(tallest_pos, >, 0);
+
+    test_node_t q;
+    memset(&q, 0, sizeof(q));
+    q.key = 1;
+    for (int round = 0; round < 3 * SKIPLIST_SPLAY_INTERVAL; round++) {
+        test_node_t *first = api_skip_next_node_test(list, api_skip_head_test(list));
+        assert_int(first->key, ==, 1);
+        assert_ptr_equal(api_skip_position_eq_test(list, &q), first);
+        assert_ptr_equal(api_skip_position_test(list, SKIP_EQ, &q), first);
+        assert_ptr_equal(api_skip_get_test(list, 1), first->value);
+        assert_true(api_skip_contains_test(list, 1));
+    }
+
+    /* set() must rewrite the first duplicate and nothing else. */
+    test_node_t *first = api_skip_next_node_test(list, api_skip_head_test(list));
+    assert_int(api_skip_set_test(list, 1, make_test_value(999)), ==, 0);
+    assert_string_equal(first->value, "value_999");
+    assert_string_equal(api_skip_get_test(list, 1), "value_999");
+
+    /* del() removes that same node, and get() then agrees on the new first. */
+    assert_int(api_skip_del_test(list, 1), ==, 0);
+    first = api_skip_next_node_test(list, api_skip_head_test(list));
+    assert_int(first->key, ==, 1);
+    assert_string_equal(first->value, "value_178");
+    assert_ptr_equal(api_skip_get_test(list, 1), first->value);
+    assert_size(api_skip_length_test(list), ==, (size_t)DUPS + 1);
+
+    /* Drain: each del() must remove exactly the node get() reports. */
+    for (int left = DUPS - 1; left > 0; left--) {
+        first = api_skip_next_node_test(list, api_skip_head_test(list));
+        char *want = api_skip_get_test(list, 1);
+        assert_ptr_equal(want, first->value);
+        char expect[32];
+        snprintf(expect, sizeof(expect), "value_%d", 100 + left - 1);
+        assert_string_equal(want, expect);
+        assert_int(api_skip_del_test(list, 1), ==, 0);
+    }
+    assert_false(api_skip_contains_test(list, 1));
+    assert_size(api_skip_length_test(list), ==, 2);
+    assert_int(_skip_integrity_check_test(list, 1), ==, 0);
+
+    api_skip_free_test(list);
+    free(list);
+    return MUNIT_OK;
+}
+
 /* Snapshot restore internals: enough preserved nodes to force the
    to_discard / to_restore arrays past their initial capacity and to
    exercise all three classification arms (era > target, era == target,
@@ -3382,6 +3478,11 @@ test_null_argument_guards(const MunitParameter params[], void *data)
     qn.key = 1;
 
     /* ---- core, NULL list ---- */
+    /* v1.1.7 regression: in splay builds the exact-match lookup read the
+     * list's splay counter before its NULL guard and crashed. */
+    assert_null(api_skip_position_eq_test(NULL, &qn));
+    assert_null(api_skip_get_test(NULL, 1));
+    assert_false(api_skip_contains_test(NULL, 1));
     assert_null(api_skip_tail_test(NULL));
     assert_null(api_skip_next_node_test(NULL, &qn));
     assert_null(api_skip_prev_node_test(NULL, &qn));
@@ -3984,6 +4085,7 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/ebr_retire_callback", test_ebr_retire_callback, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/sizeof_entry", test_sizeof_entry, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/delete_with_duplicates", test_delete_with_duplicates, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/first_duplicate_semantics", test_first_duplicate_semantics, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/snapshot_restore_bulk", test_snapshot_restore_bulk, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/snapshot_preserve_arms", test_snapshot_preserve_arms, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/archive_io_failures", test_archive_io_failures, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
