@@ -861,6 +861,20 @@ test_pool_allocator(const MunitParameter params[], void *data)
     rc = api_skip_pool_init_test(&bad_pool, 0);
     assert_int(rc, ==, EINVAL);
 
+    /* A capacity whose slab size (slot_size * capacity) wraps size_t must
+       be refused up front: unchecked, the product wraps to a tiny slab
+       that the pool then indexes as if it held `capacity` slots. */
+    size_t wrap_cap = SIZE_MAX / pool.slot_size + 2;
+    assert_true(wrap_cap * pool.slot_size < pool.slot_size * 64); /* it really wraps */
+    rc = api_skip_pool_init_test(&bad_pool, wrap_cap);
+    assert_int(rc, ==, EINVAL);
+
+    /* _skip_pool_index_of_ returns int32_t, so a pool with more than
+       INT32_MAX slots would report high slots as "not from pool" and
+       pool_free_node would free() a pointer into the slab interior. */
+    rc = api_skip_pool_init_test(&bad_pool, (size_t)INT32_MAX + 1);
+    assert_int(rc, ==, EINVAL);
+
     api_skip_pool_destroy_test(&pool);
 
     return MUNIT_OK;
@@ -3685,6 +3699,36 @@ test_fault_pool_alloc(const MunitParameter params[], void *data)
         }
     }
     assert_true(saw_enomem);
+
+    /* Oversized capacities are rejected before ANY allocation: fi_seen
+       counts every allocation attempted, and arming 1 means a build that
+       does try one gets it failed instead of materialising terabytes.
+       INT32_MAX itself is still a legal size and does reach the allocator. */
+    {
+        _skip_pool_test_t big;
+        memset(&big, 0, sizeof(big));
+        size_t slot = sizeof(test_node_t) + sizeof(struct _skiplist_test_level) * SKIPLIST_MAX_HEIGHT;
+        slot = (slot + 63u) & ~(size_t)63u;
+        size_t caps[] = { SIZE_MAX / slot + 2, SIZE_MAX, (size_t)INT32_MAX + 1 };
+        for (size_t k = 0; k < sizeof(caps) / sizeof(caps[0]); k++) {
+            fi_arm(1);
+            int rc = api_skip_pool_init_test(&big, caps[k]);
+            long fired = fi_seen;
+            fi_disarm();
+            assert_int(rc, ==, EINVAL);
+            assert_long(fired, ==, 0);
+        }
+        /* INT32_MAX slots only fit a 64-bit size_t; on 32-bit it is an
+           overflow and was already covered by the loop above. */
+        if ((size_t)INT32_MAX <= SIZE_MAX / slot) {
+            fi_arm(1);
+            int rc = api_skip_pool_init_test(&big, (size_t)INT32_MAX);
+            long fired = fi_seen;
+            fi_disarm();
+            assert_int(rc, ==, ENOMEM);
+            assert_long(fired, ==, 1);
+        }
+    }
 
     /* A clean init still works afterwards. */
     _skip_pool_test_t p3;
