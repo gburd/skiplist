@@ -10,6 +10,8 @@
 #include <signal.h> /* SIGPIPE handling around the archive write-failure test */
 #include <string.h>
 #include <unistd.h> /* dup/dup2/close/pipe, for stderr silencing and I/O failures */
+#include <sys/resource.h> /* setrlimit: no core files from the EBR abort test */
+#include <sys/wait.h>     /* waitpid, for the EBR invalid-tid abort test */
 
 #include "munit.h"
 #include "sl.h"
@@ -935,6 +937,77 @@ test_ebr_basic(const MunitParameter params[], void *data)
     api_skip_free_test(list);
     free(list);
 
+    return MUNIT_OK;
+}
+
+/* Run pin (op 0) or unpin (op 1) with `tid` in a child process and return
+   its wait status.  `stale` registers and unregisters a slot first. */
+static int
+ebr_bad_tid_child(int op, int tid, int stale)
+{
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        struct rlimit nocore = { 0, 0 };
+        (void)setrlimit(RLIMIT_CORE, &nocore);
+        if (freopen("/dev/null", "w", stderr) == NULL) {
+            /* noisy but harmless */
+        }
+        _skip_ebr_test_t *ebr = malloc(sizeof(*ebr));
+        if (ebr == NULL)
+            _exit(2);
+        api_skip_ebr_init_test(ebr);
+        if (stale) {
+            tid = api_skip_ebr_register_test(ebr);
+            api_skip_ebr_unregister_test(ebr, tid);
+        }
+        if (op == 0)
+            api_skip_ebr_pin_test(ebr, tid);
+        else
+            api_skip_ebr_unpin_test(ebr, tid);
+        _exit(0); /* reached only if the bad tid was silently accepted */
+    }
+    int status = 0;
+    assert_int(pid, >, 0);
+    assert_int(waitpid(pid, &status, 0), ==, pid);
+    return status;
+}
+
+/* pin/unpin must fail-stop on a tid that is out of range or not
+   registered.  register returns -1 when every slot is taken, and passing
+   that straight to pin used to write below the thread table; a huge tid
+   wrote far past it; a stale tid after unregister was silently accepted,
+   leaving a caller who believes it is pinned unprotected. */
+static MunitResult
+test_ebr_invalid_tid(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    const int bad[] = { -1, SKIPLIST_EBR_MAX_THREADS, 999999, 5 /* in range, never registered */ };
+    for (int op = 0; op < 2; op++) {
+        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            int st = ebr_bad_tid_child(op, bad[i], 0);
+            munit_logf(MUNIT_LOG_DEBUG, "op=%d tid=%d status=0x%x", op, bad[i], st);
+            assert_true(WIFSIGNALED(st));
+            assert_int(WTERMSIG(st), ==, SIGABRT);
+        }
+        int st = ebr_bad_tid_child(op, 0, 1);
+        assert_true(WIFSIGNALED(st));
+        assert_int(WTERMSIG(st), ==, SIGABRT);
+    }
+
+    /* Control: a registered tid pins and unpins normally. */
+    _skip_ebr_test_t *ebr = malloc(sizeof(*ebr));
+    assert_not_null(ebr);
+    api_skip_ebr_init_test(ebr);
+    int tid = api_skip_ebr_register_test(ebr);
+    assert_int(tid, >=, 0);
+    api_skip_ebr_pin_test(ebr, tid);
+    assert_int(atomic_load(&ebr->threads[tid].active), ==, 1);
+    api_skip_ebr_unpin_test(ebr, tid);
+    assert_int(atomic_load(&ebr->threads[tid].active), ==, 0);
+    api_skip_ebr_unregister_test(ebr, tid);
+    free(ebr);
     return MUNIT_OK;
 }
 
@@ -3960,6 +4033,7 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/stress_insert_remove", test_stress_insert_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_allocator", test_pool_allocator, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/ebr_basic", test_ebr_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/ebr_invalid_tid", test_ebr_invalid_tid, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validation", test_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validate_corrupt_header", test_validate_corrupt_header, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validate_corrupt_heights", test_validate_corrupt_heights, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },

@@ -2505,6 +2505,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *          -- Enter a critical section (pin).  Nodes will not be freed while pinned.
  *   void prefix##skip_ebr_unpin_##decl(_skip_ebr_##decl##_t *ebr, int tid)
  *          -- Leave a critical section (unpin).
+ *          pin and unpin abort() if tid is out of range or not currently
+ *          registered: check register's result for -1 before pinning.
  *   void prefix##skip_ebr_retire_##decl(_skip_ebr_##decl##_t *ebr, decl##_t *slist, decl##_node_t *node)
  *          -- Defer freeing a node until safe.  Called automatically by skip_remove_node_.
  *   void prefix##skip_ebr_attach_##decl(decl##_t *slist, _skip_ebr_##decl##_t *ebr)
@@ -2609,15 +2611,30 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skip_atomic_store(&ebr->threads[tid].in_use, 0, memory_order_release);                                              \
     }                                                                                                                        \
                                                                                                                              \
+    /* Fail-stop check for the tid handed to pin/unpin: it must be in range                                                  \
+       and name a registered slot.  pin/unpin return void, and a pin that                                                    \
+       quietly did nothing would leave the caller believing its nodes are                                                    \
+       protected -- a use-after-free far from the cause.  Aborting here makes                                                \
+       the misuse (typically passing register's -1 straight to pin, or using                                                 \
+       a tid after unregister) loud at its source, in every build mode. */                                                   \
+    static void _skip_ebr_check_tid_##decl(_skip_ebr_##decl##_t *ebr, int tid, const char *fn)                               \
+    {                                                                                                                        \
+        if (tid >= 0 && tid < SKIPLIST_EBR_MAX_THREADS && _skip_atomic_load(&ebr->threads[tid].in_use, memory_order_relaxed)) \
+            return;                                                                                                          \
+        fprintf(stderr, "%s: invalid EBR thread id %d (out of range or not registered)\n", fn, tid);                         \
+        abort();                                                                                                             \
+    }                                                                                                                        \
+                                                                                                                             \
     /**                                                                                                                      \
      * -- skip_ebr_pin_                                                                                                      \
      *                                                                                                                       \
      * Enter a critical section.  The calling thread announces that it                                                       \
      * is reading the data structure and nodes must not be freed until                                                       \
-     * it unpins.                                                                                                            \
+     * it unpins.  Aborts if `tid` is out of range or not registered.                                                        \
      */                                                                                                                      \
     void prefix##skip_ebr_pin_##decl(_skip_ebr_##decl##_t *ebr, int tid)                                                     \
     {                                                                                                                        \
+        _skip_ebr_check_tid_##decl(ebr, tid, __func__);                                                                      \
         /* Announce active BEFORE reading global_epoch.  The seq_cst                                                         \
            fence pairs with the fence in try_advance() so that: if                                                           \
            try_advance reads active==0 and skips us, it committed                                                            \
@@ -2635,10 +2652,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      * -- skip_ebr_unpin_                                                                                                    \
      *                                                                                                                       \
      * Exit a critical section.  The calling thread is no longer reading                                                     \
-     * the data structure.                                                                                                   \
+     * the data structure.  Aborts if `tid` is out of range or not                                                           \
+     * registered (a stale unpin could clear a recycled slot's pin).                                                         \
      */                                                                                                                      \
     void prefix##skip_ebr_unpin_##decl(_skip_ebr_##decl##_t *ebr, int tid)                                                   \
     {                                                                                                                        \
+        _skip_ebr_check_tid_##decl(ebr, tid, __func__);                                                                      \
         _skip_atomic_store(&ebr->threads[tid].active, 0, memory_order_release);                                              \
     }                                                                                                                        \
                                                                                                                              \

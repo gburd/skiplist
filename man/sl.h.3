@@ -356,6 +356,18 @@ Release a thread's slot for reuse after its final unpin.
 .BI "void " prefix "skip_ebr_unpin_" decl "(_skip_ebr_" decl "_t *e, int tid);"
 Bracket each list operation with a pin/unpin pair.  Inside a
 pinned region, nodes reachable at pin time stay live.
+Both call
+.BR abort (3)
+if
+.I tid
+is out of range or not currently registered (for example the
+.B -1
+returned by a full
+.BR skip_ebr_register_ ,
+or a tid used after
+.BR skip_ebr_unregister_ ),
+since a pin that silently did nothing would leave the caller
+unprotected.
 .TP
 .BI "void " prefix "skip_ebr_retire_" decl "(_skip_ebr_" decl "_t *e, " decl "_t *l, " decl "_node_t *n);"
 Schedule

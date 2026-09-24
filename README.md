@@ -541,6 +541,7 @@ api_skip_ebr_init_my(&ebr);
 api_skip_ebr_attach_my(&list, &ebr);   /* removals now defer via EBR */
 
 int tid = api_skip_ebr_register_my(&ebr);
+if (tid < 0) { /* all SKIPLIST_EBR_MAX_THREADS slots taken */ }
 api_skip_ebr_pin_my(&ebr, tid);
 api_skip_remove_node_my(&list, &q);    /* auto-retires the node via EBR */
 api_skip_ebr_unpin_my(&ebr, tid);
@@ -548,6 +549,10 @@ api_skip_ebr_unregister_my(&ebr, tid); /* release the slot for reuse */
 
 api_skip_ebr_drain_my(&ebr);           /* at shutdown, no threads active */
 ```
+
+`pin` and `unpin` `abort()` on a tid that is out of range or not
+currently registered: a pin that silently did nothing would leave the
+caller reading nodes EBR is free to reclaim.
 
 EBR is mutually exclusive with `SKIPLIST_SINGLE_THREADED` and will
 fail to compile if both are defined.
