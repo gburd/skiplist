@@ -1188,6 +1188,136 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         }                                                                                                                                                    \
     }                                                                                                                                                        \
                                                                                                                                                              \
+    /**                                                                                                                                                      \
+     * -- _skip_unlink_fully_                                                                                                                                 \
+     *                                                                                                                                                       \
+     * Physically unlink an already-marked node from every level, matching by                                                                                \
+     * pointer identity, retrying until the node is unreachable from the head                                                                                 \
+     * at every level.  This MUST complete before the node is retired/freed:                                                                                  \
+     * epoch-based reclamation is only safe when retired => unlinked, otherwise a                                                                             \
+     * thread that pins later could still follow a link into a reclaimed node.                                                                                \
+     *                                                                                                                                                        \
+     * A single key-based locate() pass is insufficient: a concurrent insert can                                                                              \
+     * splice a fresh predecessor in front of the marked node, and when keys                                                                                  \
+     * repeat (delete + re-insert of the same key) a key-based search can walk                                                                                \
+     * past the marked node entirely.  Navigating by key into the node's region                                                                              \
+     * and then matching the exact pointer handles both: any predecessor that                                                                                 \
+     * still points at this node -- including a newly inserted one -- is found                                                                                \
+     * and CAS-unlinked.  Once a full sweep links to the node at no level and a                                                                               \
+     * level-0 verification scan cannot reach it, no new predecessor can appear                                                                              \
+     * (locate hands out only unmarked successors), so the node is permanently                                                                                \
+     * unreachable and safe to retire. */                                                                                                                    \
+    static void _skip_unlink_fully_##decl(decl##_t *slist, decl##_node_t *node)                                                                               \
+    {                                                                                                                                                        \
+        for (;;) {                                                                                                                                           \
+            int retry = 0;                                                                                                                                   \
+            size_t hh = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire);                                                          \
+            /* `pred` is carried down between levels as a scan-start hint, so   \
+               it must be STRICTLY less than the target: advancing it onto an    \
+               equal-key duplicate that sorts after `node` at level 0 would      \
+               start lower levels past the node, leaving it linked forever while \
+               the reachability check below keeps finding it -- an infinite loop. \
+               So `pred` only ever moves to strictly-smaller nodes, and `scan`   \
+               does the within-level walk over equal keys. */                    \
+            decl##_node_t *pred = slist->slh_head;                                                                                                           \
+            for (size_t lvl = hh; lvl != SIZE_MAX; lvl--) {                                                                                                  \
+                decl##_node_t *scan = pred;                                                                                                                  \
+                decl##_node_t *curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                               \
+                for (;;) {                                                                                                                                   \
+                    if (curr == slist->slh_tail || curr == NULL)                                                                                             \
+                        break;                                                                                                                               \
+                    if (curr == node) {                                                                                                                      \
+                        decl##_node_t *nsucc = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire));                      \
+                        decl##_node_t *expected = node;                                                                                                      \
+                        if (!_skip_atomic_cas_strong(&scan->field.sle_levels[lvl].next, &expected, nsucc, memory_order_release, memory_order_acquire))        \
+                            retry = 1; /* predecessor changed; re-sweep */                                                                                   \
+                        break;                                                                                                                               \
+                    }                                                                                                                                        \
+                    {                                                                                                                                        \
+                        int c = _skip_compare_nodes_##decl(slist, curr, node, slist->slh_aux);                                                                \
+                        if (c < 0) {                                                                                                                         \
+                            /* Strictly smaller: safe to carry to lower levels. */                                                                           \
+                            pred = scan = curr;                                                                                                              \
+                            curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                                  \
+                            continue;                                                                                                                        \
+                        }                                                                                                                                    \
+                        if (c == 0 && curr != node) {                                                                                                        \
+                            /* Equal key but not our node: step over it at this   \
+                               level only, without moving the carried hint. */    \
+                            scan = curr;                                                                                                                     \
+                            curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                                  \
+                            continue;                                                                                                                        \
+                        }                                                                                                                                    \
+                    }                                                                                                                                        \
+                    break; /* curr is past the node's key; node not linked here */                                                                           \
+                }                                                                                                                                            \
+            }                                                                                                                                                \
+            if (retry)                                                                                                                                       \
+                continue;                                                                                                                                    \
+            /* Verify unreachability at level 0 by pointer over the key region. */                                                                           \
+            {                                                                                                                                                \
+                decl##_node_t *c0 = _SKIP_UNMARK(_skip_atomic_load(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire));                        \
+                int found = 0;                                                                                                                               \
+                while (c0 != slist->slh_tail && c0 != NULL) {                                                                                                 \
+                    if (c0 == node) {                                                                                                                        \
+                        found = 1;                                                                                                                           \
+                        break;                                                                                                                               \
+                    }                                                                                                                                        \
+                    if (_skip_compare_nodes_##decl(slist, c0, node, slist->slh_aux) > 0)                                                                      \
+                        break;                                                                                                                               \
+                    c0 = _SKIP_UNMARK(_skip_atomic_load(&c0->field.sle_levels[0].next, memory_order_acquire));                                                \
+                }                                                                                                                                            \
+                if (!found)                                                                                                                                  \
+                    break;                                                                                                                                   \
+            }                                                                                                                                                \
+        }                                                                                                                                                    \
+    }                                                                                                                                                        \
+                                                                                                                                                             \
+                                                                                                                                                               \
+    /**                                                                                                                                                        \
+     * -- _skip_splay_recheck_published_                                                                                                                       \
+     *                                                                                                                                                         \
+     * Called by the splay rebalance immediately after its CAS has linked                                                                                      \
+     * `node` into level `lvl` behind `pred`.  Closes the promote-after-remove                                                                                 \
+     * race.                                                                                                                                                   \
+     *                                                                                                                                                         \
+     * A concurrent remove of `node` reads the node's height once, marks the                                                                                   \
+     * levels it saw, marks level 0 (its linearization point), sweeps the node                                                                                 \
+     * out by pointer identity, then retires it to EBR.  If that remove read                                                                                   \
+     * the height before the promotion raised it, it never marked `lvl` and                                                                                    \
+     * may already have finished its sweep, so nothing would ever unlink the                                                                                   \
+     * new level: the node would be retired while still reachable at `lvl`,                                                                                    \
+     * and EBR would free it under a live link.  This was a reproduced                                                                                         \
+     * heap-use-after-free.                                                                                                                                    \
+     *                                                                                                                                                         \
+     * Re-reading level 0 after publishing decides it.  If the remover's                                                                                       \
+     * level-0 mark came first, we observe it here and take the link back.                                                                                     \
+     * If it comes after this read, the remover read a height of at least                                                                                      \
+     * `lvl` (it started after our height CAS) or, if not, its identity sweep                                                                                  \
+     * still visits `lvl` because lvl <= head height; either way the remover                                                                                   \
+     * unlinks the new level itself before retiring.                                                                                                           \
+     *                                                                                                                                                         \
+     * The window between publishing and this check is safe: the caller                                                                                        \
+     * reached `node` through locate within its own EBR pin, so the node                                                                                       \
+     * cannot be reclaimed before the caller unpins, and readers already                                                                                       \
+     * treat a node whose level-0 successor is marked as deleted.                                                                                              \
+     *                                                                                                                                                         \
+     * If the undo CAS loses, either another unlinker (the remover's sweep or                                                                                  \
+     * a demotion) already removed `node` from `lvl` -- only one CAS from                                                                                      \
+     * `node` to its successor can win -- or an insert moved pred's link on.                                                                                   \
+     * The identity sweep handles both: it unlinks `node` wherever it still                                                                                    \
+     * is and is a no-op where it is already gone.                                                                                                             \
+     */                                                                                                                                                        \
+    static void _skip_splay_recheck_published_##decl(decl##_t *slist, decl##_node_t *pred, decl##_node_t *node, size_t lvl)                                    \
+    {                                                                                                                                                          \
+        decl##_node_t *lvl0 = _skip_atomic_load(&node->field.sle_levels[0].next, memory_order_acquire);                                                        \
+        if (!_SKIP_IS_MARKED(lvl0))                                                                                                                            \
+            return;                                                                                                                                            \
+        decl##_node_t *nsucc = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire));                                       \
+        decl##_node_t *undo_exp = node;                                                                                                                        \
+        if (!_skip_atomic_cas_strong(&pred->field.sle_levels[lvl].next, &undo_exp, nsucc, memory_order_acq_rel, memory_order_acquire))                         \
+            _skip_unlink_fully_##decl(slist, node);                                                                                                            \
+    }                                                                                                                                                          \
     /* Only called when SKIPLIST_SPLAY_REBALANCE is defined; mark to silence  \
      * -Wunused-function in the common case where it is left disabled.       */ \
     _SKIP_MAYBE_UNUSED                                                                                                                                       \
@@ -1495,7 +1625,11 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
                      * is harmless since no one links to it. */                                                                                              \
                     size_t revert_exp = new_h;                                                                                                               \
                     _skip_atomic_cas_strong(&node->field.sle_height, &revert_exp, node_height, memory_order_release, memory_order_relaxed);                  \
-                }                                                                                                                                            \
+                } else {                                                                                                                                       \
+                    /* Published.  Take the link back if node was concurrently                                                                                 \
+                       removed; see _skip_splay_recheck_published_. */                                                                                         \
+                    _skip_splay_recheck_published_##decl(slist, pred, node, new_h);                                                                            \
+                }                                                                                                                                              \
             }                                                                                                                                                \
         }                                                                                                                                                    \
     }                                                                                                                                                        \
@@ -2193,91 +2327,6 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         slist->slh_fns.update_entry(node, value);                                                                                                            \
                                                                                                                                                              \
         return rc;                                                                                                                                           \
-    }                                                                                                                                                        \
-                                                                                                                                                             \
-    /**                                                                                                                                                      \
-     * -- _skip_unlink_fully_                                                                                                                                 \
-     *                                                                                                                                                       \
-     * Physically unlink an already-marked node from every level, matching by                                                                                \
-     * pointer identity, retrying until the node is unreachable from the head                                                                                 \
-     * at every level.  This MUST complete before the node is retired/freed:                                                                                  \
-     * epoch-based reclamation is only safe when retired => unlinked, otherwise a                                                                             \
-     * thread that pins later could still follow a link into a reclaimed node.                                                                                \
-     *                                                                                                                                                        \
-     * A single key-based locate() pass is insufficient: a concurrent insert can                                                                              \
-     * splice a fresh predecessor in front of the marked node, and when keys                                                                                  \
-     * repeat (delete + re-insert of the same key) a key-based search can walk                                                                                \
-     * past the marked node entirely.  Navigating by key into the node's region                                                                              \
-     * and then matching the exact pointer handles both: any predecessor that                                                                                 \
-     * still points at this node -- including a newly inserted one -- is found                                                                                \
-     * and CAS-unlinked.  Once a full sweep links to the node at no level and a                                                                               \
-     * level-0 verification scan cannot reach it, no new predecessor can appear                                                                              \
-     * (locate hands out only unmarked successors), so the node is permanently                                                                                \
-     * unreachable and safe to retire. */                                                                                                                    \
-    static void _skip_unlink_fully_##decl(decl##_t *slist, decl##_node_t *node)                                                                               \
-    {                                                                                                                                                        \
-        for (;;) {                                                                                                                                           \
-            int retry = 0;                                                                                                                                   \
-            size_t hh = _skip_atomic_load(&slist->slh_head->field.sle_height, memory_order_acquire);                                                          \
-            /* `pred` is carried down between levels as a scan-start hint, so   \
-               it must be STRICTLY less than the target: advancing it onto an    \
-               equal-key duplicate that sorts after `node` at level 0 would      \
-               start lower levels past the node, leaving it linked forever while \
-               the reachability check below keeps finding it -- an infinite loop. \
-               So `pred` only ever moves to strictly-smaller nodes, and `scan`   \
-               does the within-level walk over equal keys. */                    \
-            decl##_node_t *pred = slist->slh_head;                                                                                                           \
-            for (size_t lvl = hh; lvl != SIZE_MAX; lvl--) {                                                                                                  \
-                decl##_node_t *scan = pred;                                                                                                                  \
-                decl##_node_t *curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                               \
-                for (;;) {                                                                                                                                   \
-                    if (curr == slist->slh_tail || curr == NULL)                                                                                             \
-                        break;                                                                                                                               \
-                    if (curr == node) {                                                                                                                      \
-                        decl##_node_t *nsucc = _SKIP_UNMARK(_skip_atomic_load(&node->field.sle_levels[lvl].next, memory_order_acquire));                      \
-                        decl##_node_t *expected = node;                                                                                                      \
-                        if (!_skip_atomic_cas_strong(&scan->field.sle_levels[lvl].next, &expected, nsucc, memory_order_release, memory_order_acquire))        \
-                            retry = 1; /* predecessor changed; re-sweep */                                                                                   \
-                        break;                                                                                                                               \
-                    }                                                                                                                                        \
-                    {                                                                                                                                        \
-                        int c = _skip_compare_nodes_##decl(slist, curr, node, slist->slh_aux);                                                                \
-                        if (c < 0) {                                                                                                                         \
-                            /* Strictly smaller: safe to carry to lower levels. */                                                                           \
-                            pred = scan = curr;                                                                                                              \
-                            curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                                  \
-                            continue;                                                                                                                        \
-                        }                                                                                                                                    \
-                        if (c == 0 && curr != node) {                                                                                                        \
-                            /* Equal key but not our node: step over it at this   \
-                               level only, without moving the carried hint. */    \
-                            scan = curr;                                                                                                                     \
-                            curr = _SKIP_UNMARK(_skip_atomic_load(&scan->field.sle_levels[lvl].next, memory_order_acquire));                                  \
-                            continue;                                                                                                                        \
-                        }                                                                                                                                    \
-                    }                                                                                                                                        \
-                    break; /* curr is past the node's key; node not linked here */                                                                           \
-                }                                                                                                                                            \
-            }                                                                                                                                                \
-            if (retry)                                                                                                                                       \
-                continue;                                                                                                                                    \
-            /* Verify unreachability at level 0 by pointer over the key region. */                                                                           \
-            {                                                                                                                                                \
-                decl##_node_t *c0 = _SKIP_UNMARK(_skip_atomic_load(&slist->slh_head->field.sle_levels[0].next, memory_order_acquire));                        \
-                int found = 0;                                                                                                                               \
-                while (c0 != slist->slh_tail && c0 != NULL) {                                                                                                 \
-                    if (c0 == node) {                                                                                                                        \
-                        found = 1;                                                                                                                           \
-                        break;                                                                                                                               \
-                    }                                                                                                                                        \
-                    if (_skip_compare_nodes_##decl(slist, c0, node, slist->slh_aux) > 0)                                                                      \
-                        break;                                                                                                                               \
-                    c0 = _SKIP_UNMARK(_skip_atomic_load(&c0->field.sle_levels[0].next, memory_order_acquire));                                                \
-                }                                                                                                                                            \
-                if (!found)                                                                                                                                  \
-                    break;                                                                                                                                   \
-            }                                                                                                                                                \
-        }                                                                                                                                                    \
     }                                                                                                                                                        \
                                                                                                                                                              \
     /**                                                                                                                                                      \

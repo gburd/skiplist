@@ -1457,7 +1457,128 @@ test_race_iterate_during_mutation(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* ------------------------------------------------------------------
+ * Promote-after-remove (deterministic).
+ *
+ * The splay rebalance publishes a node at a new level with a CAS on the
+ * predecessor.  A concurrent remove that read the node's height before the
+ * promotion raised it never marks the new level and may finish its unlink
+ * sweep first; the promotion's CAS then republishes a node that is already
+ * logically deleted and about to be retired, and once EBR reclaims it the
+ * upper level dangles.  That was a reproduced heap-use-after-free.
+ *
+ * This drives the exact interleaving without timing: it replays the
+ * promotion's steps up to the publishing CAS, runs a COMPLETE remove of the
+ * node inside that window, performs the CAS, then calls the library's own
+ * _skip_splay_recheck_published_ -- the code the rebalance runs right after
+ * its CAS.  The removed node must then be unreachable at every level.
+ *
+ * Without the recheck the node stays linked at level 1: this test fails on
+ * the unfixed header (the assertion below reports it reachable).
+ * ------------------------------------------------------------------ */
+static int
+node_reachable_at(conc_t *list, conc_node_t *target, size_t lvl)
+{
+    conc_node_t *cur = _SKIP_UNMARK(_skip_atomic_load(&list->slh_head->entries.sle_levels[lvl].next, memory_order_acquire));
+    size_t guard = 0;
+    while (cur != NULL && cur != list->slh_tail && guard++ < 100000) {
+        if (cur == target)
+            return 1;
+        cur = _SKIP_UNMARK(_skip_atomic_load(&cur->entries.sle_levels[lvl].next, memory_order_acquire));
+    }
+    return 0;
+}
+
+static MunitResult
+test_promote_after_remove(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    conc_t *list = malloc(sizeof(*list));
+    _skip_ebr_conc_t *ebr = malloc(sizeof(*ebr));
+    munit_assert_not_null(list);
+    munit_assert_not_null(ebr);
+    munit_assert_int(ct_skip_init_conc(list), ==, 0);
+    ct_skip_ebr_init_conc(ebr);
+    ct_skip_ebr_attach_conc(list, ebr);
+    int tid = ct_skip_ebr_register_conc(ebr);
+    munit_assert_int(tid, >=, 0);
+    ct_skip_ebr_pin_conc(ebr, tid); /* the promoting thread is pinned, as in the rebalance */
+
+    /* The scenario needs n20 to start at height 0, so that level 1 behind
+       the head does not already contain it.  Tower heights come from the
+       list's PRNG, which skip_init_ seeds from time and pid, so an unpinned
+       run sometimes gives n20 a level-1 link at insert time; replaying the
+       promotion would then make n20->next[1] point at n20 itself, a
+       structure that cannot arise.  Build a flat list explicitly instead:
+       insert, then pin every node to height 0. */
+    conc_node_t *n10, *n20, *n30;
+    munit_assert_int(ct_skip_alloc_node_conc(&n10), ==, 0);
+    munit_assert_int(ct_skip_alloc_node_conc(&n20), ==, 0);
+    munit_assert_int(ct_skip_alloc_node_conc(&n30), ==, 0);
+    n10->key = 10;
+    n20->key = 20;
+    n30->key = 30;
+    munit_assert_int(ct_skip_insert_conc(list, n10), ==, 0);
+    munit_assert_int(ct_skip_insert_conc(list, n20), ==, 0);
+    munit_assert_int(ct_skip_insert_conc(list, n30), ==, 0);
+
+    /* Flatten: every node at height 0, every head level pointing at the tail. */
+    for (size_t lvl = 1; lvl < SKIPLIST_MAX_HEIGHT; lvl++)
+        _skip_atomic_store(&list->slh_head->entries.sle_levels[lvl].next, list->slh_tail, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_head->entries.sle_height, 1, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_tail->entries.sle_height, 1, memory_order_relaxed);
+    _skip_atomic_store(&n10->entries.sle_height, 0, memory_order_relaxed);
+    _skip_atomic_store(&n20->entries.sle_height, 0, memory_order_relaxed);
+    _skip_atomic_store(&n30->entries.sle_height, 0, memory_order_relaxed);
+    munit_assert_ptr_equal(_skip_atomic_load(&list->slh_head->entries.sle_levels[1].next, memory_order_acquire), list->slh_tail);
+
+    /* Promotion of n20 to level 1 behind the head, steps up to the CAS. */
+    const size_t new_h = 1;
+    conc_node_t *pred = list->slh_head;
+    if (_skip_atomic_load(&pred->entries.sle_height, memory_order_acquire) <= new_h) {
+        _skip_atomic_store(&pred->entries.sle_height, new_h + 1, memory_order_release);
+        _skip_atomic_store(&list->slh_tail->entries.sle_height, new_h + 1, memory_order_release);
+    }
+    conc_node_t *succ = _skip_atomic_load(&pred->entries.sle_levels[new_h].next, memory_order_acquire);
+    munit_assert_false(_SKIP_IS_MARKED(succ));
+    _skip_atomic_store(&n20->entries.sle_levels[new_h].next, succ, memory_order_relaxed);
+    _skip_atomic_store(&n20->entries.sle_height, new_h, memory_order_release);
+
+    /* A concurrent remove of n20 runs to completion inside the window. */
+    conc_node_t q;
+    memset(&q, 0, sizeof(q));
+    q.key = 20;
+    munit_assert_int(ct_skip_remove_node_conc(list, &q), ==, 0);
+    munit_assert_true(_SKIP_IS_MARKED(_skip_atomic_load(&n20->entries.sle_levels[0].next, memory_order_acquire)));
+
+    /* The promotion's publishing CAS still succeeds -- this is the race. */
+    conc_node_t *expected = succ;
+    munit_assert_true(_skip_atomic_cas_strong(&pred->entries.sle_levels[new_h].next, &expected, n20, memory_order_release, memory_order_relaxed));
+
+    /* ...which the rebalance now follows with its re-check. */
+    _skip_splay_recheck_published_conc(list, pred, n20, new_h);
+
+    for (size_t lvl = 0; lvl <= _skip_atomic_load(&list->slh_head->entries.sle_height, memory_order_acquire); lvl++) {
+        if (node_reachable_at(list, n20, lvl))
+            munit_errorf("removed node still reachable at level %zu after promotion", lvl);
+    }
+
+    /* Survivors intact. */
+    munit_assert_true(node_reachable_at(list, n10, 0));
+    munit_assert_true(node_reachable_at(list, n30, 0));
+    munit_assert_size(ct_skip_length_conc(list), ==, 2);
+
+    ct_skip_ebr_unpin_conc(ebr, tid);
+    ct_skip_ebr_unregister_conc(ebr, tid);
+    ct_skip_ebr_drain_conc(ebr);
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
 static MunitTest conc_test_suite_tests[] = {
+    { (char *)"/promote_after_remove", test_promote_after_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_insert", test_concurrent_insert, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_search", test_concurrent_search, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_delete", test_concurrent_delete, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
