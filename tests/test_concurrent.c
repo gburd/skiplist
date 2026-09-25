@@ -1577,8 +1577,116 @@ test_promote_after_remove(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* ------------------------------------------------------------------
+ * Unlink above a shrunk head height (deterministic).
+ *
+ * _skip_unlink_fully_ used to bound its identity sweep at the head's
+ * CURRENT height.  Under dense concurrent insert+remove the head height can
+ * shrink below a live node's link level: one thread grows the head and links
+ * a tall node at an upper level while another thread, seeing that level's
+ * head link momentarily at the tail, shrinks the head back down.  The tall
+ * node is then linked at a level ABOVE head->sle_height.  When that node is
+ * removed, a sweep bounded at head->sle_height skips the level it is still
+ * linked at, so the node is retired while reachable; once EBR frees it the
+ * upper-level link dangles -- a reproduced heap-use-after-free (the
+ * ebr_dense churn reproducer, ~62%% at RANGE=64/4-thread on the base header).
+ *
+ * This replays the end state without timing: link n20 at level 2 behind the
+ * head, then shrink head->sle_height to 1 while n20 stays physically linked
+ * at head->next[2], mark n20 at every level as a full remove would, and run
+ * the library's own _skip_unlink_fully_.  The node must be unreachable at
+ * EVERY level up to its height afterwards.
+ *
+ * On the unfixed header the sweep never visits level 2, so n20 stays linked
+ * there and the assertion below fires.  With the fix (sweep bound =
+ * max(head_height, node_height), verify every level) it is fully unlinked.
+ * ------------------------------------------------------------------ */
+static MunitResult
+test_unlink_above_head_height(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+
+    conc_t *list = malloc(sizeof(*list));
+    _skip_ebr_conc_t *ebr = malloc(sizeof(*ebr));
+    munit_assert_not_null(list);
+    munit_assert_not_null(ebr);
+    munit_assert_int(ct_skip_init_conc(list), ==, 0);
+    ct_skip_ebr_init_conc(ebr);
+    ct_skip_ebr_attach_conc(list, ebr);
+    int tid = ct_skip_ebr_register_conc(ebr);
+    munit_assert_int(tid, >=, 0);
+    ct_skip_ebr_pin_conc(ebr, tid);
+
+    conc_node_t *n10, *n20, *n30;
+    munit_assert_int(ct_skip_alloc_node_conc(&n10), ==, 0);
+    munit_assert_int(ct_skip_alloc_node_conc(&n20), ==, 0);
+    munit_assert_int(ct_skip_alloc_node_conc(&n30), ==, 0);
+    n10->key = 10;
+    n20->key = 20;
+    n30->key = 30;
+    munit_assert_int(ct_skip_insert_conc(list, n10), ==, 0);
+    munit_assert_int(ct_skip_insert_conc(list, n20), ==, 0);
+    munit_assert_int(ct_skip_insert_conc(list, n30), ==, 0);
+
+    /* Flatten to a known level-0-only structure: head -> n10 -> n20 -> n30. */
+    for (size_t lvl = 1; lvl < SKIPLIST_MAX_HEIGHT; lvl++)
+        _skip_atomic_store(&list->slh_head->entries.sle_levels[lvl].next, list->slh_tail, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_head->entries.sle_height, 1, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_tail->entries.sle_height, 1, memory_order_relaxed);
+    _skip_atomic_store(&n10->entries.sle_height, 0, memory_order_relaxed);
+    _skip_atomic_store(&n20->entries.sle_height, 0, memory_order_relaxed);
+    _skip_atomic_store(&n30->entries.sle_height, 0, memory_order_relaxed);
+
+    /* Give n20 a tower to level 2 and link it there behind the head, as an
+       insert that grew the head to height 3 would.  n20->next[1] and [2]
+       point at the tail (n20 is the only node at those levels). */
+    const size_t link_lvl = 2;
+    _skip_atomic_store(&n20->entries.sle_height, link_lvl, memory_order_relaxed);
+    _skip_atomic_store(&n20->entries.sle_levels[1].next, list->slh_tail, memory_order_relaxed);
+    _skip_atomic_store(&n20->entries.sle_levels[2].next, list->slh_tail, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_head->entries.sle_levels[1].next, n20, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_head->entries.sle_levels[2].next, n20, memory_order_relaxed);
+
+    /* Now a concurrent remove shrinks the head back down to height 1 while
+       n20 is still physically linked at head->next[1] and head->next[2]. */
+    _skip_atomic_store(&list->slh_head->entries.sle_height, 1, memory_order_relaxed);
+    _skip_atomic_store(&list->slh_tail->entries.sle_height, 1, memory_order_relaxed);
+    munit_assert_true(node_reachable_at(list, n20, 2)); /* precondition: linked above head height */
+
+    /* A full remove marks the node top-down then at level 0 (linearization). */
+    for (size_t lvl = link_lvl; lvl != SIZE_MAX; lvl--) {
+        conc_node_t *s = _skip_atomic_load(&n20->entries.sle_levels[lvl].next, memory_order_acquire);
+        _skip_atomic_store(&n20->entries.sle_levels[lvl].next, _SKIP_MARK(s), memory_order_release);
+    }
+
+    /* The library's physical-unlink pass must clear the node from EVERY
+       level up to its own height, not merely up to head->sle_height. */
+    _skip_unlink_fully_conc(list, n20);
+
+    for (size_t lvl = 0; lvl <= link_lvl; lvl++) {
+        if (node_reachable_at(list, n20, lvl))
+            munit_errorf("removed node still reachable at level %zu (head height=%zu)", lvl,
+                (size_t)_skip_atomic_load(&list->slh_head->entries.sle_height, memory_order_acquire));
+    }
+
+    /* Survivors intact at level 0. */
+    munit_assert_true(node_reachable_at(list, n10, 0));
+    munit_assert_true(node_reachable_at(list, n30, 0));
+
+    /* n20 is fully unlinked; free it directly (never entered a retire list). */
+    ct_skip_free_node_conc(list, n20);
+
+    ct_skip_ebr_unpin_conc(ebr, tid);
+    ct_skip_ebr_unregister_conc(ebr, tid);
+    ct_skip_ebr_drain_conc(ebr);
+    teardown_list_and_ebr(list, ebr);
+    return MUNIT_OK;
+}
+
 static MunitTest conc_test_suite_tests[] = {
     { (char *)"/promote_after_remove", test_promote_after_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/unlink_above_head_height", test_unlink_above_head_height, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_insert", test_concurrent_insert, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_search", test_concurrent_search, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/concurrent_delete", test_concurrent_delete, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
