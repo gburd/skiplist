@@ -654,7 +654,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *   int    prefix##skip_alloc_node_##decl(decl##_node_t **node)
  *            -- Allocate a new node on the heap.  Returns 0 or ENOMEM.
  *   void   prefix##skip_free_node_##decl(decl##_t *slist, decl##_node_t *node)
- *            -- Free a single node (calls free_entry_blk then free).
+ *            -- Free a single node (calls free_entry_blk, then free() or, if a
+ *               pool is attached (skip_pool_attach_), returns it to the pool).
  *   int    prefix##skip_insert_##decl(decl##_t *slist, decl##_node_t *n)
  *            -- Insert node; rejects duplicates (returns -1).
  *   int    prefix##skip_insert_dup_##decl(decl##_t *slist, decl##_node_t *n)
@@ -697,6 +698,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         void *slh_aux;                                                                                                                                       \
         void *slh_ebr;                                                       /* EBR state (NULL for single-threaded use) */                                  \
         void (*slh_ebr_retire)(void *, struct decl *, struct decl##_node *); /* EBR retire callback */                                                       \
+        void *slh_pool;                                                      /* attached node pool (NULL: nodes are free()d) */                              \
+        void (*slh_pool_release)(void *, struct decl##_node *);              /* returns a node to slh_pool */                                                \
         _SKIP_ATOMIC(uint32_t) slh_prng_state;                                                                                                               \
         _SKIP_ATOMIC(uint32_t) slh_splay_counter;                                                                                                            \
         _SKIP_ATOMIC(int) slh_has_dups; /* set once insert_dup links an equal key; see _skip_lookup_ */                                                      \
@@ -892,6 +895,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         slist->slh_length = 0;                                                                                                                               \
         slist->slh_ebr = NULL;                                                                                                                               \
         slist->slh_ebr_retire = NULL;                                                                                                                        \
+        slist->slh_pool = NULL;                                                                                                                              \
+        slist->slh_pool_release = NULL;                                                                                                                      \
         slist->slh_snap.cur_era = 0;                                                                                                                         \
         slist->slh_snap.pres_era = 0;                                                                                                                        \
         slist->slh_snap.pres = 0;                                                                                                                            \
@@ -938,7 +943,14 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
     void prefix##skip_free_node_##decl(decl##_t *slist, decl##_node_t *node)                                                                                 \
     {                                                                                                                                                        \
         slist->slh_fns.free_entry(node);                                                                                                                     \
-        free(node);                                                                                                                                          \
+        /* A node from an attached SKIPLIST_DECL_POOL lives inside the pool slab:                                                                            \
+           it must go back to the pool, never to free().  Every path that                                                                                    \
+           releases a list-owned node (remove, EBR reclaim/drain, teardown,                                                                                  \
+           snapshot discard) funnels through here. */                                                                                                        \
+        if (slist->slh_pool_release != NULL)                                                                                                                 \
+            slist->slh_pool_release(slist->slh_pool, node);                                                                                                  \
+        else                                                                                                                                                 \
+            free(node);                                                                                                                                      \
     }                                                                                                                                                        \
                                                                                                                                                              \
     /**                                                                                                                                                      \
@@ -2518,8 +2530,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         if (slist->slh_ebr != NULL && slist->slh_ebr_retire != NULL) {                                                                                       \
             slist->slh_ebr_retire(slist->slh_ebr, slist, node);                                                                                              \
         } else {                                                                                                                                             \
-            slist->slh_fns.free_entry(node);                                                                                                                 \
-            free(node);                                                                                                                                      \
+            prefix##skip_free_node_##decl(slist, node);                                                                                                      \
         }                                                                                                                                                    \
                                                                                                                                                              \
         _skip_adjust_hit_counts_##decl(slist);                                                                                                               \
@@ -2840,8 +2851,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         while (list != NULL) {                                                                                               \
             _skip_ebr_retired_##decl##_t *cur = list;                                                                        \
             list = cur->next;                                                                                                \
-            cur->slist->slh_fns.free_entry(cur->node);                                                                       \
-            free(cur->node);                                                                                                 \
+            prefix##skip_free_node_##decl(cur->slist, cur->node);                                                            \
             free(cur);                                                                                                       \
         }                                                                                                                    \
     }                                                                                                                        \
@@ -2888,8 +2898,7 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
             while (list != NULL) {                                                                                           \
                 _skip_ebr_retired_##decl##_t *cur = list;                                                                    \
                 list = cur->next;                                                                                            \
-                cur->slist->slh_fns.free_entry(cur->node);                                                                   \
-                free(cur->node);                                                                                             \
+                prefix##skip_free_node_##decl(cur->slist, cur->node);                                                        \
                 free(cur);                                                                                                   \
             }                                                                                                                \
         }                                                                                                                    \
@@ -4376,6 +4385,8 @@ _skip_read_le64(const uint8_t *src)
  *          -- Push a node back onto the pool free list.
  *   void prefix##skip_pool_destroy_##decl(_skip_pool_##decl##_t *pool)
  *          -- Free the contiguous slab.  All pool nodes become invalid.
+ *             Once attached to a list, destroy is a no-op while any slot
+ *             is still in use (linked or awaiting EBR reclaim).
  *   int  prefix##skip_pool_is_from_##decl(_skip_pool_##decl##_t *pool, decl##_node_t *node)
  *          -- Returns non-zero if node belongs to this pool.
  *   int  prefix##skip_pool_alloc_node_##decl(_skip_pool_##decl##_t *pool, decl##_node_t **node)
@@ -4383,6 +4394,11 @@ _skip_read_le64(const uint8_t *src)
  *   void prefix##skip_pool_free_node_##decl(_skip_pool_##decl##_t *pool, decl##_t *slist,
  *                                           decl##_node_t *node)
  *          -- Free a node: calls free_entry, then returns to pool or free().
+ *   void prefix##skip_pool_attach_##decl(decl##_t *slist, _skip_pool_##decl##_t *pool)
+ *          -- Make the list return nodes it releases (remove, EBR reclaim and
+ *             drain, skip_free_) to the pool instead of free().  REQUIRED
+ *             before inserting pool nodes into a list.  Destroy the pool
+ *             only after skip_free_ and skip_ebr_drain_.
  */
 #define SKIPLIST_DECL_POOL(decl, prefix, field, capacity_hint)                                                       \
                                                                                                                      \
@@ -4395,6 +4411,7 @@ _skip_read_le64(const uint8_t *src)
         _SKIP_ALIGNAS(64) char *slots;     /* contiguous allocation for all slots */                                 \
         _SKIP_ATOMIC(uint32_t) * slot_state; /* per-slot state: 0 = free, 1 = used */                                \
         _SKIP_ATOMIC(size_t) cursor;       /* rotating allocation hint (free-running) */                            \
+        int attached;                      /* set by skip_pool_attach_; arms the destroy guard */                    \
     } _skip_pool_##decl##_t;                                                                                         \
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
@@ -4458,6 +4475,7 @@ _skip_read_le64(const uint8_t *src)
         memset(pool->slots, 0, slot_size *capacity);                                                                 \
                                                                                                                      \
         _skip_atomic_store(&pool->cursor, 0, memory_order_release);                                                  \
+        pool->attached = 0;                                                                                          \
                                                                                                                      \
         return 0;                                                                                                    \
     }                                                                                                                \
@@ -4518,6 +4536,15 @@ _skip_read_le64(const uint8_t *src)
     {                                                                                                                \
         if (pool == NULL)                                                                                            \
             return;                                                                                                  \
+        /* A pool attached to a list must not be torn down while any slot is                                         \
+           still in use: the list (or an EBR retire list) will release that                                          \
+           node later, which would then touch a freed slab.  Refuse, leaving                                         \
+           the pool intact; call again after skip_free_ / skip_ebr_drain_. */                                        \
+        if (pool->attached) {                                                                                        \
+            for (size_t i = 0; i < pool->capacity; i++)                                                              \
+                if (_skip_atomic_load(&pool->slot_state[i], memory_order_acquire) != 0u)                             \
+                    return;                                                                                          \
+        }                                                                                                            \
         _skip_aligned_free(pool->slots);                                                                             \
         pool->slots = NULL;                                                                                          \
         free(pool->slot_state);                                                                                      \
@@ -4546,17 +4573,40 @@ _skip_read_le64(const uint8_t *src)
         return ENOMEM;                                                                                               \
     }                                                                                                                \
                                                                                                                      \
+    /* ------------------------------------------------------------------ */                                         \
+    /* _skip_pool_release_cb_ -- Return node storage to the pool, or      */                                         \
+    /*   free() it if it did not come from the pool.  Installed as the    */                                         \
+    /*   list's slh_pool_release hook by skip_pool_attach_.  Only a       */                                         \
+    /*   release-ordered store on the slot's own state word, so it is     */                                         \
+    /*   safe from whichever thread EBR reclaims on.                      */                                         \
+    /* ------------------------------------------------------------------ */                                         \
+    static void _skip_pool_release_cb_##decl(void *pool, decl##_node_t *node)                                        \
+    {                                                                                                                \
+        if (prefix##skip_pool_is_from_##decl((_skip_pool_##decl##_t *)pool, node))                                   \
+            prefix##skip_pool_free_##decl((_skip_pool_##decl##_t *)pool, node);                                      \
+        else                                                                                                         \
+            free(node);                                                                                              \
+    }                                                                                                                \
+                                                                                                                     \
+    /* ------------------------------------------------------------------ */                                         \
+    /* skip_pool_attach_ -- Route every node the list releases (remove,   */                                         \
+    /*   EBR reclaim/drain, skip_release_/skip_free_, snapshot discard)   */                                         \
+    /*   through the pool.  Call before the list is shared; pool == NULL  */                                         \
+    /*   detaches.  The pool must outlive the list and any EBR drain.     */                                         \
+    /* ------------------------------------------------------------------ */                                         \
+    void prefix##skip_pool_attach_##decl(decl##_t *slist, _skip_pool_##decl##_t *pool)                               \
+    {                                                                                                                \
+        slist->slh_pool = (void *)pool;                                                                              \
+        slist->slh_pool_release = pool ? _skip_pool_release_cb_##decl : NULL;                                        \
+        if (pool != NULL)                                                                                            \
+            pool->attached = 1;                                                                                      \
+    }                                                                                                                \
+                                                                                                                     \
     void prefix##skip_pool_free_node_##decl(_skip_pool_##decl##_t *pool, decl##_t *slist, decl##_node_t *node)       \
     {                                                                                                                \
         /* Always call the user's free_entry to release user-held resources */                                       \
         slist->slh_fns.free_entry(node);                                                                             \
-                                                                                                                     \
-        /* If the node came from the pool, return it there; otherwise free */                                        \
-        if (prefix##skip_pool_is_from_##decl(pool, node)) {                                                          \
-            prefix##skip_pool_free_##decl(pool, node);                                                               \
-        } else {                                                                                                     \
-            free(node);                                                                                              \
-        }                                                                                                            \
+        _skip_pool_release_cb_##decl(pool, node);                                                                    \
     }
 
 #ifdef __cplusplus

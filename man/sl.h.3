@@ -397,6 +397,26 @@ then return the node to the pool, or
 .BR free (3)
 it if it is not from the pool.
 .TP
+.BI "void " prefix "skip_pool_attach_" decl "(" decl "_t *l, _skip_pool_" decl "_t *p);"
+Make every node the list releases (remove, EBR reclaim and drain,
+.BR skip_free_ ,
+snapshot discard) return to
+.B p
+if it lives in the pool, or be passed to
+.BR free (3)
+otherwise.
+Nodes from a pool that go into a list
+.B require
+this call on that list, or the list will
+.BR free (3)
+them, corrupting the heap.
+Destroy the pool only after
+.B skip_free_
+(and
+.B skip_ebr_drain_
+under EBR); an attached pool's destroy is a no-op while any slot is
+still in use.
+.TP
 .BI "int " prefix "skip_pool_is_from_" decl "(_skip_pool_" decl "_t *p, " decl "_node_t *n);"
 Non-zero if
 .B n

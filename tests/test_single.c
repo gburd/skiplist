@@ -909,6 +909,53 @@ test_st_pool_exhaustion(const MunitParameter p[], void *d)
     return MUNIT_OK;
 }
 
+/* Pool attached to a list in the SINGLE_THREADED build: remove and list
+   teardown must hand pool nodes back to the pool (they used to be free()d
+   from inside the slab), heap nodes still go to free(), and the destroy
+   guard refuses while a slot is linked. */
+static MunitResult
+test_st_pool_attach(const MunitParameter p[], void *d)
+{
+    (void)p;
+    (void)d;
+    _skip_pool_st_t pool;
+    assert_int(st_skip_pool_init_st(&pool, 4), ==, 0);
+    st_t *l = malloc(sizeof(*l));
+    st_skip_init_st(l);
+    st_skip_pool_attach_st(l, &pool);
+
+    for (int round = 0; round < 2; round++) {
+        for (int i = 0; i < 4; i++) {
+            st_node_t *n = NULL;
+            assert_int(st_skip_pool_alloc_node_st(&pool, &n), ==, 0);
+            n->key = i;
+            n->value = mk(i);
+            assert_int(st_skip_insert_st(l, n), ==, 0);
+        }
+        assert_int(st_skip_put_st(l, 99, mk(99)), ==, 0); /* heap node */
+        if (round == 0) {
+            for (int i = 0; i < 4; i++)
+                assert_int(st_skip_del_st(l, i), ==, 0);
+            assert_int(st_skip_del_st(l, 99), ==, 0);
+        } else {
+            st_skip_pool_destroy_st(&pool); /* refused: 4 slots linked */
+            assert_not_null(pool.slots);
+            st_skip_release_st(l);
+        }
+        st_node_t *all[4];
+        for (int i = 0; i < 4; i++)
+            assert_int(st_skip_pool_alloc_node_st(&pool, &all[i]), ==, 0);
+        for (int i = 0; i < 4; i++)
+            st_skip_pool_free_st(&pool, all[i]);
+    }
+
+    st_skip_free_st(l);
+    free(l);
+    st_skip_pool_destroy_st(&pool);
+    assert_null(pool.slots);
+    return MUNIT_OK;
+}
+
 /* Snapshot edges: no snapshot taken, restore to a stale era, release
    without restore, and repeated snapshot/restore cycles. */
 static MunitResult
@@ -1326,6 +1373,7 @@ static MunitTest tests[] = {
     { (char *)"/single/validate_corruption", test_st_validate_corruption, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/validate_early_exit_arms", test_st_validate_early_exit_arms, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/pool_exhaustion", test_st_pool_exhaustion, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/single/pool_attach", test_st_pool_attach, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/snapshot_edges", test_st_snapshot_edges, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/height_churn", test_st_height_churn, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/single/position_boundaries", test_st_position_boundaries, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },

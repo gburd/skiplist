@@ -2239,6 +2239,172 @@ test_ebr_retire_callback(const MunitParameter params[], void *data)
     return MUNIT_OK;
 }
 
+/* Regression: a pool node released by the list must go back to the pool.
+   Every list-owned release (non-EBR remove, EBR reclaim and drain, list
+   teardown) used to call free() on it, but a pool node lives inside
+   pool->slots: that is free() on a slab interior, and pool_destroy then
+   frees the slab again (ASan: attempting double-free).  Each test proves
+   the slots came back by claiming the whole pool afterwards. */
+static void
+pool_assert_all_free(_skip_pool_test_t *pool)
+{
+    test_node_t *n[4];
+    for (int i = 0; i < 4; i++)
+        assert_int(api_skip_pool_alloc_node_test(pool, &n[i]), ==, 0);
+    for (int i = 0; i < 4; i++)
+        api_skip_pool_free_test(pool, n[i]);
+}
+
+static test_node_t *
+pool_put(_skip_pool_test_t *pool, test_t *list, int key)
+{
+    test_node_t *n = NULL;
+    assert_int(api_skip_pool_alloc_node_test(pool, &n), ==, 0);
+    n->key = key;
+    n->value = make_test_value(key);
+    assert_int(api_skip_insert_test(list, n), ==, 0);
+    return n;
+}
+
+/* (1) Non-EBR remove, mixed pool + heap nodes. */
+static MunitResult
+test_pool_remove_release(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_pool_test_t pool;
+    assert_int(api_skip_pool_init_test(&pool, 4), ==, 0);
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_pool_attach_test(list, &pool);
+    for (int k = 1; k <= 4; k++)
+        pool_put(&pool, list, k);
+    api_skip_put_test(list, 99, make_test_value(99)); /* heap node -> free() */
+    for (int k = 1; k <= 4; k++)
+        assert_int(api_skip_del_test(list, k), ==, 0);
+    assert_int(api_skip_del_test(list, 99), ==, 0);
+    pool_assert_all_free(&pool);
+    api_skip_free_test(list);
+    free(list);
+    api_skip_pool_destroy_test(&pool);
+    assert_null(pool.slots);
+    return MUNIT_OK;
+}
+
+/* (2) EBR remove + try_advance reclaim + drain + pool_destroy (the audit
+   repro).  Unpinned retires advance the epoch, so try_advance reclaims the
+   oldest buckets during the loop and drain releases the rest. */
+static MunitResult
+test_pool_ebr_release(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_pool_test_t pool;
+    assert_int(api_skip_pool_init_test(&pool, 4), ==, 0);
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    _skip_ebr_test_t ebr;
+    api_skip_ebr_init_test(&ebr);
+    api_skip_ebr_attach_test(list, &ebr);
+    api_skip_pool_attach_test(list, &pool);
+    int tid = api_skip_ebr_register_test(&ebr);
+    for (int round = 0; round < 3; round++) {
+        for (int k = 1; k <= 4; k++)
+            pool_put(&pool, list, k);
+        for (int k = 1; k <= 4; k++) {
+            api_skip_ebr_pin_test(&ebr, tid);
+            assert_int(api_skip_del_test(list, k), ==, 0);
+            api_skip_ebr_unpin_test(&ebr, tid);
+        }
+        api_skip_ebr_drain_test(&ebr);
+        pool_assert_all_free(&pool);
+    }
+    api_skip_free_test(list);
+    free(list);
+    api_skip_pool_destroy_test(&pool);
+    assert_null(pool.slots);
+    return MUNIT_OK;
+}
+
+/* (3) Teardown with pool nodes still linked, plus the lifetime guard: an
+   attached pool refuses to be destroyed while a slot is still in use, since
+   the list would later release that node into a freed slab. */
+static MunitResult
+test_pool_teardown_release(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_pool_test_t pool;
+    assert_int(api_skip_pool_init_test(&pool, 4), ==, 0);
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_pool_attach_test(list, &pool);
+    for (int k = 1; k <= 4; k++)
+        pool_put(&pool, list, k);
+    api_skip_release_test(list);
+    pool_assert_all_free(&pool);
+    for (int k = 1; k <= 4; k++)
+        pool_put(&pool, list, k);
+
+    api_skip_pool_destroy_test(&pool); /* refused: slots still linked */
+    assert_not_null(pool.slots);
+    assert_size(pool.capacity, ==, 4);
+
+    api_skip_free_test(list);
+    free(list);
+    api_skip_pool_destroy_test(&pool); /* now empty: really frees */
+    assert_null(pool.slots);
+    return MUNIT_OK;
+}
+
+/* Snapshot preservation memcpy's a live node into a skip_alloc_node_
+   (malloc) copy.  When that preserved copy is discarded it must go to
+   free(), not the pool, even though the live original was a pool node:
+   the release classifies by address, not by anything copied in the node.
+   Restore reinserts preserved heap copies; list teardown must then free()
+   those and return only real pool slots. */
+static MunitResult
+test_pool_snapshot_release(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    _skip_pool_test_t pool;
+    assert_int(api_skip_pool_init_test(&pool, 4), ==, 0);
+    test_t *list = malloc(sizeof(test_t));
+    api_skip_init_test(list);
+    api_skip_snapshots_init_test(list);
+    api_skip_pool_attach_test(list, &pool);
+
+    for (int k = 1; k <= 3; k++)
+        pool_put(&pool, list, k);
+
+    /* (a) preserved copies released via release_snapshots. */
+    assert_uint64(api_skip_snapshot_test(list), >, 0);
+    assert_int(api_skip_del_test(list, 2), ==, 0);                      /* preserve, pool release */
+    assert_int(api_skip_set_test(list, 1, make_test_value(10)), ==, 0); /* preserve copy of 1 */
+    assert_not_null(list->slh_snap.pres);
+    for (test_node_t *p = list->slh_snap.pres; p; p = p->entries.sle_levels[0].next)
+        assert_false(api_skip_pool_is_from_test(&pool, p));
+    api_skip_release_snapshots_test(list);
+
+    /* (b) restore: a post-snapshot pool node is removed, preserved heap
+       copies are reinserted alongside surviving pool nodes. */
+    uint64_t era = api_skip_snapshot_test(list);
+    assert_int(api_skip_del_test(list, 3), ==, 0);
+    pool_put(&pool, list, 4);
+    assert_not_null(api_skip_restore_snapshot_test(list, era));
+    assert_true(api_skip_contains_test(list, 3));
+    assert_false(api_skip_contains_test(list, 4));
+    api_skip_release_snapshots_test(list);
+
+    api_skip_free_test(list);
+    free(list);
+    pool_assert_all_free(&pool);
+    api_skip_pool_destroy_test(&pool);
+    assert_null(pool.slots);
+    return MUNIT_OK;
+}
+
 /* Regression: deleting a key that has duplicates used to loop forever.
    See tests/test_single.c for the full explanation; the buggy code is in
    _skip_unlink_fully_, which is shared by both expansions, so the
@@ -4083,6 +4249,10 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/api_breadth", test_api_breadth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_free_node", test_pool_free_node, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/ebr_retire_callback", test_ebr_retire_callback, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_remove_release", test_pool_remove_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_ebr_release", test_pool_ebr_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_teardown_release", test_pool_teardown_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/pool_snapshot_release", test_pool_snapshot_release, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/sizeof_entry", test_sizeof_entry, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/delete_with_duplicates", test_delete_with_duplicates, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/first_duplicate_semantics", test_first_duplicate_semantics, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
