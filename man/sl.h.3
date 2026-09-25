@@ -356,6 +356,18 @@ Release a thread's slot for reuse after its final unpin.
 .BI "void " prefix "skip_ebr_unpin_" decl "(_skip_ebr_" decl "_t *e, int tid);"
 Bracket each list operation with a pin/unpin pair.  Inside a
 pinned region, nodes reachable at pin time stay live.
+Both call
+.BR abort (3)
+if
+.I tid
+is out of range or not currently registered (for example the
+.B -1
+returned by a full
+.BR skip_ebr_register_ ,
+or a tid used after
+.BR skip_ebr_unregister_ ),
+since a pin that silently did nothing would leave the caller
+unprotected.
 .TP
 .BI "void " prefix "skip_ebr_retire_" decl "(_skip_ebr_" decl "_t *e, " decl "_t *l, " decl "_node_t *n);"
 Schedule
@@ -447,7 +459,15 @@ and its length
 .B bytes
 and must validate
 .B bytes
-before reading.  Generates:
+before reading.  To reject a malformed record the
+.I read_blk
+sets
+.B rc
+(0 on entry) to an errno such as
+.BR EINVAL ;
+the node is released with
+.BI prefix skip_free_node_ decl ()
+and deserialize returns that value.  Generates:
 .TP
 .BI "int " prefix "skip_serialize_" decl "(" decl "_t *l, FILE *fp);"
 .TQ
@@ -457,7 +477,9 @@ Round-trip a list to and from a binary stream (magic
 version, node count, then per-node length-prefixed records).
 Returns 0 or an errno.  Records larger than
 .B SKIPLIST_ARCHIVE_MAX_RECORD
-are rejected.
+are rejected.  Deserialize is not transactional: on failure, the
+records read before the bad one remain in the list, which should
+be discarded.
 .SH "SKIPLIST_DECL_VALIDATE"
 Adds:
 .TP

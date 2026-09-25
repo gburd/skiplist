@@ -10,6 +10,8 @@
 #include <signal.h> /* SIGPIPE handling around the archive write-failure test */
 #include <string.h>
 #include <unistd.h> /* dup/dup2/close/pipe, for stderr silencing and I/O failures */
+#include <sys/resource.h> /* setrlimit: no core files from the EBR abort test */
+#include <sys/wait.h>     /* waitpid, for the EBR invalid-tid abort test */
 
 #include "munit.h"
 #include "sl.h"
@@ -111,22 +113,26 @@ SKIPLIST_DECL_ARCHIVE(
     },
     /* read_entry_blk */
     {
-        /* Validate the declared record size (`bytes`) before consuming `buf`.
-           Trusting the on-disk length without bounds checks is an out-of-bounds
-           read on malformed/hostile input. */
-        node->value = NULL;
+        /* Validate the declared record size (`bytes`) before consuming `buf`,
+           and reject a malformed record via rc rather than loading a
+           placeholder: the input stream may be hostile.  Same checks as
+           examples/ex08.c, which users are told to copy. */
         uint64_t off = 0;
-        if (bytes < sizeof(node->key) + sizeof(uint32_t)) {
-            node->key = 0;
+        uint32_t slen = 0;
+        if (bytes < sizeof(node->key) + sizeof(slen)) {
+            rc = EINVAL;
         } else {
             memcpy(&node->key, buf + off, sizeof(node->key));
             off += sizeof(node->key);
-            uint32_t slen;
             memcpy(&slen, buf + off, sizeof(slen));
             off += sizeof(slen);
-            if (slen > 0 && off + slen <= bytes) {
-                node->value = (char *)malloc(slen + 1);
-                if (node->value) {
+            if (slen != bytes - off) {
+                rc = EINVAL;
+            } else if (slen > 0) {
+                node->value = (char *)malloc((size_t)slen + 1);
+                if (node->value == NULL) {
+                    rc = ENOMEM;
+                } else {
                     memcpy(node->value, buf + off, slen);
                     node->value[slen] = '\0';
                 }
@@ -935,6 +941,77 @@ test_ebr_basic(const MunitParameter params[], void *data)
     api_skip_free_test(list);
     free(list);
 
+    return MUNIT_OK;
+}
+
+/* Run pin (op 0) or unpin (op 1) with `tid` in a child process and return
+   its wait status.  `stale` registers and unregisters a slot first. */
+static int
+ebr_bad_tid_child(int op, int tid, int stale)
+{
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        struct rlimit nocore = { 0, 0 };
+        (void)setrlimit(RLIMIT_CORE, &nocore);
+        if (freopen("/dev/null", "w", stderr) == NULL) {
+            /* noisy but harmless */
+        }
+        _skip_ebr_test_t *ebr = malloc(sizeof(*ebr));
+        if (ebr == NULL)
+            _exit(2);
+        api_skip_ebr_init_test(ebr);
+        if (stale) {
+            tid = api_skip_ebr_register_test(ebr);
+            api_skip_ebr_unregister_test(ebr, tid);
+        }
+        if (op == 0)
+            api_skip_ebr_pin_test(ebr, tid);
+        else
+            api_skip_ebr_unpin_test(ebr, tid);
+        _exit(0); /* reached only if the bad tid was silently accepted */
+    }
+    int status = 0;
+    assert_int(pid, >, 0);
+    assert_int(waitpid(pid, &status, 0), ==, pid);
+    return status;
+}
+
+/* pin/unpin must fail-stop on a tid that is out of range or not
+   registered.  register returns -1 when every slot is taken, and passing
+   that straight to pin used to write below the thread table; a huge tid
+   wrote far past it; a stale tid after unregister was silently accepted,
+   leaving a caller who believes it is pinned unprotected. */
+static MunitResult
+test_ebr_invalid_tid(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    const int bad[] = { -1, SKIPLIST_EBR_MAX_THREADS, 999999, 5 /* in range, never registered */ };
+    for (int op = 0; op < 2; op++) {
+        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            int st = ebr_bad_tid_child(op, bad[i], 0);
+            munit_logf(MUNIT_LOG_DEBUG, "op=%d tid=%d status=0x%x", op, bad[i], st);
+            assert_true(WIFSIGNALED(st));
+            assert_int(WTERMSIG(st), ==, SIGABRT);
+        }
+        int st = ebr_bad_tid_child(op, 0, 1);
+        assert_true(WIFSIGNALED(st));
+        assert_int(WTERMSIG(st), ==, SIGABRT);
+    }
+
+    /* Control: a registered tid pins and unpins normally. */
+    _skip_ebr_test_t *ebr = malloc(sizeof(*ebr));
+    assert_not_null(ebr);
+    api_skip_ebr_init_test(ebr);
+    int tid = api_skip_ebr_register_test(ebr);
+    assert_int(tid, >=, 0);
+    api_skip_ebr_pin_test(ebr, tid);
+    assert_int(atomic_load(&ebr->threads[tid].active), ==, 1);
+    api_skip_ebr_unpin_test(ebr, tid);
+    assert_int(atomic_load(&ebr->threads[tid].active), ==, 0);
+    api_skip_ebr_unregister_test(ebr, tid);
+    free(ebr);
     return MUNIT_OK;
 }
 
@@ -2005,6 +2082,75 @@ test_archive_roundtrip(const MunitParameter params[], void *data)
     api_skip_free_test(list2);
     free(list2);
 
+    return MUNIT_OK;
+}
+
+/* Append one archive record: 8-byte LE length, then key, LE slen, payload.
+   `rec_len` is the length written on the wire and may lie about the body. */
+static void
+put_archive_record(FILE *fp, uint64_t rec_len, int key, uint32_t slen, const char *payload, size_t body_len)
+{
+    unsigned char hdr[8], body[64];
+    for (int i = 0; i < 8; i++)
+        hdr[i] = (unsigned char)(rec_len >> (8 * i));
+    memcpy(body, &key, sizeof(key));
+    memcpy(body + sizeof(key), &slen, sizeof(slen));
+    memcpy(body + sizeof(key) + sizeof(slen), payload, strlen(payload));
+    assert_size(body_len, <=, sizeof(body));
+    fwrite(hdr, 1, 8, fp);
+    fwrite(body, 1, body_len, fp);
+}
+
+/* A corrupt record must make deserialize fail, not load.  Before
+   SKIPLIST_DECL_ARCHIVE honoured rc from read_entry_blk a block had no way
+   to reject a record: this suite's block turned a too-short record into a
+   key=0 node and deserialize returned 0, and ex08's block (the pattern
+   users are told to copy) over-read the buffer.  Each archive below holds
+   two good records followed by one corrupt one, so the test also pins the
+   documented partial-load semantics: the good records stay, the load
+   returns the error, and the list is still structurally valid. */
+static MunitResult
+test_archive_corrupt_record(const MunitParameter params[], void *data)
+{
+    (void)params;
+    (void)data;
+    const size_t kl = sizeof(int) + sizeof(uint32_t); /* key + length prefix */
+    struct {
+        const char *desc;
+        uint64_t rec_len; /* declared on the wire */
+        uint32_t slen;    /* declared inside the record */
+        size_t body_len;  /* actually written */
+    } cases[] = {
+        { "1-byte record", 1, 0, 1 },
+        { "key but no length prefix", sizeof(int), 0, sizeof(int) },
+        { "slen overruns record", kl + 3, 40, kl + 3 },
+        { "slen underruns record", kl + 3, 1, kl + 3 },
+    };
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        FILE *fp = tmpfile();
+        assert_not_null(fp);
+        unsigned char hdr[16] = { 'S', 'K', 'P', 'L', 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0 };
+        fwrite(hdr, 1, sizeof(hdr), fp);
+        put_archive_record(fp, kl + 2, 1, 2, "v1", kl + 2);
+        put_archive_record(fp, kl + 2, 2, 2, "v2", kl + 2);
+        put_archive_record(fp, cases[c].rec_len, 99, cases[c].slen, "xyz", cases[c].body_len);
+        rewind(fp);
+
+        test_t *dst = malloc(sizeof(test_t));
+        assert_not_null(dst);
+        api_skip_init_test(dst);
+        int rc = api_skip_deserialize_test(dst, fp);
+        fclose(fp);
+        munit_logf(MUNIT_LOG_DEBUG, "%s: rc=%d length=%zu", cases[c].desc, rc, api_skip_length_test(dst));
+        assert_int(rc, ==, EINVAL);
+        assert_size(api_skip_length_test(dst), ==, 2);
+        assert_false(api_skip_contains_test(dst, 0));
+        assert_false(api_skip_contains_test(dst, 99));
+        assert_string_equal(api_skip_get_test(dst, 2), "v2");
+        assert_int(_skip_integrity_check_test(dst, 1), ==, 0);
+        api_skip_free_test(dst);
+        free(dst);
+    }
     return MUNIT_OK;
 }
 
@@ -4227,6 +4373,7 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/stress_insert_remove", test_stress_insert_remove, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_allocator", test_pool_allocator, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/ebr_basic", test_ebr_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/ebr_invalid_tid", test_ebr_invalid_tid, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validation", test_validation, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validate_corrupt_header", test_validate_corrupt_header, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/validate_corrupt_heights", test_validate_corrupt_heights, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
@@ -4245,6 +4392,7 @@ static MunitTest test_suite_tests[] = { { (char *)"/init", test_init, NULL, NULL
     { (char *)"/archive_basic", test_archive_basic, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/archive_empty", test_archive_empty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/archive_roundtrip", test_archive_roundtrip, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *)"/archive_corrupt_record", test_archive_corrupt_record, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/dot", test_dot, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/api_breadth", test_api_breadth, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     { (char *)"/pool_free_node", test_pool_free_node, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },

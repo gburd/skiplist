@@ -2642,6 +2642,8 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *          -- Enter a critical section (pin).  Nodes will not be freed while pinned.
  *   void prefix##skip_ebr_unpin_##decl(_skip_ebr_##decl##_t *ebr, int tid)
  *          -- Leave a critical section (unpin).
+ *          pin and unpin abort() if tid is out of range or not currently
+ *          registered: check register's result for -1 before pinning.
  *   void prefix##skip_ebr_retire_##decl(_skip_ebr_##decl##_t *ebr, decl##_t *slist, decl##_node_t *node)
  *          -- Defer freeing a node until safe.  Called automatically by skip_remove_node_.
  *   void prefix##skip_ebr_attach_##decl(decl##_t *slist, _skip_ebr_##decl##_t *ebr)
@@ -2746,15 +2748,30 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
         _skip_atomic_store(&ebr->threads[tid].in_use, 0, memory_order_release);                                              \
     }                                                                                                                        \
                                                                                                                              \
+    /* Fail-stop check for the tid handed to pin/unpin: it must be in range                                                  \
+       and name a registered slot.  pin/unpin return void, and a pin that                                                    \
+       quietly did nothing would leave the caller believing its nodes are                                                    \
+       protected -- a use-after-free far from the cause.  Aborting here makes                                                \
+       the misuse (typically passing register's -1 straight to pin, or using                                                 \
+       a tid after unregister) loud at its source, in every build mode. */                                                   \
+    static void _skip_ebr_check_tid_##decl(_skip_ebr_##decl##_t *ebr, int tid, const char *fn)                               \
+    {                                                                                                                        \
+        if (tid >= 0 && tid < SKIPLIST_EBR_MAX_THREADS && _skip_atomic_load(&ebr->threads[tid].in_use, memory_order_relaxed)) \
+            return;                                                                                                          \
+        fprintf(stderr, "%s: invalid EBR thread id %d (out of range or not registered)\n", fn, tid);                         \
+        abort();                                                                                                             \
+    }                                                                                                                        \
+                                                                                                                             \
     /**                                                                                                                      \
      * -- skip_ebr_pin_                                                                                                      \
      *                                                                                                                       \
      * Enter a critical section.  The calling thread announces that it                                                       \
      * is reading the data structure and nodes must not be freed until                                                       \
-     * it unpins.                                                                                                            \
+     * it unpins.  Aborts if `tid` is out of range or not registered.                                                        \
      */                                                                                                                      \
     void prefix##skip_ebr_pin_##decl(_skip_ebr_##decl##_t *ebr, int tid)                                                     \
     {                                                                                                                        \
+        _skip_ebr_check_tid_##decl(ebr, tid, __func__);                                                                      \
         /* Announce active BEFORE reading global_epoch.  The seq_cst                                                         \
            fence pairs with the fence in try_advance() so that: if                                                           \
            try_advance reads active==0 and skips us, it committed                                                            \
@@ -2772,10 +2789,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
      * -- skip_ebr_unpin_                                                                                                    \
      *                                                                                                                       \
      * Exit a critical section.  The calling thread is no longer reading                                                     \
-     * the data structure.                                                                                                   \
+     * the data structure.  Aborts if `tid` is out of range or not                                                           \
+     * registered (a stale unpin could clear a recycled slot's pin).                                                         \
      */                                                                                                                      \
     void prefix##skip_ebr_unpin_##decl(_skip_ebr_##decl##_t *ebr, int tid)                                                   \
     {                                                                                                                        \
+        _skip_ebr_check_tid_##decl(ebr, tid, __func__);                                                                      \
         _skip_atomic_store(&ebr->threads[tid].active, 0, memory_order_release);                                              \
     }                                                                                                                        \
                                                                                                                              \
@@ -3260,9 +3279,18 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *                         (decl##_node_t *node, uint8_t *buf, uint64_t *bytes).
  *                         Write node data into buf and set bytes to the number
  *                         of bytes written.
- * @param read_entry_blk   Code block to deserialize a node.  Receives
- *                         (decl##_node_t *node, uint8_t *buf, uint64_t bytes).
- *                         Read node data from buf.
+ * @param read_entry_blk   Code block to deserialize a node.  In scope:
+ *                         decl##_node_t *node (freshly allocated, zeroed),
+ *                         uint8_t *buf, uint64_t bytes, and int rc.  Read
+ *                         node data from buf.  `buf` and `bytes` come from
+ *                         the input stream and may be hostile: check `bytes`
+ *                         before every read.  `rc` is 0 on entry; set it to
+ *                         a nonzero errno (EINVAL for a malformed record,
+ *                         ENOMEM for a failed allocation) to reject the
+ *                         record.  The node is then released with
+ *                         skip_free_node_ (which runs the free block, so
+ *                         leave the node in a state it can free) and
+ *                         deserialize returns rc.
  *
  * Binary format:
  *   [4 bytes] magic "SKPL"
@@ -3280,8 +3308,12 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *           bytes = sizeof(node->key) + sizeof(node->value);
  *       },
  *       {
- *           memcpy(&node->key, buf, sizeof(node->key));
- *           memcpy(&node->value, buf + sizeof(node->key), sizeof(node->value));
+ *           if (bytes != sizeof(node->key) + sizeof(node->value)) {
+ *               rc = EINVAL;
+ *           } else {
+ *               memcpy(&node->key, buf, sizeof(node->key));
+ *               memcpy(&node->value, buf + sizeof(node->key), sizeof(node->value));
+ *           }
  *       })
  *
  * Generated functions:
@@ -3289,7 +3321,9 @@ _SKIP_STATIC_ASSERT(SKIPLIST_MAX_HEIGHT <= 64, "SKIPLIST_MAX_HEIGHT > 64 risks s
  *         -- Serialize the skiplist to fp.  Returns 0 on success, errno on failure.
  *   int prefix##skip_deserialize_##decl(decl##_t *slist, FILE *fp)
  *         -- Deserialize from fp into slist (must be initialized and empty).
- *            Returns 0 on success, errno on failure.
+ *            Returns 0 on success, errno on failure.  NOT transactional:
+ *            on failure the records read before the bad one remain in
+ *            slist, so discard (skip_free_) the list rather than use it.
  */
 /* Byte-order helpers for portable archive serialization (little-endian on wire). */
 static inline void
@@ -3482,8 +3516,16 @@ _skip_read_le64(const uint8_t *src)
                 return rc;                                                                          \
             }                                                                                       \
                                                                                                     \
+            /* rc is 0 here.  read_entry_blk rejects a record by setting rc to  \
+               a nonzero errno; the node (and anything the block attached to    \
+               it) is then released and the load stops.  Records already        \
+               inserted stay in slist: the load is not transactional. */        \
             read_entry_blk;                                                                         \
             free(buf);                                                                              \
+            if (rc) {                                                                               \
+                prefix##skip_free_node_##decl(slist, node);                                         \
+                return rc;                                                                          \
+            }                                                                                       \
                                                                                                     \
             rc = prefix##skip_insert_##decl(slist, node);                                           \
             if (rc) {                                                                               \

@@ -66,9 +66,14 @@ SKIPLIST_DECL_ACCESS(arc, sl_, key, int, value, char *, { query.key = key; }, { 
  *   - 'bytes' is a uint64_t to set to the number of bytes written
  *
  * In the read block:
- *   - 'node' is a freshly allocated node to populate
+ *   - 'node' is a freshly allocated, zeroed node to populate
  *   - 'buf' is a uint8_t* buffer containing the serialized data
  *   - 'bytes' is a uint64_t with the number of bytes available
+ *   - 'rc' is an int, 0 on entry; set it to an errno to reject the record
+ *
+ * 'buf' and 'bytes' come straight from the file, so treat them as hostile:
+ * check 'bytes' before every read.  Rejecting a record frees the node
+ * (running the free block above) and makes deserialize return rc.
  */
 SKIPLIST_DECL_ARCHIVE(
     arc, sl_, entry,
@@ -95,19 +100,27 @@ SKIPLIST_DECL_ARCHIVE(
     /* read_entry_blk */
     {
         uint64_t off = 0;
-        /* Read the key. */
-        memcpy(&node->key, buf + off, sizeof(node->key));
-        off += sizeof(node->key);
-        /* Read the value. */
-        uint32_t slen;
-        memcpy(&slen, buf + off, sizeof(slen));
-        off += sizeof(slen);
-        if (slen > 0) {
-            node->value = (char *)malloc(slen + 1);
-            memcpy(node->value, buf + off, slen);
-            node->value[slen] = '\0';
+        uint32_t slen = 0;
+        /* Key and length prefix must both be present... */
+        if (bytes < sizeof(node->key) + sizeof(slen)) {
+            rc = EINVAL;
         } else {
-            node->value = NULL;
+            memcpy(&node->key, buf + off, sizeof(node->key));
+            off += sizeof(node->key);
+            memcpy(&slen, buf + off, sizeof(slen));
+            off += sizeof(slen);
+            /* ...and the record must hold exactly slen more bytes. */
+            if (slen != bytes - off) {
+                rc = EINVAL;
+            } else if (slen > 0) {
+                node->value = (char *)malloc((size_t)slen + 1);
+                if (node->value == NULL) {
+                    rc = ENOMEM;
+                } else {
+                    memcpy(node->value, buf + off, slen);
+                    node->value[slen] = '\0';
+                }
+            }
         }
     })
 
@@ -213,11 +226,43 @@ main(void)
     if (ok)
         printf("  All entries match after round-trip serialization.\n");
 
+    /* A corrupt archive must be rejected, not trusted.  Here the single
+       record claims 1 byte, too short for even the key: read_entry_blk
+       sets rc = EINVAL and deserialize returns it.  On failure, records
+       loaded before the bad one stay in the list (the load is not
+       transactional), so a failed load should be discarded. */
+    printf("\n--- Deserializing a corrupt archive ---\n");
+    {
+        static const unsigned char corrupt[] = {
+            'S', 'K', 'P', 'L', 1, 0, 0, 0, /* magic, version 1 */
+            1, 0, 0, 0, 0, 0, 0, 0,         /* node count = 1 */
+            1, 0, 0, 0, 0, 0, 0, 0,         /* record length = 1 */
+            0x2a                            /* the 1-byte record */
+        };
+        arc_t bad;
+        sl_skip_init_arc(&bad);
+        fp = tmpfile();
+        if (!fp) {
+            perror("tmpfile");
+            sl_skip_free_arc(&bad);
+            ok = 0;
+        } else {
+            fwrite(corrupt, 1, sizeof(corrupt), fp);
+            rewind(fp);
+            rc = sl_skip_deserialize_arc(&bad, fp);
+            fclose(fp);
+            printf("  deserialize returned %d (%s), list length %zu\n", rc, rc ? strerror(rc) : "success", sl_skip_length_arc(&bad));
+            if (rc != EINVAL || sl_skip_length_arc(&bad) != 0)
+                ok = 0;
+            sl_skip_free_arc(&bad);
+        }
+    }
+
     /* Clean up. */
     sl_skip_free_arc(list2);
     free(list2);
     remove(filepath);
 
     printf("\nDone.\n");
-    return 0;
+    return ok ? 0 : 1;
 }
