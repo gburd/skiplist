@@ -286,6 +286,11 @@ test_st_pool(const MunitParameter p[], void *d)
     /* Pool acquire/release exercise. */
     _skip_pool_st_t pool;
     assert_int(st_skip_pool_init_st(&pool, 64), ==, 0);
+    /* Slab-size overflow and more slots than the int32_t index can name
+       are both refused (see /pool_allocator in tests/test.c). */
+    _skip_pool_st_t bad;
+    assert_int(st_skip_pool_init_st(&bad, SIZE_MAX / pool.slot_size + 2), ==, EINVAL);
+    assert_int(st_skip_pool_init_st(&bad, (size_t)INT32_MAX + 1), ==, EINVAL);
     for (int i = 0; i < 10; i++) {
         st_node_t *n = st_skip_pool_alloc_st(&pool);
         assert_not_null(n);

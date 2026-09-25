@@ -392,7 +392,13 @@ ABA problem.
 .BI "void " prefix "skip_pool_destroy_" decl "(_skip_pool_" decl "_t *p);"
 Initialize with
 .B capacity
-slots (returns 0 or errno) and tear down.
+slots (returns 0 or errno;
+.B EINVAL
+if
+.B capacity
+is 0, exceeds
+.BR INT32_MAX ,
+or would overflow the slab size) and tear down.
 .TP
 .BI "int " prefix "skip_pool_alloc_node_" decl "(_skip_pool_" decl "_t *p, " decl "_node_t **out);"
 Claim a node into

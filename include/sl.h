@@ -4420,7 +4420,8 @@ _skip_read_le64(const uint8_t *src)
  *
  * Generated functions:
  *   int  prefix##skip_pool_init_##decl(_skip_pool_##decl##_t *pool, size_t capacity)
- *          -- Initialize the pool with `capacity` slots.  Returns 0 or errno.
+ *          -- Initialize the pool with `capacity` slots.  Returns 0 or errno
+ *             (EINVAL if capacity is 0 or above INT32_MAX).
  *   decl##_node_t *prefix##skip_pool_alloc_##decl(_skip_pool_##decl##_t *pool)
  *          -- Pop a zeroed, initialized node from the pool.  Returns NULL if exhausted.
  *   void prefix##skip_pool_free_##decl(_skip_pool_##decl##_t *pool, decl##_node_t *node)
@@ -4466,7 +4467,9 @@ _skip_read_le64(const uint8_t *src)
                                                                                                                      \
     /* ------------------------------------------------------------------ */                                         \
     /* _skip_pool_index_of_ -- Given a node pointer, return its slot     */                                          \
-    /*   index (or -1 if the pointer is outside the pool).                */                                         \
+    /*   index (or -1 if the pointer is outside the pool).  The int32_t   */                                         \
+    /*   return and the capacity * slot_size bound are safe only because  */                                         \
+    /*   init rejects capacity > INT32_MAX and any product that wraps.    */                                         \
     /* ------------------------------------------------------------------ */                                         \
     static inline int32_t _skip_pool_index_of_##decl(_skip_pool_##decl##_t *pool, decl##_node_t *node)               \
     {                                                                                                                \
@@ -4496,6 +4499,14 @@ _skip_read_le64(const uint8_t *src)
                                                                                                                      \
         /* Round up to next multiple of 64 for cache-line alignment */                                               \
         size_t slot_size = (raw_size + 63u) & ~(size_t)63u;                                                          \
+                                                                                                                     \
+        /* Reject, before allocating, a slab size that wraps size_t (a    */                                         \
+        /* wrapped product would yield a tiny slab indexed as a huge one) */                                         \
+        /* and more slots than _skip_pool_index_of_'s int32_t can index.  */                                         \
+        /* slot_size is a multiple of 64, so the unwrapped product also   */                                         \
+        /* meets C11 aligned_alloc's size-is-a-multiple-of-alignment rule. */                                        \
+        if (capacity > SIZE_MAX / slot_size || capacity > (size_t)INT32_MAX)                                         \
+            return EINVAL;                                                                                           \
                                                                                                                      \
         pool->capacity = capacity;                                                                                   \
         pool->slot_size = slot_size;                                                                                 \
