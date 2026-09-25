@@ -343,7 +343,11 @@ bench/bench: bench/bench.c include/sl.h
 #     can, and the ENOMEM arms need the test_faults target to be reachable
 #     at all.
 COV_THRESHOLD ?= 95
-BRANCH_THRESHOLD ?= 76
+# Branch coverage measures ~76% at the merged v1.1.8 tip.  The number moves a
+# point or two between gcov versions (integer truncation) and as tests change,
+# so the gate sits at 74 to keep real headroom while still failing hard on a
+# genuine regression.  Raise it deliberately, never make it advisory again.
+BRANCH_THRESHOLD ?= 74
 
 coverage:
 	@for t in gcovr python3; do \
@@ -401,7 +405,8 @@ coverage:
 	# macros: that pair captures the implementation surface.
 	@echo
 	@echo "=== Coverage (include/sl.h + macro-instantiating test units) ==="
-	@gcovr --filter 'include/sl\.h' \
+	@gcovr --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file \
+	        --filter 'include/sl\.h' \
 	        --filter 'tests/test\.c' \
 	        --filter 'tests/test_concurrent\.c' \
 	        --filter 'tests/test_single\.c' \

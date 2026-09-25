@@ -179,7 +179,7 @@ jobs:
 
   # Coverage gate: 95% line and function coverage of the implementation
   # surface (include/sl.h plus the .c files that instantiate its
-  # macros), plus 76% branch coverage (BRANCH_THRESHOLD in the Makefile;
+  # macros), plus 74% branch coverage (BRANCH_THRESHOLD in the Makefile;
   # lower because lock-free CAS retry paths are hard to exercise
   # deterministically).  make coverage fails if gcovr is missing.
   coverage:

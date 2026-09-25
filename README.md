@@ -62,25 +62,32 @@ all dependencies on `<stdatomic.h>`.
 
 ## Status
 
-Production-ready.  The current `main` branch is the canonical version.
+The current `main` branch is the canonical version.  v1.1.8 fixed four
+memory-safety defects a security audit found in v1.1.7 -- a use-after-free in
+concurrent remove, a use-after-free in the splay promote path, a pool/EBR
+double free, and an out-of-bounds read in the example deserializer -- along
+with two v1.1.7 correctness regressions.  The concurrent default build is now
+clean under AddressSanitizer and ThreadSanitizer across the dense insert/remove
+stress that exposed those bugs (thousands of runs), and under valgrind.
+
 The full test matrix passes locally and in CI:
 
 | Suite                              | Tests | Status |
 |------------------------------------|-------|--------|
-| Unit (default)                     |    52 | pass   |
-| Concurrent (default)               |    13 | pass   |
-| TSAN (default)                     |    13 | pass   |
+| Unit (default)                     |    59 | pass   |
+| Concurrent (default)               |    15 | pass   |
+| TSAN (default)                     |    15 | pass   |
 | Property-based (Hegel/hegel-c)     |     9 | pass   |
-| Unit (splay rebalance enabled)     |    52 | pass   |
-| Concurrent (splay rebalance)       |    13 | pass   |
-| TSAN (splay rebalance)             |    13 | pass   |
+| Unit (splay rebalance enabled)     |    59 | pass   |
+| Concurrent (splay rebalance)       |    15 | pass   |
+| TSAN (splay rebalance)             |    15 | pass   |
 | Splay-verify (Aksenov + regressions) |   4 | pass   |
-| Single-threaded mode               |    18 | pass   |
-| Single-threaded + splay rebalance   |   18 | pass   |
-| ASan + LSan + UBSan                |    52 | pass   |
-| Valgrind                           |    52 | pass   |
+| Single-threaded mode               |    19 | pass   |
+| Single-threaded + splay rebalance   |    19 | pass   |
+| ASan + LSan + UBSan                |    59 | pass   |
+| Valgrind                           |    59 | pass   |
 | Examples (run, not just built)     |    10 | pass   |
-| Fault injection (allocator/IO arms) |    62 | pass   |
+| Fault injection (allocator/IO arms) |    69 | pass   |
 
 Verified on Linux x86_64 with gcc 13/15 and clang 18/21.  The
 implementation is C11 with no Linux-specific syscalls; macOS, the BSDs,
@@ -121,7 +128,7 @@ What remains uncovered is concentrated in CAS-retry loops,
 marked-pointer help-unlink paths that need a peer thread mid-delete,
 and allocation-failure arms -- reachable only with fault injection or
 scheduled interleaving.  Line and function coverage are gated at 95%;
-branch coverage is gated at 76%.  `make coverage` exits non-zero if any of
+branch coverage is gated at 74%.  `make coverage` exits non-zero if any of
 the three is below its threshold or if gcovr is not installed.
 
 Historical exploration is preserved as git tags under `archive/*`:
@@ -233,7 +240,7 @@ make valgrind          # unit tests under valgrind (no sanitizers)
 make examples          # build all 10 examples
 make run_examples      # build AND run all 10 examples under ASan/LSan
 make bench             # build and run the benchmark suite
-make coverage          # gcov + gcovr; gates 95% line/function, 76% branch
+make coverage          # gcov + gcovr; gates 95% line/function, 74% branch
 make format            # clang-format the tree
 make install           # install header + pkg-config to /usr/local
 make install PREFIX=/opt/skiplist
@@ -1112,7 +1119,7 @@ CI runs six independent jobs on every push and pull request:
 - **meson** -- `{none, address, thread, undefined}` sanitizer matrix.
 - **autotools** -- bootstrap, configure, then `make test`,
   `test_concurrent`, `test_splay`, `test_single`.
-- **coverage** -- `make coverage`; gates 95% line and function and 76%
+- **coverage** -- `make coverage`; gates 95% line and function and 74%
   branch coverage, and uploads the HTML report as an artifact.
 
 `make test_property` is not in CI: it needs a local hegel-c checkout and

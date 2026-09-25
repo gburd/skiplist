@@ -88,3 +88,7 @@ tmp/
 # JetBrains IDE scratch (was tracked by mistake; see .local-gitignore)
 .idea/
 .vscode/
+
+# core dumps from test/fault-injection crashes
+core
+core.*

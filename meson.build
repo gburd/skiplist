@@ -1,5 +1,5 @@
 project('skiplist', 'c',
-  version : '1.1.7',
+  version : '1.1.8',
   license : 'ISC OR MIT',
   default_options : [
     'c_std=c11',
